@@ -76,7 +76,7 @@ Alternative variable names are also supported:
 - `CODECKS_API_TOKEN`
 - `CODECKS_API_BASE`
 
-Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. `pi-codecks` does not execute generic 1Password helper commands directly; resolve secrets through `pi-onepassword` or another explicit secret integration first, then provide `CODECKS_TOKEN`, `CODECKS_API_TOKEN`, or `CODECKS_PROFILE_<PROFILE>_TOKEN`.
+Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. `pi-codecks` does not execute generic 1Password helper commands directly; resolve secrets through [`pi-onepassword`](https://github.com/aefreedman/pi-onepassword) or another explicit secret integration first, then provide `CODECKS_TOKEN`, `CODECKS_API_TOKEN`, or `CODECKS_PROFILE_<PROFILE>_TOKEN`.
 
 ## Vision Board Tool
 
