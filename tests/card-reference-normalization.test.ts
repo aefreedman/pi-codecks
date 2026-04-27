@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { __test } from "../src/opencode-codecks.ts";
+import { __test } from "../src/codecks-core.ts";
 
 const { normalizeCardReferencesForUserText } = __test;
 

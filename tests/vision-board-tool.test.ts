@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 type AnyRecord = Record<string, unknown>;
 
-type ToolModule = typeof import("../src/opencode-codecks.ts");
+type ToolModule = typeof import("../src/codecks-core.ts");
 
 type QueryHandler = (query: AnyRecord) => Response | Promise<Response>;
 
@@ -222,7 +222,7 @@ const buildHandler = (overrides: {
 const loadTools = async (): Promise<ToolModule> => {
   process.env.CODECKS_ACCOUNT = "test-account";
   process.env.CODECKS_TOKEN = "test-token";
-  return import("../src/opencode-codecks.ts");
+  return import("../src/codecks-core.ts");
 };
 
 const testShortCodeAndDollarCodeResolve = async (tools: ToolModule): Promise<void> => {

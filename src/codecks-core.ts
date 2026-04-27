@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { tool } from "./opencode-compat";
-import { execFileSync } from "child_process";
+import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, resolve } from "path";
 
@@ -69,36 +68,6 @@ const RETRY_BASE_DELAY_MS = (() =>
     return Math.max(100, Math.min(5000, value));
 })();
 const RETRY_JITTER_MS = 125;
-const DEFAULT_ALLOWED_OP_VAULTS: string[] = [];
-const DEFAULT_OP_ALLOWLIST_SCRIPT = (() =>
-{
-    const homeDir = process.env.HOME?.trim();
-    if (!homeDir)
-    {
-        return "op-read-allowlist.sh";
-    }
-
-    return resolve(homeDir, ".config", "opencode", "scripts", "op-read-allowlist.sh");
-})();
-const OP_EXECUTABLE = process.env.CODECKS_OP_PATH?.trim() || DEFAULT_OP_ALLOWLIST_SCRIPT;
-const OP_READ_TIMEOUT_MS = (() =>
-{
-    const value = Number.parseInt(process.env.CODECKS_OP_TIMEOUT_MS ?? "10000", 10);
-    if (!Number.isFinite(value))
-    {
-        return 10000;
-    }
-    return Math.max(1000, Math.min(60000, value));
-})();
-const OP_CACHE_TTL_MS = (() =>
-{
-    const value = Number.parseInt(process.env.CODECKS_OP_CACHE_TTL_MS ?? "300000", 10);
-    if (!Number.isFinite(value))
-    {
-        return 300000;
-    }
-    return Math.max(0, Math.min(3600000, value));
-})();
 const REQUEST_TIMEOUT_MS = (() =>
 {
     const value = Number.parseInt(process.env.CODECKS_REQUEST_TIMEOUT_MS ?? "30000", 10);
@@ -224,128 +193,12 @@ const firstNonEmpty = (...values: Array<string | undefined | null>): string | un
     return undefined;
 };
 
-const normalizeVaultName = (value: string): string => value.trim().toLowerCase();
-
-const getAllowedOpVaults = (): Set<string> =>
+const throwUnsupportedTokenRef = (profileKey: string): never =>
 {
-    const configured = process.env.OPENCODE_OP_ALLOWED_VAULTS ?? "";
-    const explicitVaults = configured
-        .split(",")
-        .map(normalizeVaultName)
-        .filter((value) => value.length > 0);
-
-    if (explicitVaults.length === 0)
-    {
-        return new Set(DEFAULT_ALLOWED_OP_VAULTS.map(normalizeVaultName));
-    }
-
-    return new Set(explicitVaults);
-};
-
-const parseVaultFromOpRef = (ref: string): string | undefined =>
-{
-    const trimmed = ref.trim();
-    if (!trimmed.startsWith("op://"))
-    {
-        return undefined;
-    }
-
-    const withoutPrefix = trimmed.slice("op://".length);
-    const slashIndex = withoutPrefix.indexOf("/");
-    if (slashIndex <= 0)
-    {
-        return undefined;
-    }
-
-    return withoutPrefix.slice(0, slashIndex).trim();
-};
-
-const sanitizeOpRefForError = (ref: string): string =>
-{
-    const vault = parseVaultFromOpRef(ref);
-    if (!vault)
-    {
-        return "op://[invalid]";
-    }
-
-    return `op://${vault}/...`;
-};
-
-type CachedSecret = {
-    value: string;
-    expiresAt: number;
-};
-
-const onePasswordSecretCache = new Map<string, CachedSecret>();
-
-const redactSecretLikeText = (value: string): string =>
-{
-    return value
-        .replace(/(OP_SERVICE_ACCOUNT_TOKEN\s*[=:]\s*)[^\s;]+/gi, "$1[REDACTED]")
-        .replace(/(X-Auth-Token|Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\s;]+/gi, "$1: [REDACTED]")
-        .replace(/\bat=([^;\s]+)/gi, "at=[REDACTED]")
-        .replace(/op:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+/gi, "op://[REDACTED]/[REDACTED]/[REDACTED]");
-};
-
-const readOnePasswordRef = (ref: string): string =>
-{
-    const opRef = ref.trim();
-    if (!opRef.startsWith("op://"))
-    {
-        throw new Error("Codecks profile token ref must start with 'op://'.");
-    }
-
-    const vault = parseVaultFromOpRef(opRef);
-    if (!vault)
-    {
-        throw new Error("Codecks profile token ref must use format op://<vault>/<item>/<field>.");
-    }
-
-    const allowedVaults = getAllowedOpVaults();
-    if (!allowedVaults.has(normalizeVaultName(vault)))
-    {
-        throw new Error(`Codecks profile token ref vault '${vault}' is not allowed. Set OPENCODE_OP_ALLOWED_VAULTS to a comma-separated allow-list for 1Password refs.`);
-    }
-
-    const now = Date.now();
-    const cached = onePasswordSecretCache.get(opRef);
-    if (cached && cached.expiresAt > now)
-    {
-        return cached.value;
-    }
-
-    if (!firstNonEmpty(process.env.OP_SERVICE_ACCOUNT_TOKEN))
-    {
-        throw new Error("Missing OP_SERVICE_ACCOUNT_TOKEN for 1Password service account access.");
-    }
-
-    try
-    {
-        const result = execFileSync(OP_EXECUTABLE, ["read", opRef], {
-            encoding: "utf8",
-            timeout: OP_READ_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024,
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        const secret = String(result ?? "").trim();
-        if (!secret)
-        {
-            throw new Error("1Password returned an empty token value.");
-        }
-
-        onePasswordSecretCache.set(opRef, {
-            value: secret,
-            expiresAt: now + OP_CACHE_TTL_MS,
-        });
-        return secret;
-    }
-    catch (error)
-    {
-        const errorText = error instanceof Error ? error.message : String(error ?? "Unknown error");
-        const sanitized = redactSecretLikeText(errorText);
-        const safeRef = sanitizeOpRefForError(opRef);
-        throw new Error(`Failed to resolve Codecks token from 1Password ref '${safeRef}': ${sanitized}`);
-    }
+    throw new Error(
+        `Codecks profile '${profileKey}' uses a TOKEN_REF/TOKEN_OP_REF value, but pi-codecks no longer executes 1Password helpers directly. `
+        + "Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.",
+    );
 };
 
 type CodecksBaseConfig = {
@@ -383,15 +236,18 @@ const getConfig = (): CodecksConfig =>
     const profileTokenOpRef = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN_OP_REF"), getProfileEnv(profileKey, "TOKEN_REF")) : undefined;
     const profileTokenDirect = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN"), getProfileEnv(profileKey, "API_TOKEN")) : undefined;
     const globalToken = firstNonEmpty(process.env.CODECKS_TOKEN, process.env.CODECKS_API_TOKEN);
-    const token = profileTokenOpRef
-        ? readOnePasswordRef(profileTokenOpRef)
-        : firstNonEmpty(profileTokenDirect, globalToken);
+    if (profileTokenOpRef)
+    {
+        throwUnsupportedTokenRef(profileKey ?? "default");
+    }
+
+    const token = firstNonEmpty(profileTokenDirect, globalToken);
 
     if (!token)
     {
         if (profileKey)
         {
-            throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN_OP_REF or TOKEN.`);
+            throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
         }
         throw new Error("Missing Codecks credentials. Set CODECKS_TOKEN (or CODECKS_API_TOKEN) and CODECKS_ACCOUNT (subdomain), or configure CODECKS_PROFILE.");
     }
@@ -6140,7 +5996,7 @@ export const card_edit_resolvable_entry = tool({
 });
 
 export const card_close_resolvable = tool({
-    description: "Close an open Codecks conversation thread (resolvable).",
+    description: "Close a Codecks conversation thread (resolvable).",
     args: {
         resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Resolvable ID."),
         cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID or short code if resolvableId is not provided."),

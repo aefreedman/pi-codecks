@@ -76,7 +76,7 @@ Alternative variable names are also supported:
 - `CODECKS_API_TOKEN`
 - `CODECKS_API_BASE`
 
-Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. 1Password token references are supported, but vault access is allow-listed: set `OPENCODE_OP_ALLOWED_VAULTS` to a comma-separated list of vault names before using `op://...` profile token references.
+Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. `pi-codecks` does not execute generic 1Password helper commands directly; resolve secrets through `pi-onepassword` or another explicit secret integration first, then provide `CODECKS_TOKEN`, `CODECKS_API_TOKEN`, or `CODECKS_PROFILE_<PROFILE>_TOKEN`.
 
 ## Vision Board Tool
 
@@ -127,13 +127,13 @@ Optional integration settings:
 - `CODECKS_TEST_VISION_BOARD_CARD` - enables live vision-board reference checks for a known card
 - `CODECKS_TEST_ATTACHMENT_PATH` - enables attachment validation
 - `CODECKS_TEST_PROFILE` - selects a test profile
-- `OPENCODE_OP_ALLOWED_VAULTS` - allow-list for 1Password refs used by test profiles
+- `CODECKS_PROFILE_<PROFILE>_TOKEN` - direct token value for the selected test profile
 
 The validation script enforces a conservative shared request budget so combined direct API calls and tool calls stay below Codecks API rate limits.
 
 ## Implementation notes
 
-- The core implementation lives in `src/opencode-codecks.ts`.
+- The core implementation lives in `src/codecks-core.ts`.
 - `index.ts` is the Pi registration layer.
 - Text and JSON outputs are intentionally stable because workflow prompts and tests depend on those shapes.
 - Debug tools are opt-in so Pi's normal tool list stays compact.

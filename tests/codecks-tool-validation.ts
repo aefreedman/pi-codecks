@@ -1,84 +1,6 @@
-import { execFileSync } from "child_process";
-import { resolve } from "path";
-
 const TEST_PREFIX = "[tool-test]";
 const DEFAULT_API_BASE = "https://api.codecks.io";
 const TEST_PROFILE = (process.env.CODECKS_TEST_PROFILE ?? process.env.CODECKS_PROFILE ?? "").trim();
-const DEFAULT_ALLOWED_OP_VAULTS: string[] = [];
-const DEFAULT_OP_ALLOWLIST_SCRIPT = (() => {
-  const homeDir = process.env.HOME?.trim();
-  if (!homeDir) {
-    return "op-read-allowlist.sh";
-  }
-
-  return resolve(homeDir, ".config", "opencode", "scripts", "op-read-allowlist.sh");
-})();
-const OP_EXECUTABLE = process.env.CODECKS_OP_PATH?.trim() || DEFAULT_OP_ALLOWLIST_SCRIPT;
-
-const toProfileSegment = (value: string): string => value.replace(/[^a-z0-9]/gi, "_").toUpperCase();
-const getProfileEnv = (profile: string, suffix: string): string | undefined =>
-  process.env[`CODECKS_PROFILE_${toProfileSegment(profile)}_${suffix}`];
-
-const normalizeVaultName = (value: string): string => value.trim().toLowerCase();
-
-const getAllowedOpVaults = (): Set<string> => {
-  const configured = process.env.OPENCODE_OP_ALLOWED_VAULTS ?? "";
-  const explicitVaults = configured
-    .split(",")
-    .map(normalizeVaultName)
-    .filter((value) => value.length > 0);
-
-  if (explicitVaults.length === 0) {
-    return new Set(DEFAULT_ALLOWED_OP_VAULTS.map(normalizeVaultName));
-  }
-
-  return new Set(explicitVaults);
-};
-
-const parseVaultFromOpRef = (ref: string): string | undefined => {
-  const trimmed = ref.trim();
-  if (!trimmed.startsWith("op://")) {
-    return undefined;
-  }
-
-  const withoutPrefix = trimmed.slice("op://".length);
-  const slashIndex = withoutPrefix.indexOf("/");
-  if (slashIndex <= 0) {
-    return undefined;
-  }
-
-  return withoutPrefix.slice(0, slashIndex).trim();
-};
-
-const readOnePasswordRef = (ref: string, timeoutMs: number): string => {
-  const opRef = ref.trim();
-  if (!opRef.startsWith("op://")) {
-    throw new Error("profile token ref must start with 'op://'");
-  }
-
-  const vault = parseVaultFromOpRef(opRef);
-  if (!vault) {
-    throw new Error("profile token ref must use format op://<vault>/<item>/<field>");
-  }
-
-  const allowedVaults = getAllowedOpVaults();
-  if (!allowedVaults.has(normalizeVaultName(vault))) {
-    throw new Error(`profile token ref vault '${vault}' is not allowed. Set OPENCODE_OP_ALLOWED_VAULTS to a comma-separated allow-list for test-only 1Password refs.`);
-  }
-
-  if (!process.env.OP_SERVICE_ACCOUNT_TOKEN) {
-    throw new Error("OP_SERVICE_ACCOUNT_TOKEN is required for 1Password profile token refs");
-  }
-
-  const output = execFileSync(OP_EXECUTABLE, ["read", opRef], {
-    encoding: "utf8",
-    timeout: timeoutMs,
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return String(output ?? "").trim();
-};
-
 const REQUEST_TIMEOUT_MS = (() => {
   const raw = Number.parseInt(process.env.CODECKS_TEST_REQUEST_TIMEOUT_MS ?? "10000", 10);
   if (!Number.isFinite(raw)) {
@@ -133,9 +55,11 @@ const resolveRuntimeConfig = (): { apiBase: string; token: string; account: stri
 
   const account = (profileAccount ?? process.env.CODECKS_ACCOUNT ?? "").trim();
   const apiBase = (profileApiBase ?? process.env.CODECKS_API_BASE ?? DEFAULT_API_BASE).trim();
-  const token = profileTokenRef
-    ? readOnePasswordRef(profileTokenRef, REQUEST_TIMEOUT_MS)
-    : (profileTokenDirect ?? process.env.CODECKS_TOKEN ?? process.env.CODECKS_API_TOKEN ?? "").trim();
+  if (profileTokenRef) {
+    throw new Error("Codecks integration tests no longer execute 1Password helpers directly. Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.");
+  }
+
+  const token = (profileTokenDirect ?? process.env.CODECKS_TOKEN ?? process.env.CODECKS_API_TOKEN ?? "").trim();
 
   return { apiBase, token, account, profile };
 };
@@ -454,7 +378,7 @@ const runDispatch = async (dispatchPath: string, payload: AnyRecord): Promise<un
   requestJson(`/dispatch/${dispatchPath}`, payload);
 
 const invokeTool = async (name: string, args: AnyRecord): Promise<string> => {
-  const module = await import("../src/opencode-codecks.ts");
+  const module = await import("../src/codecks-core.ts");
   const candidate = (module as AnyRecord)[name];
   const execute = isObject(candidate) ? candidate.execute : undefined;
   if (typeof execute !== "function") {

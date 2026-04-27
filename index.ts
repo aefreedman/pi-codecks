@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import * as core from "./src/opencode-codecks";
+import * as core from "./src/codecks-core";
 
 type CoreTool = {
   description?: string;
