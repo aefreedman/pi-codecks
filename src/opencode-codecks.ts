@@ -69,7 +69,7 @@ const RETRY_BASE_DELAY_MS = (() =>
     return Math.max(100, Math.min(5000, value));
 })();
 const RETRY_JITTER_MS = 125;
-const DEFAULT_ALLOWED_OP_VAULTS = ["codecks-service"];
+const DEFAULT_ALLOWED_OP_VAULTS: string[] = [];
 const DEFAULT_OP_ALLOWLIST_SCRIPT = (() =>
 {
     const homeDir = process.env.HOME?.trim();
@@ -304,7 +304,7 @@ const readOnePasswordRef = (ref: string): string =>
     const allowedVaults = getAllowedOpVaults();
     if (!allowedVaults.has(normalizeVaultName(vault)))
     {
-        throw new Error(`Codecks profile token ref vault '${vault}' is not allowed by OPENCODE_OP_ALLOWED_VAULTS.`);
+        throw new Error(`Codecks profile token ref vault '${vault}' is not allowed. Set OPENCODE_OP_ALLOWED_VAULTS to a comma-separated allow-list for 1Password refs.`);
     }
 
     const now = Date.now();

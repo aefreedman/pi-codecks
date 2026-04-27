@@ -4,7 +4,7 @@ import { resolve } from "path";
 const TEST_PREFIX = "[tool-test]";
 const DEFAULT_API_BASE = "https://api.codecks.io";
 const TEST_PROFILE = (process.env.CODECKS_TEST_PROFILE ?? process.env.CODECKS_PROFILE ?? "").trim();
-const DEFAULT_ALLOWED_OP_VAULTS = ["codecks-service"];
+const DEFAULT_ALLOWED_OP_VAULTS: string[] = [];
 const DEFAULT_OP_ALLOWLIST_SCRIPT = (() => {
   const homeDir = process.env.HOME?.trim();
   if (!homeDir) {
@@ -63,7 +63,7 @@ const readOnePasswordRef = (ref: string, timeoutMs: number): string => {
 
   const allowedVaults = getAllowedOpVaults();
   if (!allowedVaults.has(normalizeVaultName(vault))) {
-    throw new Error(`profile token ref vault '${vault}' is not allowed by OPENCODE_OP_ALLOWED_VAULTS`);
+    throw new Error(`profile token ref vault '${vault}' is not allowed. Set OPENCODE_OP_ALLOWED_VAULTS to a comma-separated allow-list for test-only 1Password refs.`);
   }
 
   if (!process.env.OP_SERVICE_ACCOUNT_TOKEN) {
@@ -149,7 +149,7 @@ const profileDeckOverride = TEST_PROFILE
   : undefined;
 const CREATE_DECK_ENV = process.env.CODECKS_TEST_DECK ?? profileDeckOverride ?? "";
 const ATTACHMENT_PATH_ENV = process.env.CODECKS_TEST_ATTACHMENT_PATH ?? "";
-const VISION_BOARD_CARD_ENV = (process.env.CODECKS_TEST_VISION_BOARD_CARD ?? "3c5").trim();
+const VISION_BOARD_CARD_ENV = (process.env.CODECKS_TEST_VISION_BOARD_CARD ?? "").trim();
 
 if (!process.env.CODECKS_REQUEST_TIMEOUT_MS) {
   process.env.CODECKS_REQUEST_TIMEOUT_MS = String(REQUEST_TIMEOUT_MS);
