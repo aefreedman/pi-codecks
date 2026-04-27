@@ -5338,7 +5338,7 @@ export const card_update_status = tool({
 });
 
 export const card_add_comment = tool({
-    description: "Add a comment to a Codecks card.",
+    description: "Open a general comment thread on a Codecks card when explicitly requested.",
     args: {
         cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
         content: tool.schema.string().min(1).describe("Comment content."),

@@ -60,6 +60,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Use `seq:<number>` only when an account sequence lookup is explicitly intended.
 - Confirm before destructive actions and before multi-card updates.
 - Do not add comments to cards unless the user explicitly instructs you to add a comment/reply.
+- Do not open new Comment threads for follow-up work, progress updates, or completion reports.
+- Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
@@ -69,7 +71,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - `codecks_card_add_block` is a deprecated alias kept for compatibility.
 - Review and Blocker are mutually exclusive while open.
 - Codecks allows only one open Review on a card.
-- When a card already has an open/unresolved Review and you need to provide a follow-up work update, reply to the existing Review thread with `codecks_card_reply_resolvable` (prefer `cardId` + `context: "review"`, or pass `resolvableId`) instead of starting a new thread with `codecks_card_add_review`.
+- When a card already has an open/unresolved Review and you need to provide a follow-up work update, reply to the existing Review thread with `codecks_card_reply_resolvable` (prefer `cardId` + `context: "review"`, or pass `resolvableId`) instead of starting a new thread with `codecks_card_add_review` or opening a general Comment thread.
 - Use `codecks_card_list_resolvables` when you need to find or verify the existing Review thread before replying.
 - Documentation cards do not support status transitions.
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.

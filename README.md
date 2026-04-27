@@ -115,7 +115,9 @@ Example:
 
 ## Review follow-ups
 
-Codecks allows only one open Review thread on a card. If an agent needs to report follow-up work or another update while a Review is still open/unresolved, it should reply to the existing Review with `codecks_card_reply_resolvable` (using `cardId` + `context: "review"`, or the `resolvableId`) instead of opening another Review with `codecks_card_add_review`.
+Codecks allows only one open Review thread on a card. If an agent needs to report follow-up work or another update while a Review is still open/unresolved, it should reply to the existing Review with `codecks_card_reply_resolvable` (using `cardId` + `context: "review"`, or the `resolvableId`) instead of opening another Review with `codecks_card_add_review` or opening a general Comment thread.
+
+Agents should not open new Comment threads for follow-up work, progress updates, or completion reports. If there is no open Review thread, agents should report the update in chat only and avoid writing to Codecks unless the user explicitly asks for a comment/reply.
 
 Use `codecks_card_list_resolvables` when the agent needs to inspect or identify the existing Review thread first.
 

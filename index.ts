@@ -30,10 +30,17 @@ const CARD_REFERENCE_WRITE_GUIDELINES = [
   "Markdown structure like # $123 and * $123 is okay because the $123 token itself stays plain.",
 ];
 
+const COMMENT_THREAD_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  "Do not open new comment threads for follow-up work, progress updates, or completion reports unless the user explicitly asks you to add a comment.",
+  "Follow-up updates belong only in an existing open review thread; otherwise, report the update in chat and do not write to Codecks unless explicitly instructed.",
+];
+
 const REVIEW_FOLLOWUP_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
   "Codecks allows only one open review thread on a card.",
-  "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review.",
+  "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review or opening a comment thread.",
+  "If there is no open review thread, report follow-up work in chat only unless the user explicitly asks you to add a Codecks comment/reply.",
   "Use codecks_card_list_resolvables when you need to inspect or identify the existing open review thread before replying.",
 ];
 
@@ -195,7 +202,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
   },
   card_add_comment: {
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    promptGuidelines: COMMENT_THREAD_GUIDELINES,
   },
   card_add_review: {
     promptGuidelines: REVIEW_FOLLOWUP_GUIDELINES,
