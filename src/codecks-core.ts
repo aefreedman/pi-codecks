@@ -5421,10 +5421,10 @@ export const card_add_comment = tool({
 });
 
 export const card_add_review = tool({
-    description: "Add a review comment to a Codecks card.",
+    description: "Open a review conversation thread on a Codecks card.",
     args: {
         cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
-        content: tool.schema.string().min(1).describe("Review comment content."),
+        content: tool.schema.string().min(1).describe("Initial review content."),
         format: outputFormatArg,
     },
     async execute(args)
@@ -5481,7 +5481,7 @@ export const card_add_review = tool({
                 format,
                 "card-add-review",
                 "validation_error",
-                "Cannot add review: card already has an open review.",
+                "Cannot add review: card already has an open review. Reply to the existing review with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead.",
             );
         }
 

@@ -30,6 +30,13 @@ const CARD_REFERENCE_WRITE_GUIDELINES = [
   "Markdown structure like # $123 and * $123 is okay because the $123 token itself stays plain.",
 ];
 
+const REVIEW_FOLLOWUP_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  "Codecks allows only one open review thread on a card.",
+  "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review.",
+  "Use codecks_card_list_resolvables when you need to inspect or identify the existing open review thread before replying.",
+];
+
 const DEFAULT_CODECKS_EXPORTS = [
   "query",
   "dispatch",
@@ -191,7 +198,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
   },
   card_add_review: {
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    promptGuidelines: REVIEW_FOLLOWUP_GUIDELINES,
   },
   card_add_blocker: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
@@ -200,7 +207,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
   },
   card_reply_resolvable: {
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    promptGuidelines: REVIEW_FOLLOWUP_GUIDELINES,
   },
   card_edit_resolvable_entry: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,

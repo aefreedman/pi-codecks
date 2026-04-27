@@ -113,6 +113,12 @@ Example:
 - prompt: `/codecks-inbox` - summarize the logged-in user's attention-worthy resolvables
 - skill: `using-codecks` - Codecks workflow guidance for Pi agents
 
+## Review follow-ups
+
+Codecks allows only one open Review thread on a card. If an agent needs to report follow-up work or another update while a Review is still open/unresolved, it should reply to the existing Review with `codecks_card_reply_resolvable` (using `cardId` + `context: "review"`, or the `resolvableId`) instead of opening another Review with `codecks_card_add_review`.
+
+Use `codecks_card_list_resolvables` when the agent needs to inspect or identify the existing Review thread first.
+
 ## Testing
 
 ```bash

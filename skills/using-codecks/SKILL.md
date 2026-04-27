@@ -68,6 +68,9 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Use `codecks_card_add_review` and `codecks_card_add_blocker` for those actions.
 - `codecks_card_add_block` is a deprecated alias kept for compatibility.
 - Review and Blocker are mutually exclusive while open.
+- Codecks allows only one open Review on a card.
+- When a card already has an open/unresolved Review and you need to provide a follow-up work update, reply to the existing Review thread with `codecks_card_reply_resolvable` (prefer `cardId` + `context: "review"`, or pass `resolvableId`) instead of starting a new thread with `codecks_card_add_review`.
+- Use `codecks_card_list_resolvables` when you need to find or verify the existing Review thread before replying.
 - Documentation cards do not support status transitions.
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.
