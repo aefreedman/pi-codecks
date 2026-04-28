@@ -2693,8 +2693,13 @@ const renderLookupMessage = (result: LookupResult, labelValue?: string): string 
     return "";
 };
 
-const parseDateTimeInput = (value: string, label: string): { date: Date; iso: string } | { error: string } =>
+const parseDateTimeInput = (value: unknown, label: string): { date: Date; iso: string } | { error: string } =>
 {
+    if (typeof value !== "string")
+    {
+        return { error: `${label} is required.` };
+    }
+
     const trimmed = value.trim();
     if (!trimmed)
     {
@@ -3736,7 +3741,7 @@ export const card_list_done_within_timeframe = tool({
                 format,
                 "card-list-done-within-timeframe",
                 "validation_error",
-                "since must be less than or equal to until.",
+                "until must be after since.",
             );
         }
 
