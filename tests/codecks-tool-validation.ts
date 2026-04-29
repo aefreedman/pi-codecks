@@ -1406,6 +1406,29 @@ const run = async (): Promise<number> => {
     }
 
     try {
+      const structuredGetResult = await invokeTool("card_get", {
+        cardId: toolCardRef,
+        format: "json",
+      });
+      if (!structuredOk(structuredGetResult)) {
+        hardFailures += 1;
+        fail(`card_get structured lookup failed: ${structuredGetResult}`);
+      } else {
+        const structuredGetData = structuredData(structuredGetResult);
+        const structuredCard = isObject(structuredGetData?.card) ? structuredGetData.card as AnyRecord : undefined;
+        if (structuredCard?.cardId === cardId && typeof structuredCard?.content === "string") {
+          pass("card_get returns structured card data for agent-facing retrieval");
+        } else {
+          hardFailures += 1;
+          fail(`card_get structured payload mismatch: ${structuredGetResult}`);
+        }
+      }
+    } catch (error) {
+      hardFailures += 1;
+      fail(`card_get structured lookup check failed: ${(error as Error).message}`);
+    }
+
+    try {
       const noBoardResult = await invokeTool("card_get_vision_board", {
         cardId: toolCardRef,
         format: "json",

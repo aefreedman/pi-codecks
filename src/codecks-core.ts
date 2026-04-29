@@ -3872,6 +3872,292 @@ export const card_list_done_within_timeframe = tool({
     },
 });
 
+type CardGetDetail = {
+    card?: CodecksEntity;
+    cardMap: Record<string, CodecksEntity>;
+};
+
+const fetchCardDetailForGet = async (args: {
+    cardId?: string | number;
+    accountSeq?: number;
+}): Promise<CardGetDetail> =>
+{
+    if (args.accountSeq !== undefined)
+    {
+        const query = {
+            _root: [
+                {
+                    account: [
+                        {
+                            [relationQuery("cards", { accountSeq: [args.accountSeq] })]: cardDetailFields,
+                        },
+                    ],
+                },
+            ],
+        };
+        const payload = await runQuery(query);
+        const data = unwrapData(payload) as Record<string, unknown> | undefined;
+        const cardMap = getEntityMap(data, "card");
+        const card = extractCardsFromPayload(payload, "cards")[0];
+        return { card, cardMap };
+    }
+
+    const cardId = args.cardId !== undefined ? String(args.cardId).trim() : "";
+    if (!cardId)
+    {
+        return { cardMap: {} };
+    }
+
+    const idLiteral = formatIdForQuery(cardId);
+    const query = {
+        [`card(${idLiteral})`]: cardDetailFields,
+    };
+    const payload = await runQuery(query);
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const cardMap = getEntityMap(data, "card");
+    const userMap = getEntityMap(data, "user");
+    const deckMap = getEntityMap(data, "deck");
+    const milestoneMap = getEntityMap(data, "milestone");
+    const lookupKey = `card(${idLiteral})`;
+    const rawCard = cardMap[String(cardId)]
+        ?? resolveFromMap(data ? data[lookupKey] : undefined, cardMap)
+        ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
+    const card = rawCard
+        ? hydrateCard(rawCard, { user: userMap, deck: deckMap, milestone: milestoneMap })
+        : undefined;
+
+    return { card, cardMap };
+};
+
+const normalizeUserSummary = (entity: unknown): Record<string, unknown> | null =>
+{
+    if (!entity || typeof entity !== "object")
+    {
+        return null;
+    }
+
+    const value = entity as CodecksEntity;
+    return {
+        id: value.id ?? null,
+        name: value.name ?? null,
+        fullName: value.fullName ?? null,
+    };
+};
+
+const normalizeDeckSummary = (entity: unknown): Record<string, unknown> | null =>
+{
+    if (!entity || typeof entity !== "object")
+    {
+        return null;
+    }
+
+    const value = entity as CodecksEntity;
+    return {
+        id: value.id ?? null,
+        accountSeq: value.accountSeq ?? null,
+        title: value.title ?? null,
+    };
+};
+
+const normalizeMilestoneSummary = (entity: unknown): Record<string, unknown> | null =>
+{
+    if (!entity || typeof entity !== "object")
+    {
+        return null;
+    }
+
+    const value = entity as CodecksEntity;
+    return {
+        id: value.id ?? null,
+        accountSeq: value.accountSeq ?? null,
+        name: value.name ?? null,
+        title: value.title ?? null,
+    };
+};
+
+const normalizeRelatedCardSummary = (entity: CodecksEntity | undefined): Record<string, unknown> | null =>
+{
+    if (!entity)
+    {
+        return null;
+    }
+
+    const accountSeq = entity.accountSeq as number | undefined;
+    const shortCode = formatShortCode(accountSeq);
+    const cardType = resolveCardType(entity);
+    return {
+        cardId: entity.cardId ?? null,
+        accountSeq: accountSeq ?? null,
+        shortCode: shortCode || null,
+        url: shortCode ? formatCardUrl(shortCode) : null,
+        title: entity.title ?? null,
+        status: entity.status ?? null,
+        derivedStatus: entity.derivedStatus ?? null,
+        cardType,
+        isDoc: cardType === "documentation",
+    };
+};
+
+const normalizeCardGetData = (
+    card: CodecksEntity,
+    cardMap: Record<string, CodecksEntity>,
+): Record<string, unknown> =>
+{
+    const accountSeq = card.accountSeq as number | undefined;
+    const shortCode = formatShortCode(accountSeq);
+    const parentCard = resolveFromMap(card.parentCard, cardMap)
+        ?? (typeof card.parentCard === "object" && card.parentCard ? card.parentCard as CodecksEntity : undefined);
+    const childCards = extractRelationEntities(card, "childCards", cardMap);
+    const cardType = resolveCardType(card);
+
+    return {
+        cardId: card.cardId ?? null,
+        accountSeq: accountSeq ?? null,
+        shortCode: shortCode || null,
+        url: shortCode ? formatCardUrl(shortCode) : null,
+        title: card.title ?? null,
+        content: card.content ?? "",
+        status: card.status ?? null,
+        derivedStatus: card.derivedStatus ?? null,
+        visibility: card.visibility ?? null,
+        cardType,
+        isDoc: cardType === "documentation",
+        effort: card.effort ?? null,
+        priority: card.priority ?? null,
+        dueDate: card.dueDate ?? null,
+        lastUpdatedAt: card.lastUpdatedAt ?? null,
+        deck: normalizeDeckSummary(card.deck),
+        milestone: normalizeMilestoneSummary(card.milestone),
+        assignee: normalizeUserSummary(card.assignee),
+        tags: formatTags(card.masterTags),
+        parentCard: normalizeRelatedCardSummary(parentCard),
+        childCards: childCards.map((child) => normalizeRelatedCardSummary(child)).filter((child) => child !== null),
+    };
+};
+
+const normalizeCardCandidate = (card: CodecksEntity): Record<string, unknown> =>
+{
+    const accountSeq = card.accountSeq as number | undefined;
+    const shortCode = formatShortCode(accountSeq);
+    return {
+        cardId: card.cardId ?? null,
+        accountSeq: accountSeq ?? null,
+        shortCode: shortCode || null,
+        title: card.title ?? null,
+        status: card.status ?? null,
+        cardType: resolveCardType(card),
+        deck: (card.deck as CodecksEntity | undefined)?.title ?? null,
+        milestone: (card.milestone as CodecksEntity | undefined)?.name
+            ?? (card.milestone as CodecksEntity | undefined)?.title
+            ?? null,
+        assignee: (card.assignee as CodecksEntity | undefined)?.name
+            ?? (card.assignee as CodecksEntity | undefined)?.fullName
+            ?? null,
+    };
+};
+
+export const card_get = tool({
+    description: "Fetch one Codecks card as structured data for agent reasoning.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID, short code, or URL."),
+        title: tool.schema.string().optional().describe("Partial title to match if cardId is not provided."),
+        location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope when searching by title."),
+        deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID when location=deck."),
+        milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
+        includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards when searching by title."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "json";
+        const parsedId = parseCardIdentifier(args.cardId);
+        let cardId = parsedId.cardId ?? args.cardId;
+        let accountSeq = parsedId.accountSeq;
+
+        try
+        {
+            if (accountSeq !== undefined)
+            {
+                cardId = accountSeq;
+            }
+
+            if (!cardId)
+            {
+                if (!args.title || !String(args.title).trim())
+                {
+                    return toStructuredErrorResult(format, "card-get", "validation_error", "Card ID or title is required.");
+                }
+
+                const inferredCode = extractCardCode(args.title);
+                const result = await fetchCardMatches({
+                    title: args.title,
+                    cardCode: inferredCode ?? undefined,
+                    location: args.location,
+                    deck: args.deck,
+                    milestone: args.milestone,
+                    limit: 5,
+                    includeArchived: args.includeArchived,
+                });
+
+                if (result.error)
+                {
+                    return toStructuredErrorResult(format, "card-get", "validation_error", result.error);
+                }
+
+                const cards = result.cards ?? [];
+                if (cards.length === 0)
+                {
+                    return toStructuredErrorResult(format, "card-get", "not_found", "No cards matched the search criteria.", {
+                        title: args.title,
+                    });
+                }
+
+                if (cards.length > 1)
+                {
+                    return toStructuredErrorResult(format, "card-get", "ambiguous_match", "Multiple cards matched the search criteria.", {
+                        matches: cards.length,
+                        candidates: cards.map(normalizeCardCandidate),
+                    });
+                }
+
+                cardId = (cards[0].cardId as string | number | undefined) ?? cards[0].accountSeq;
+                if (!cardId)
+                {
+                    return toStructuredErrorResult(format, "card-get", "not_found", "Matched card is missing an ID. Please provide the card ID.");
+                }
+
+                const parsedMatch = parseCardIdentifier(cardId);
+                accountSeq = parsedMatch.accountSeq;
+            }
+
+            const detail = await fetchCardDetailForGet({ cardId, accountSeq });
+            if (!detail.card)
+            {
+                return toStructuredErrorResult(format, "card-get", "not_found", "Card not found.", {
+                    cardId: args.cardId ?? cardId ?? null,
+                });
+            }
+
+            const card = normalizeCardGetData(detail.card, detail.cardMap);
+            const title = String(card.title ?? "(untitled)");
+            const shortCode = card.shortCode ? String(card.shortCode) : "";
+            const text = [
+                "## Card Data",
+                "",
+                `${shortCode ? `${shortCode} ` : ""}${title}`,
+                "",
+                String(card.content ?? ""),
+            ].join("\n").trim();
+
+            return toStructuredResult(format, "card-get", text, { card });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "card-get", "api_error", toErrorMessage(error));
+        }
+    },
+});
+
 export const card_get_formatted = tool({
     description: "Fetch Codecks card details by ID or location and title (formatted output).",
     args: {

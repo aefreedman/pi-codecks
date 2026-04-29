@@ -6,6 +6,7 @@ allowed-tools:
   - codecks_dispatch
   - codecks_card_search
   - codecks_card_list_done_within_timeframe
+  - codecks_card_get
   - codecks_card_get_formatted
   - codecks_card_get_vision_board
   - codecks_card_create
@@ -93,7 +94,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - For card type metadata, use `cardType: regular|documentation` on create/update.
 
 ## Tool-specific notes
-- `codecks_card_get_formatted` is the preferred human-readable retrieval tool for normal card details.
+- Use `codecks_card_get` when the agent needs structured card data for inspection, planning, or follow-up work.
+- Use `codecks_card_get_formatted` when presenting human-readable card details to the user.
 - Use `codecks_list_open_resolvable_cards` when the user wants the web-UI-style list of cards with open resolvables across recent cards.
 - Use `codecks_list_logged_in_user_actionable_resolvables` when the user wants a practical approximation of which open resolvables are currently attention-worthy for the logged-in user.
 - Use `codecks_card_get_vision_board` when the task is specifically about a Codecks vision board attached to a card.

@@ -83,6 +83,7 @@ const DEFAULT_CODECKS_EXPORTS = [
   "dispatch",
   "card_search",
   "card_list_done_within_timeframe",
+  "card_get",
   "card_get_formatted",
   "card_get_vision_board",
   "card_create",
@@ -149,8 +150,35 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     },
     promptSnippet: "Search Codecks cards by title, card code, and optional location filters.",
     promptGuidelines: [
-      "For Codecks retrieval, prefer codecks_card_get_formatted when the user gave a specific card reference and codecks_card_search when you need disambiguation.",
+      "For Codecks retrieval, prefer codecks_card_get when the agent needs structured card data, codecks_card_get_formatted when presenting details to a user, and codecks_card_search when you need disambiguation.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
+    ],
+  },
+  card_get: {
+    parameters: Type.Object({
+      cardId: Type.Optional(cardRefSchema),
+      title: Type.Optional(Type.String({ description: "Partial title to match if cardId is not provided." })),
+      location: Type.Optional(locationEnum),
+      deck: Type.Optional(cardRefSchema),
+      milestone: Type.Optional(cardRefSchema),
+      includeArchived: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.id !== undefined && input.cardId === undefined) input.cardId = input.id;
+      applyCardIdAliases(input);
+      if (input.card_id_or_code !== undefined && input.cardId === undefined) input.cardId = input.card_id_or_code;
+      if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      return input;
+    },
+    promptSnippet: "Fetch one Codecks card as structured data for agent reasoning.",
+    promptGuidelines: [
+      "Use codecks_card_get when the agent needs to inspect card data for reasoning or follow-up work.",
+      "Use codecks_card_get_formatted only when you need to present human-readable card details to the user.",
+      "Pass Codecks card identifiers as cardId.",
+      "Treat bare numeric Codecks references like 387 as short-code card references and pass them as cardId, not as title or id.",
+      "The tool defaults to structured json output; use format=text only when you intentionally want a concise text fallback.",
     ],
   },
   card_get_formatted: {
@@ -176,6 +204,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     },
     promptSnippet: "Fetch one Codecks card by cardId or by title/location and return a formatted summary.",
     promptGuidelines: [
+      "Use codecks_card_get for structured agent-facing card data; use this tool when presenting a human-readable card summary to the user.",
       "Pass Codecks card identifiers as cardId.",
       "Treat bare numeric Codecks references like 387 as short-code card references and pass them as cardId, not as title or id.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
