@@ -71,8 +71,12 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - `codecks_card_add_block` is a deprecated alias kept for compatibility.
 - Review and Blocker are mutually exclusive while open.
 - Codecks allows only one open Review on a card.
-- When a card already has an open/unresolved Review and you need to provide a follow-up work update, reply to the existing Review thread with `codecks_card_reply_resolvable` (prefer `cardId` + `context: "review"`, or pass `resolvableId`) instead of starting a new thread with `codecks_card_add_review` or opening a general Comment thread.
-- Use `codecks_card_list_resolvables` when you need to find or verify the existing Review thread before replying.
+- When a card already has an open/unresolved Review and you need to provide a follow-up work update, reply to the existing Review thread with `codecks_card_reply_resolvable` (prefer `cardId` + `context: "review"` when there is exactly one open review, or pass `resolvableId`) instead of starting a new thread with `codecks_card_add_review` or opening a general Comment thread.
+- To reply to an existing Comment/Review/Blocker thread, use `codecks_card_reply_resolvable` with `resolvableId` + `content` when the thread id is known.
+- If only the card is known, call `codecks_card_list_resolvables` first unless you are certain there is exactly one open matching context; then reply with `cardId` + `context` + `content`.
+- For closed threads, list with `includeClosed: true`, reopen with `codecks_card_reopen_resolvable`, then reply.
+- Do not use `codecks_card_add_comment` to reply to an existing thread; it opens a new general Comment thread.
+- Use `codecks_card_list_resolvables` when you need to find or verify the existing Review or Comment thread before replying.
 - Documentation cards do not support status transitions.
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.

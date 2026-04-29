@@ -24,6 +24,24 @@ const locationEnum = Type.Union([
   Type.Literal("hand"),
   Type.Literal("bookmarks"),
 ]);
+const resolvableContextEnum = Type.Union([
+  Type.Literal("comment"),
+  Type.Literal("review"),
+  Type.Literal("block"),
+  Type.Literal("blocker"),
+]);
+const conversationContentSchema = Type.String({ minLength: 1 });
+const resolvableTargetParameters = {
+  resolvableId: Type.Optional(cardRefSchema),
+  cardId: Type.Optional(cardRefSchema),
+  context: Type.Optional(resolvableContextEnum),
+  format: Type.Optional(outputFormatEnum),
+};
+const conversationCreateParameters = {
+  cardId: cardRefSchema,
+  content: conversationContentSchema,
+  format: Type.Optional(outputFormatEnum),
+};
 const CARD_REFERENCE_WRITE_GUIDELINES = [
   "In user-visible Codecks text, write card references as plain $123 tokens.",
   "Do not surround $123 with emphasis or code formatting such as **, *, _, ~~, backticks, or code fences.",
@@ -42,6 +60,22 @@ const REVIEW_FOLLOWUP_GUIDELINES = [
   "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review or opening a comment thread.",
   "If there is no open review thread, report follow-up work in chat only unless the user explicitly asks you to add a Codecks comment/reply.",
   "Use codecks_card_list_resolvables when you need to inspect or identify the existing open review thread before replying.",
+];
+
+const RESOLVABLE_REPLY_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  "Use codecks_card_reply_resolvable to reply to an existing comment, review, or blocker thread; use codecks_card_add_comment only when explicitly opening a new comment thread.",
+  "For a known thread, prefer resolvableId + content.",
+  "For a known card with exactly one matching open thread, use cardId + context + content, for example context: \"comment\" or context: \"review\".",
+  "If multiple open threads may match, call codecks_card_list_resolvables first and then reply by resolvableId.",
+  "Cannot reply to closed resolvables; list with includeClosed when needed, reopen with codecks_card_reopen_resolvable, then reply.",
+];
+
+const RESOLVABLE_LIST_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  "Use codecks_card_list_resolvables to inspect existing comment, review, or blocker threads before replying when the resolvableId is unknown.",
+  "Use contexts such as comment, review, block, or blocker to narrow results.",
+  "Use includeClosed=true only when you need to inspect or reopen closed threads.",
 ];
 
 const DEFAULT_CODECKS_EXPORTS = [
@@ -202,22 +236,127 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
   },
   card_add_comment: {
+    parameters: Type.Object(conversationCreateParameters),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      applyContentAliases(input);
+      return input;
+    },
+    promptSnippet: "Open a new general comment thread on a Codecks card when explicitly requested.",
     promptGuidelines: COMMENT_THREAD_GUIDELINES,
   },
   card_add_review: {
+    parameters: Type.Object(conversationCreateParameters),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      applyContentAliases(input);
+      return input;
+    },
+    promptSnippet: "Open a new review thread on a Codecks card when explicitly requested.",
     promptGuidelines: REVIEW_FOLLOWUP_GUIDELINES,
   },
   card_add_blocker: {
+    parameters: Type.Object(conversationCreateParameters),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      applyContentAliases(input);
+      return input;
+    },
+    promptSnippet: "Open a new blocker thread on a Codecks card.",
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
   },
   card_add_block: {
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    parameters: Type.Object(conversationCreateParameters),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      applyContentAliases(input);
+      return input;
+    },
+    promptSnippet: "Deprecated alias for codecks_card_add_blocker.",
+    promptGuidelines: [
+      ...CARD_REFERENCE_WRITE_GUIDELINES,
+      "Prefer codecks_card_add_blocker for new blocker threads; codecks_card_add_block is a deprecated alias.",
+    ],
   },
   card_reply_resolvable: {
-    promptGuidelines: REVIEW_FOLLOWUP_GUIDELINES,
+    parameters: Type.Object({
+      resolvableId: Type.Optional(cardRefSchema),
+      cardId: Type.Optional(cardRefSchema),
+      context: Type.Optional(resolvableContextEnum),
+      content: conversationContentSchema,
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyResolvableIdAliases(input);
+      applyCardIdAliases(input);
+      applyContentAliases(input);
+      return input;
+    },
+    promptSnippet: "Reply to an existing Codecks comment, review, or blocker thread.",
+    promptGuidelines: RESOLVABLE_REPLY_GUIDELINES,
   },
   card_edit_resolvable_entry: {
+    parameters: Type.Object({
+      entryId: cardRefSchema,
+      content: conversationContentSchema,
+      expectedVersion: Type.Optional(Type.Number()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyEntryIdAliases(input);
+      applyContentAliases(input);
+      if (input.expected_version !== undefined && input.expectedVersion === undefined) input.expectedVersion = input.expected_version;
+      return input;
+    },
+    promptSnippet: "Edit an existing Codecks conversation entry authored by the current user.",
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  card_close_resolvable: {
+    parameters: Type.Object(resolvableTargetParameters),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyResolvableIdAliases(input);
+      applyCardIdAliases(input);
+      return input;
+    },
+    promptSnippet: "Close an existing Codecks comment, review, or blocker thread.",
+    promptGuidelines: RESOLVABLE_LIST_GUIDELINES,
+  },
+  card_reopen_resolvable: {
+    parameters: Type.Object({
+      resolvableId: cardRefSchema,
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyResolvableIdAliases(input);
+      return input;
+    },
+    promptSnippet: "Reopen a closed Codecks comment, review, or blocker thread by resolvableId.",
+    promptGuidelines: RESOLVABLE_LIST_GUIDELINES,
+  },
+  card_list_resolvables: {
+    parameters: Type.Object({
+      cardId: cardRefSchema,
+      contexts: Type.Optional(Type.Array(Type.String({ description: "Optional list of contexts to include (comment, review, block/blocker)." }))),
+      includeClosed: Type.Optional(Type.Boolean()),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      if (input.include_closed !== undefined && input.includeClosed === undefined) input.includeClosed = input.include_closed;
+      return input;
+    },
+    promptSnippet: "List Codecks card conversation threads (comments, reviews, blockers).",
+    promptGuidelines: RESOLVABLE_LIST_GUIDELINES,
   },
   list_open_resolvable_cards: {
     parameters: Type.Object({
@@ -328,6 +467,30 @@ function normalizeOutputFormatAlias(input: Record<string, unknown>): Record<stri
     input.format = "text";
   }
   return input;
+}
+
+function applyCardIdAliases(input: Record<string, unknown>): void {
+  if (input.card_id !== undefined && input.cardId === undefined) input.cardId = input.card_id;
+  if (input.card !== undefined && input.cardId === undefined) input.cardId = input.card;
+  if (input.shortCode !== undefined && input.cardId === undefined) input.cardId = input.shortCode;
+  if (input.short_code !== undefined && input.cardId === undefined) input.cardId = input.short_code;
+}
+
+function applyResolvableIdAliases(input: Record<string, unknown>): void {
+  if (input.resolvable_id !== undefined && input.resolvableId === undefined) input.resolvableId = input.resolvable_id;
+  if (input.threadId !== undefined && input.resolvableId === undefined) input.resolvableId = input.threadId;
+  if (input.thread_id !== undefined && input.resolvableId === undefined) input.resolvableId = input.thread_id;
+}
+
+function applyEntryIdAliases(input: Record<string, unknown>): void {
+  if (input.entry_id !== undefined && input.entryId === undefined) input.entryId = input.entry_id;
+}
+
+function applyContentAliases(input: Record<string, unknown>): void {
+  if (input.message !== undefined && input.content === undefined) input.content = input.message;
+  if (input.body !== undefined && input.content === undefined) input.content = input.body;
+  if (input.reply !== undefined && input.content === undefined) input.content = input.reply;
+  if (input.text !== undefined && input.content === undefined) input.content = input.text;
 }
 
 function toToolName(exportName: string): string {
