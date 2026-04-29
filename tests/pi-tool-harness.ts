@@ -1,5 +1,11 @@
-type RegisteredTool = {
+export type RegisteredTool = {
   name: string;
+  label?: string;
+  description?: string;
+  promptSnippet?: string;
+  promptGuidelines?: string[];
+  parameters?: Record<string, any>;
+  prepareArguments?: (args: unknown) => Record<string, unknown>;
   execute: (...args: any[]) => Promise<any> | any;
 };
 

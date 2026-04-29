@@ -1,7 +1,7 @@
 {
   "name": "@aefree/pi-codecks",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -19,7 +19,7 @@
   },
   "scripts": {
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts",
+    "test:unit": "npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts && npx --yes tsx tests/resolvable-tool-registration.test.ts",
     "test:integration": "npx --yes tsx tests/codecks-tool-validation.ts"
   },
   "peerDependencies": {
@@ -36,5 +36,8 @@
   "bugs": {
     "url": "https://github.com/aefreedman/pi-codecks/issues"
   },
-  "homepage": "https://github.com/aefreedman/pi-codecks#readme"
+  "homepage": "https://github.com/aefreedman/pi-codecks#readme",
+  "devDependencies": {
+    "typebox": "^1.1.34"
+  }
 }

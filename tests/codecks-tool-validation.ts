@@ -1719,6 +1719,19 @@ const run = async (): Promise<number> => {
             fail(`resolvable reply failed: ${reply}`);
           }
 
+          const cardContextReply = await invokeTool("card_reply_resolvable", {
+            cardId: toolCardRef,
+            context: "comment",
+            content: `reply-by-card-context-${runTag}`,
+            format: "json",
+          });
+          if (structuredOk(cardContextReply)) {
+            pass("resolvable reply by cardId + context succeeded when exactly one matching thread is open");
+          } else {
+            hardFailures += 1;
+            fail(`resolvable reply by cardId + context failed: ${cardContextReply}`);
+          }
+
           const close = await invokeTool("card_close_resolvable", {
             resolvableId,
             format: "json",
@@ -1728,6 +1741,18 @@ const run = async (): Promise<number> => {
           } else {
             hardFailures += 1;
             fail(`resolvable close failed: ${close}`);
+          }
+
+          const closedReply = await invokeTool("card_reply_resolvable", {
+            resolvableId,
+            content: `reply-while-closed-${runTag}`,
+            format: "json",
+          });
+          if (structuredErrorCategory(closedReply) === "validation_error") {
+            pass("resolvable reply to closed thread is rejected");
+          } else {
+            hardFailures += 1;
+            fail(`resolvable reply to closed thread should fail validation: ${closedReply}`);
           }
 
           const reopen = await invokeTool("card_reopen_resolvable", {
@@ -1750,6 +1775,56 @@ const run = async (): Promise<number> => {
           } else {
             hardFailures += 1;
             fail(`resolvable lifecycle cleanup close failed: ${finalClose}`);
+          }
+
+          const ambiguityMarkers = [`ambiguous-a-${runTag}`, `ambiguous-b-${runTag}`];
+          for (const ambiguityMarker of ambiguityMarkers) {
+            const ambiguousComment = await invokeTool("card_add_comment", {
+              cardId: toolCardRef,
+              content: ambiguityMarker,
+              format: "json",
+            });
+            if (!structuredOk(ambiguousComment)) {
+              hardFailures += 1;
+              fail(`resolvable ambiguity setup failed for marker ${ambiguityMarker}: ${ambiguousComment}`);
+            }
+          }
+
+          const ambiguousReply = await invokeTool("card_reply_resolvable", {
+            cardId: toolCardRef,
+            context: "comment",
+            content: `ambiguous-reply-${runTag}`,
+            format: "json",
+          });
+          if (structuredErrorCategory(ambiguousReply) === "validation_error" && ambiguousReply.includes("Multiple open resolvables matched")) {
+            pass("resolvable reply by cardId + context reports ambiguity when multiple comments are open");
+          } else {
+            hardFailures += 1;
+            fail(`resolvable ambiguity check failed: ${ambiguousReply}`);
+          }
+
+          const ambiguousComments = await fetchOpenResolvablesForCard(cardId, "comment");
+          const ambiguousIds = Array.from(new Set(ambiguousComments
+            .filter((resolvable) => {
+              const entries = isObject(resolvable) && Array.isArray(resolvable.entries) ? resolvable.entries : [];
+              return entries.some((entry) => isObject(entry)
+                && typeof entry.content === "string"
+                && ambiguityMarkers.some((ambiguityMarker) => entry.content.includes(ambiguityMarker)));
+            })
+            .map((resolvable) => String((resolvable as AnyRecord).id ?? ""))
+            .filter((value) => value.length > 0)));
+          const loggedInUserId = await getLoggedInUserId();
+          for (const ambiguousId of ambiguousIds) {
+            await runDispatch("resolvables/close", {
+              id: ambiguousId,
+              ...(loggedInUserId !== undefined ? { closedBy: loggedInUserId } : {}),
+            });
+          }
+          if (ambiguousIds.length >= 2) {
+            pass("resolvable ambiguity test cleanup closed generated comment threads");
+          } else {
+            hardFailures += 1;
+            fail(`resolvable ambiguity cleanup expected at least 2 generated comment ids; found ${ambiguousIds.length}`);
           }
         }
       }

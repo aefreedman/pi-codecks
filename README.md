@@ -113,13 +113,15 @@ Example:
 - prompt: `/codecks-inbox` - summarize the logged-in user's attention-worthy resolvables
 - skill: `using-codecks` - Codecks workflow guidance for Pi agents
 
-## Review follow-ups
+## Resolvable replies and review follow-ups
 
-Codecks allows only one open Review thread on a card. If an agent needs to report follow-up work or another update while a Review is still open/unresolved, it should reply to the existing Review with `codecks_card_reply_resolvable` (using `cardId` + `context: "review"`, or the `resolvableId`) instead of opening another Review with `codecks_card_add_review` or opening a general Comment thread.
+Use `codecks_card_reply_resolvable` to reply to an existing Comment, Review, or Blocker thread. If the thread is known, pass `resolvableId` + `content`. If the card has exactly one open thread in the desired context, pass `cardId` + `context` + `content` (for example `context: "comment"` or `context: "review"`). When the target is ambiguous, call `codecks_card_list_resolvables` first and then reply by `resolvableId`.
+
+Codecks allows only one open Review thread on a card. If an agent needs to report follow-up work or another update while a Review is still open/unresolved, it should reply to the existing Review with `codecks_card_reply_resolvable` instead of opening another Review with `codecks_card_add_review` or opening a general Comment thread.
 
 Agents should not open new Comment threads for follow-up work, progress updates, or completion reports. If there is no open Review thread, agents should report the update in chat only and avoid writing to Codecks unless the user explicitly asks for a comment/reply.
 
-Use `codecks_card_list_resolvables` when the agent needs to inspect or identify the existing Review thread first.
+Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolvables` with `includeClosed: true` if needed, then `codecks_card_reopen_resolvable` before replying.
 
 ## Testing
 
