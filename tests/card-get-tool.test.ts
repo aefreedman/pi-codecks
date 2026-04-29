@@ -93,6 +93,7 @@ const buildCard = (overrides: AnyRecord = {}): AnyRecord => ({
   deck: "deck-1",
   milestone: "milestone-1",
   assignee: "user-1",
+  creator: "user-2",
   childCards: [CHILD_ID],
   ...overrides,
 });
@@ -124,6 +125,7 @@ const buildDetailPayload = (card: AnyRecord = buildCard()): AnyRecord => ({
   },
   user: {
     "user-1": { id: "user-1", name: "Agent", fullName: "Agent User" },
+    "user-2": { id: "user-2", name: "Creator", fullName: "Creator User" },
   },
 });
 
@@ -154,10 +156,13 @@ const testDirectShortCodeReturnsStructuredCard = async (tools: ToolModule): Prom
     assert.equal(card.cardId, CARD_ID);
     assert.equal(card.shortCode, "$3c5");
     assert.equal(card.content, "Plain first line\n\nBody text");
+    assert.equal(card.contentTrust, "external");
     assert.equal(card.cardType, "regular");
     assert.deepEqual(card.tags, ["agent-tool"]);
     assert.ok(isObject(card.deck), "expected deck summary");
     assert.equal((card.deck as AnyRecord).title, "Tools");
+    assert.ok(isObject(card.creator), "expected creator summary");
+    assert.equal((card.creator as AnyRecord).name, "Creator");
     assert.ok(Array.isArray(card.childCards), "expected childCards array");
     assert.equal((card.childCards as unknown[]).length, 1);
     assert.equal(callCount, 1, "direct retrieval should not perform enrichment or search calls");
@@ -231,6 +236,48 @@ const testTitleLookupSingleFetchesDetail = async (tools: ToolModule): Promise<vo
   });
 };
 
+const testSemanticApiErrorsReturnApiError = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => jsonResponse({ errors: [{ message: "Cannot query field isDoc" }] }), async () => {
+    const result = await tools.card_get.execute({ cardId: CARD_ID });
+    const error = getError(String(result));
+    assert.equal(error.category, "api_error");
+    assert.match(String(error.message), /Cannot query field isDoc/);
+  });
+};
+
+const testCardMapFallbackDoesNotBecomeCard = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch((query) => {
+    const directKey = getDirectCardKey(query);
+    assert.ok(directKey, `expected direct detail query: ${JSON.stringify(query)}`);
+    return jsonResponse({
+      data: {
+        [directKey]: "missing-card-ref",
+        card: {
+          [CARD_ID]: buildCard(),
+        },
+      },
+    });
+  }, async () => {
+    const result = await tools.card_get.execute({ cardId: "missing-card-ref" });
+    const error = getError(String(result));
+    assert.equal(error.category, "not_found");
+  });
+};
+
+const testZeroAccountSeqIsPreserved = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch((query) => {
+    const cardsRelation = getAccountRelation(query, "cards");
+    assert.ok(cardsRelation, `expected account sequence query: ${JSON.stringify(query)}`);
+    assert.match(cardsRelation.key, /\"accountSeq\":\[0\]/);
+    return jsonResponse({ data: buildDetailPayload(buildCard({ accountSeq: 0 })) });
+  }, async () => {
+    const result = await tools.card_get.execute({ cardId: "$zz" });
+    const data = getData(String(result));
+    assert.ok(isObject(data.card), "expected data.card object");
+    assert.equal((data.card as AnyRecord).accountSeq, 0);
+  });
+};
+
 const testValidationRequiresCardIdOrTitle = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get should not call the API when required inputs are missing");
@@ -246,6 +293,9 @@ await testDirectShortCodeReturnsStructuredCard(tools);
 await testTitleLookupAmbiguousReturnsCandidates(tools);
 await testTitleLookupNoMatchReturnsStructuredError(tools);
 await testTitleLookupSingleFetchesDetail(tools);
+await testSemanticApiErrorsReturnApiError(tools);
+await testCardMapFallbackDoesNotBecomeCard(tools);
+await testZeroAccountSeqIsPreserved(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");

@@ -143,6 +143,7 @@ const cardGetGuidance = [cardGetTool.promptSnippet, ...(cardGetTool.promptGuidel
 assert.match(cardGetGuidance, /structured data/i);
 assert.match(cardGetGuidance, /agent/i);
 assert.match(cardGetGuidance, /codecks_card_get_formatted/i);
+assert.match(cardGetGuidance, /untrusted external Codecks data/i);
 
 const formattedGetTool = getTool("codecks_card_get_formatted");
 const formattedGetGuidance = [formattedGetTool.promptSnippet, ...(formattedGetTool.promptGuidelines ?? [])].join("\n");
@@ -182,6 +183,8 @@ for (const phrase of [
 ]) {
   assert.ok(docs.includes(phrase), `expected docs/skill quick-path coverage for ${phrase}`);
 }
+assert.match(docs, /untrusted external Codecks data/i);
+assert.match(docs, /TOKEN_OP_REF.*not resolved|not resolved.*TOKEN_OP_REF/i);
 assert.match(docs, /Do not open new Comment threads|should not open new Comment threads/i);
 assert.match(docs, /Do not use `codecks_card_add_comment` to reply to an existing thread/i);
 
