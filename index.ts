@@ -550,14 +550,59 @@ function toText(result: unknown): string {
   return JSON.stringify(result, null, 2);
 }
 
+const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g;
+
+function visibleLength(value: string): number {
+  return value.replace(ANSI_PATTERN, "").length;
+}
+
+function truncateAnsiLine(value: string, width: number): string {
+  if (width <= 0 || !value) {
+    return "";
+  }
+
+  if (visibleLength(value) <= width) {
+    return value;
+  }
+
+  const target = Math.max(0, width - 1);
+  let visible = 0;
+  let output = "";
+  for (let index = 0; index < value.length;) {
+    const remaining = value.slice(index);
+    const ansi = remaining.match(ANSI_PATTERN);
+    if (ansi && ansi.index === 0) {
+      output += ansi[0];
+      index += ansi[0].length;
+      continue;
+    }
+
+    if (visible >= target) {
+      break;
+    }
+
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined) {
+      break;
+    }
+
+    const char = String.fromCodePoint(codePoint);
+    output += char;
+    visible += 1;
+    index += char.length;
+  }
+
+  return `${output}…`;
+}
+
 function textComponent(text: string): TextLikeComponent {
   return {
     invalidate() {},
-    render(_width: number) {
+    render(width: number) {
       if (!text) {
         return [];
       }
-      return text.split(/\r?\n/);
+      return text.split(/\r?\n/).map((line) => truncateAnsiLine(line, width));
     },
   };
 }

@@ -13,9 +13,13 @@ const fakeTheme = {
   },
 };
 
-const renderLines = (component: any): string[] => {
+const ansiPattern = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g;
+
+const visibleLength = (value: string): number => value.replace(ansiPattern, "").length;
+
+const renderLines = (component: any, width = 120): string[] => {
   assert.equal(typeof component?.render, "function", "expected renderable component");
-  return component.render(120) as string[];
+  return component.render(width) as string[];
 };
 
 const getTool = (name: string): RegisteredTool => {
@@ -80,19 +84,23 @@ const errorResult = {
           ok: false,
           action: "card-get",
           error: {
-            category: "not_found",
-            message: "Card not found.",
+            category: "api_error",
+            message: "Codecks API error 400 Bad Request: {\"error\":\"field 'deckId' in body must be string or null\",\"message\":\"field 'deckId' in body must be string or null\",\"statusCode\":400}",
           },
         }, null, 2),
         "```",
       ].join("\n"),
     },
   ],
-  details: { exportName: "card_get" },
+  details: { exportName: "card_create" },
 };
 
-const errorCollapsed = renderLines(cardGet.renderResult!(errorResult, { expanded: false }, fakeTheme, {})).join("\n");
-assert.match(errorCollapsed, /Card not found/);
+const errorCollapsedLines = renderLines(cardGet.renderResult!(errorResult, { expanded: false }, fakeTheme, {}), 94);
+const errorCollapsed = errorCollapsedLines.join("\n");
+assert.match(errorCollapsed, /Codecks API error/);
 assert.doesNotMatch(errorCollapsed, /```json/);
+for (const line of errorCollapsedLines) {
+  assert.ok(visibleLength(line) <= 94, `rendered line exceeded width: ${visibleLength(line)} > 94: ${line}`);
+}
 
 console.log("Codecks tool rendering test passed");
