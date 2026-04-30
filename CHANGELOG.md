@@ -10,6 +10,7 @@ and this project follows semantic versioning for public package releases.
 ### Added
 
 - Added `codecks_card_get` for efficient structured card retrieval by agents, while keeping `codecks_card_get_formatted` for human-readable presentation.
+- Added compact TUI rendering for Codecks tools so collapsed rows show summaries and expanded rows show full Codecks output.
 - Added Pi-visible schemas for Codecks conversation and resolvable tools, including reply, list, close, reopen, edit, comment, review, and blocker workflows.
 - Added argument alias normalization for common agent inputs such as `resolvable_id`, `card_id`, `entry_id`, `expected_version`, `include_closed`, `message`, `body`, `reply`, and `text`.
 - Added prompt snippets and guidelines that direct agents to reply to existing resolvables with `codecks_card_reply_resolvable` instead of opening new comment threads.

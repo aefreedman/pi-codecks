@@ -527,12 +527,128 @@ function toToolName(exportName: string): string {
   return `codecks_${exportName}`;
 }
 
+type TextLikeComponent = {
+  invalidate: () => void;
+  render: (width: number) => string[];
+};
+
+type RenderTheme = {
+  fg?: (color: string, text: string) => string;
+  bold?: (text: string) => string;
+};
+
+type CodecksToolDetails = {
+  exportName?: string;
+  rawResult?: unknown;
+};
+
 function toText(result: unknown): string {
   if (typeof result === "string") {
     return result;
   }
 
   return JSON.stringify(result, null, 2);
+}
+
+function textComponent(text: string): TextLikeComponent {
+  return {
+    invalidate() {},
+    render(_width: number) {
+      if (!text) {
+        return [];
+      }
+      return text.split(/\r?\n/);
+    },
+  };
+}
+
+function themed(theme: RenderTheme, color: string, text: string): string {
+  return typeof theme.fg === "function" ? theme.fg(color, text) : text;
+}
+
+function bold(theme: RenderTheme, text: string): string {
+  return typeof theme.bold === "function" ? theme.bold(text) : text;
+}
+
+function extractTextContent(result: { content?: Array<{ type?: string; text?: string }> } | undefined): string {
+  return result?.content
+    ?.filter((entry) => entry?.type === "text")
+    .map((entry) => String(entry.text ?? ""))
+    .join("\n") ?? "";
+}
+
+function parseStructuredPayload(text: string): Record<string, any> | undefined {
+  const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (!match) {
+    return undefined;
+  }
+
+  try {
+    const payload = JSON.parse(match[1]) as unknown;
+    return payload && typeof payload === "object" ? payload as Record<string, any> : undefined;
+  }
+  catch {
+    return undefined;
+  }
+}
+
+function summarizeCodecksResult(exportName: string, resultText: string): { ok: boolean; summary: string } {
+  const payload = parseStructuredPayload(resultText);
+  if (payload) {
+    if (payload.ok === false) {
+      const message = typeof payload.error?.message === "string" ? payload.error.message : "failed";
+      return { ok: false, summary: `${exportName}: ${message}` };
+    }
+
+    const data = payload.data;
+    const card = data?.card;
+    if (card && typeof card === "object") {
+      const code = typeof card.shortCode === "string" ? card.shortCode : "";
+      const title = typeof card.title === "string" ? card.title : "card";
+      return { ok: true, summary: `${exportName}: ${[code, title].filter(Boolean).join(" ")}` };
+    }
+
+    if (typeof data?.matches === "number") {
+      return { ok: true, summary: `${exportName}: ${data.matches} match(es)` };
+    }
+
+    if (typeof payload.action === "string") {
+      return { ok: true, summary: `${exportName}: ${payload.action} complete` };
+    }
+  }
+
+  const firstLine = resultText.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
+  const lineCount = resultText ? resultText.split(/\r?\n/).length : 0;
+  return {
+    ok: !/^error\b/i.test(firstLine ?? ""),
+    summary: firstLine ? `${exportName}: ${firstLine}` : `${exportName}: ${lineCount} line(s)`,
+  };
+}
+
+function renderCodecksCall(exportName: string, args: Record<string, unknown>, theme: RenderTheme): TextLikeComponent {
+  const target = args.cardId ?? args.card ?? args.title ?? args.path ?? args.context ?? "";
+  const suffix = target ? ` ${themed(theme, "accent", String(target))}` : "";
+  return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))}${suffix}`);
+}
+
+function renderCodecksResult(
+  exportName: string,
+  result: { content?: Array<{ type?: string; text?: string }>; details?: CodecksToolDetails } | undefined,
+  options: { expanded?: boolean; isPartial?: boolean } | undefined,
+  theme: RenderTheme,
+): TextLikeComponent {
+  if (options?.isPartial) {
+    return textComponent(themed(theme, "warning", "Running Codecks request..."));
+  }
+
+  const text = extractTextContent(result);
+  const summary = summarizeCodecksResult(String(result?.details?.exportName ?? exportName), text);
+  if (!options?.expanded) {
+    const color = summary.ok ? "success" : "error";
+    return textComponent(`${themed(theme, color, summary.ok ? "✓" : "✗")} ${summary.summary}\n${themed(theme, "muted", "(expand for full Codecks output)")}`);
+  }
+
+  return textComponent(text);
 }
 
 function getCoreTool(exportName: string): CoreTool {
@@ -557,6 +673,12 @@ export default function codecksTools(pi: ExtensionAPI) {
       promptGuidelines: config.promptGuidelines,
       parameters: config.parameters ?? ANY_PARAMETERS,
       prepareArguments: config.prepareArguments,
+      renderCall(args, theme) {
+        return renderCodecksCall(exportName, (args ?? {}) as Record<string, unknown>, theme as RenderTheme);
+      },
+      renderResult(result, options, theme) {
+        return renderCodecksResult(exportName, result, options, theme as RenderTheme);
+      },
       async execute(_toolCallId, params, signal) {
         const normalizedParams = (params ?? {}) as Record<string, unknown>;
         const result = await core.runWithAbortSignal(signal, async () => coreTool.execute(normalizedParams));
