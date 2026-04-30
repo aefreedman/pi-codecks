@@ -1367,42 +1367,55 @@ const run = async (): Promise<number> => {
     }
 
     try {
-      const explicitShortCodeResult = await invokeTool("card_get_formatted", {
-        cardId: "$155",
-        format: "json",
-      });
-      if (!structuredOk(explicitShortCodeResult)) {
-        skip("numeric short-code disambiguation skipped ($155 not available in this workspace)");
+      if (!cardCode) {
+        skip("short-code lookup validation skipped (created card has no account sequence)");
       } else {
-        const explicitData = structuredData(explicitShortCodeResult);
-        const explicitCard = isObject(explicitData?.card) ? explicitData.card as AnyRecord : undefined;
-        const explicitCardId = typeof explicitCard?.cardId === "string" ? explicitCard.cardId : "";
-        const explicitShortCode = typeof explicitCard?.shortCode === "string" ? explicitCard.shortCode : "";
-
-        const numericResult = await invokeTool("card_get_formatted", {
-          cardId: "155",
+        const explicitShortCodeResult = await invokeTool("card_get_formatted", {
+          cardId: `$${cardCode}`,
           format: "json",
         });
-        if (!structuredOk(numericResult)) {
-          hardFailures += 1;
-          fail(`numeric short-code lookup failed: ${numericResult}`);
-        } else {
-          const numericData = structuredData(numericResult);
-          const numericCard = isObject(numericData?.card) ? numericData.card as AnyRecord : undefined;
-          const numericCardId = typeof numericCard?.cardId === "string" ? numericCard.cardId : "";
-          const numericShortCode = typeof numericCard?.shortCode === "string" ? numericCard.shortCode : "";
+        const bareShortCodeResult = await invokeTool("card_get_formatted", {
+          cardId: cardCode,
+          format: "json",
+        });
 
-          if (explicitCardId && numericCardId === explicitCardId && numericShortCode === explicitShortCode) {
-            pass("numeric card refs resolve as short codes (155 -> $155)");
+        if (!structuredOk(explicitShortCodeResult) || !structuredOk(bareShortCodeResult)) {
+          hardFailures += 1;
+          fail(`dynamic short-code lookup failed: explicit=${explicitShortCodeResult} bare=${bareShortCodeResult}`);
+        } else {
+          const explicitData = structuredData(explicitShortCodeResult);
+          const explicitCard = isObject(explicitData?.card) ? explicitData.card as AnyRecord : undefined;
+          const explicitCardId = typeof explicitCard?.cardId === "string" ? explicitCard.cardId : "";
+          const bareData = structuredData(bareShortCodeResult);
+          const bareCard = isObject(bareData?.card) ? bareData.card as AnyRecord : undefined;
+          const bareCardId = typeof bareCard?.cardId === "string" ? bareCard.cardId : "";
+
+          if (explicitCardId && bareCardId === explicitCardId) {
+            pass("bare and explicit short-code refs resolve to the created validation card");
           } else {
             hardFailures += 1;
-            fail(`numeric short-code disambiguation mismatch: explicit=${explicitShortCodeResult} numeric=${numericResult}`);
+            fail(`dynamic short-code lookup mismatch: explicit=${explicitShortCodeResult} bare=${bareShortCodeResult}`);
           }
+        }
+
+        if (/^\d+$/.test(cardCode)) {
+          const numericResult = await invokeTool("card_get_formatted", {
+            cardId: cardCode,
+            format: "json",
+          });
+          if (structuredOk(numericResult)) {
+            pass("numeric bare short-code refs resolve when the created validation card has an all-digit code");
+          } else {
+            hardFailures += 1;
+            fail(`numeric short-code lookup failed for dynamic code ${cardCode}: ${numericResult}`);
+          }
+        } else {
+          skip(`numeric bare short-code validation skipped (dynamic card code ${cardCode} is not all digits)`);
         }
       }
     } catch (error) {
       hardFailures += 1;
-      fail(`numeric short-code disambiguation check failed: ${(error as Error).message}`);
+      fail(`dynamic short-code lookup check failed: ${(error as Error).message}`);
     }
 
     try {
@@ -1522,21 +1535,22 @@ const run = async (): Promise<number> => {
     }
 
     try {
+      const normalizationRef = toolCardRef.startsWith("$") ? toolCardRef : "$1";
       const normalizationContent = [
         "Reference normalization",
         "",
         "```",
-        "`$2v4`",
-        "**$2sr**",
+        `\`${normalizationRef}\``,
+        `**${normalizationRef}**`,
         "```",
         "",
-        "Inline ref: `$155`",
-        "Bold ref: **$2v4**",
-        "Italic ref: *$2sr*",
+        `Inline ref: \`${normalizationRef}\``,
+        `Bold ref: **${normalizationRef}**`,
+        `Italic ref: *${normalizationRef}*`,
         "Heading ref:",
-        "# $155",
+        `# ${normalizationRef}`,
         "List ref:",
-        "* $2v4",
+        `* ${normalizationRef}`,
       ].join("\n");
       const normalizationUpdate = await invokeTool("card_update", {
         cardId: toolCardRef,
@@ -1555,9 +1569,9 @@ const run = async (): Promise<number> => {
         const hasReferenceOnlyFence = /```[\s\S]*\$2v4[\s\S]*```/i.test(normalizedContent);
         const hasBoldWrappedRef = /\*\*\$[0-9a-z]+\*\*/i.test(normalizedContent);
         const hasItalicWrappedRef = /(^|[^*])\*\$[0-9a-z]+\*(?!\*)/im.test(normalizedContent);
-        const preservesHeadingRef = normalizedContent.includes("# $155");
-        const preservesListRef = normalizedContent.includes("* $2v4");
-        const hasExpectedRefs = normalizedContent.includes("$2v4") && normalizedContent.includes("$2sr") && normalizedContent.includes("$155");
+        const preservesHeadingRef = normalizedContent.includes(`# ${normalizationRef}`);
+        const preservesListRef = normalizedContent.includes(`* ${normalizationRef}`);
+        const hasExpectedRefs = normalizedContent.includes(normalizationRef);
 
         if (!hasInlineBackticks && !hasReferenceOnlyFence && !hasBoldWrappedRef && !hasItalicWrappedRef && preservesHeadingRef && preservesListRef && hasExpectedRefs) {
           pass("user-visible content normalizes card references to plain $code format without breaking valid heading/list markdown");
