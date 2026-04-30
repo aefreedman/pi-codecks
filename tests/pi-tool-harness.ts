@@ -6,6 +6,8 @@ export type RegisteredTool = {
   promptGuidelines?: string[];
   parameters?: Record<string, any>;
   prepareArguments?: (args: unknown) => Record<string, unknown>;
+  renderCall?: (...args: any[]) => any;
+  renderResult?: (...args: any[]) => any;
   execute: (...args: any[]) => Promise<any> | any;
 };
 
