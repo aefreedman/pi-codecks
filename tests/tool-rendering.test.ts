@@ -60,7 +60,7 @@ const collapsedLines = renderLines(cardGet.renderResult!(structuredResult, { exp
 const collapsed = collapsedLines.join("\n");
 assert.match(collapsed, /card_get/);
 assert.match(collapsed, /\$abc Agent Card/);
-assert.match(collapsed, /expand/i);
+assert.match(collapsed, /ctrl\+o to expand/i);
 assert.doesNotMatch(collapsed, /```json/);
 
 const expandedLines = renderLines(cardGet.renderResult!(structuredResult, { expanded: true }, fakeTheme, {}));

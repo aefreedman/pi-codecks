@@ -645,7 +645,7 @@ function renderCodecksResult(
   const summary = summarizeCodecksResult(String(result?.details?.exportName ?? exportName), text);
   if (!options?.expanded) {
     const color = summary.ok ? "success" : "error";
-    return textComponent(`${themed(theme, color, summary.ok ? "✓" : "✗")} ${summary.summary}\n${themed(theme, "muted", "(expand for full Codecks output)")}`);
+    return textComponent(`${themed(theme, color, summary.ok ? "✓" : "✗")} ${summary.summary}\n${themed(theme, "muted", "(ctrl+o to expand)")}`);
   }
 
   return textComponent(text);
