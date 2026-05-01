@@ -4,9 +4,10 @@ type AnyRecord = Record<string, unknown>;
 type ToolModule = typeof import("../src/codecks-core.ts");
 type QueryHandler = (query: AnyRecord) => Response | Promise<Response>;
 
-const ACCOUNT_ID = "acct-card-get";
-const CARD_ID = "f050d696-2d1d-11f1-aefd-cbe0288ce232";
-const CHILD_ID = "f050d696-2d1d-11f1-aefd-cbe0288ce233";
+// Mock-only fixture identifiers. These are not expected to exist in any live Codecks account.
+const ACCOUNT_ID = "mock-account-card-get";
+const CARD_ID = "mock-card-main-id";
+const CHILD_ID = "mock-card-child-id";
 const CARD_SEQ = 1853;
 
 const isObject = (value: unknown): value is AnyRecord => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,7 +104,7 @@ const buildDetailPayload = (card: AnyRecord = buildCard()): AnyRecord => ({
   account: {
     [ACCOUNT_ID]: {
       id: ACCOUNT_ID,
-      "cards({\"accountSeq\":[1853]})": [String(card.cardId)],
+      [`cards({\"accountSeq\":[${String(card.accountSeq)}]})`]: [String(card.cardId)],
     },
   },
   card: {
