@@ -8,7 +8,9 @@ type QueryHandler = (query: AnyRecord) => Response | Promise<Response>;
 const ACCOUNT_ID = "mock-account-card-get";
 const CARD_ID = "mock-card-main-id";
 const CHILD_ID = "mock-card-child-id";
-const CARD_SEQ = 1853;
+const CARD_CODE = "12g";
+const CARD_REF = `$${CARD_CODE}`;
+const CARD_SEQ = 42;
 
 const isObject = (value: unknown): value is AnyRecord => typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -150,12 +152,12 @@ const testDirectShortCodeReturnsStructuredCard = async (tools: ToolModule): Prom
     assert.match(cardsRelation.key, /accountSeq/);
     return jsonResponse({ data: buildDetailPayload() });
   }, async () => {
-    const result = await tools.card_get.execute({ cardId: "$3c5" });
+    const result = await tools.card_get.execute({ cardId: CARD_REF });
     const data = getData(String(result));
     assert.ok(isObject(data.card), "expected data.card object");
     const card = data.card as AnyRecord;
     assert.equal(card.cardId, CARD_ID);
-    assert.equal(card.shortCode, "$3c5");
+    assert.equal(card.shortCode, CARD_REF);
     assert.equal(card.content, "Plain first line\n\nBody text");
     assert.equal(card.contentTrust, "external");
     assert.equal(card.cardType, "regular");
