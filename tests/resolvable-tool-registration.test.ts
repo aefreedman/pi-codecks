@@ -42,6 +42,8 @@ const prepare = (toolName: string, args: AnyRecord): AnyRecord => {
   return tool.prepareArguments!(args) as AnyRecord;
 };
 
+assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "includeArchived", "format"]);
+
 assertProperties("codecks_card_reply_resolvable", ["resolvableId", "cardId", "context", "content", "format"]);
 assertRequired("codecks_card_reply_resolvable", ["content"]);
 assertProperties("codecks_card_list_resolvables", ["cardId", "contexts", "includeClosed", "limit", "format"]);
@@ -121,6 +123,11 @@ assert.equal(prepare("codecks_card_edit_resolvable_entry", { entry_id: "entry-1"
 assert.equal(prepare("codecks_card_edit_resolvable_entry", { entry_id: "entry-1", body: "updated", expected_version: 2 }).expectedVersion, 2);
 assert.equal(prepare("codecks_card_list_resolvables", { card_id: "$3cv", include_closed: true }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_list_resolvables", { card_id: "$3cv", include_closed: true }).includeClosed, true);
+assert.equal(prepare("codecks_card_get", { card_id: "$3cv", include_archived: true }).cardId, "$3cv");
+assert.equal(prepare("codecks_card_get", { card_id: "$3cv", include_archived: true }).includeArchived, true);
+assert.equal(prepare("codecks_card_get", { id: "$111", cardId: "$222" }).cardId, "$222");
+assert.equal(prepare("codecks_card_get", { card_id_or_code: "$333" }).cardId, "$333");
+assert.equal(prepare("codecks_card_get", { short_code: "$444" }).cardId, "$444");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
 
@@ -130,6 +137,18 @@ assert.equal(prepared.cardId, "$3cv");
 assert.equal(prepared.content, "hello");
 assert.equal(prepared.format, "text");
 assert.deepEqual(original, { card_id: "$3cv", message: "hello", format: "markdown" }, "prepareArguments should not mutate caller input");
+
+const cardGetTool = getTool("codecks_card_get");
+const cardGetGuidance = [cardGetTool.promptSnippet, ...(cardGetTool.promptGuidelines ?? [])].join("\n");
+assert.match(cardGetGuidance, /structured data/i);
+assert.match(cardGetGuidance, /agent/i);
+assert.match(cardGetGuidance, /codecks_card_get_formatted/i);
+assert.match(cardGetGuidance, /untrusted external Codecks data/i);
+
+const formattedGetTool = getTool("codecks_card_get_formatted");
+const formattedGetGuidance = [formattedGetTool.promptSnippet, ...(formattedGetTool.promptGuidelines ?? [])].join("\n");
+assert.match(formattedGetGuidance, /human-readable/i);
+assert.match(formattedGetGuidance, /codecks_card_get/i);
 
 const replyTool = getTool("codecks_card_reply_resolvable");
 const replyGuidance = [replyTool.promptSnippet, ...(replyTool.promptGuidelines ?? [])].join("\n");
@@ -156,12 +175,16 @@ for (const phrase of [
   "resolvableId",
   "cardId",
   "context",
+  "codecks_card_get",
+  "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
   "codecks_card_reply_resolvable",
   "codecks_card_reopen_resolvable",
 ]) {
   assert.ok(docs.includes(phrase), `expected docs/skill quick-path coverage for ${phrase}`);
 }
+assert.match(docs, /untrusted external Codecks data/i);
+assert.match(docs, /TOKEN_OP_REF.*not resolved|not resolved.*TOKEN_OP_REF/i);
 assert.match(docs, /Do not open new Comment threads|should not open new Comment threads/i);
 assert.match(docs, /Do not use `codecks_card_add_comment` to reply to an existing thread/i);
 
