@@ -19,7 +19,7 @@
   },
   "scripts": {
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts && npx --yes tsx tests/card-get-tool.test.ts && npx --yes tsx tests/resolvable-tool-registration.test.ts && npx --yes tsx tests/tool-rendering.test.ts",
+    "test:unit": "npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts && npx --yes tsx tests/card-get-tool.test.ts && npx --yes tsx tests/card-search-preview.test.ts && npx --yes tsx tests/resolvable-tool-registration.test.ts && npx --yes tsx tests/tool-rendering.test.ts",
     "test:integration": "npx --yes tsx tests/codecks-tool-validation.ts"
   },
   "peerDependencies": {

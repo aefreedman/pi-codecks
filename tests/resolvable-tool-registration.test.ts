@@ -43,6 +43,7 @@ const prepare = (toolName: string, args: AnyRecord): AnyRecord => {
 };
 
 assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "includeArchived", "format"]);
+assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "includeArchived", "format"]);
 
 assertProperties("codecks_card_reply_resolvable", ["resolvableId", "cardId", "context", "content", "format"]);
 assertRequired("codecks_card_reply_resolvable", ["content"]);
@@ -130,6 +131,20 @@ assert.equal(prepare("codecks_card_get", { card_id_or_code: "$333" }).cardId, "$
 assert.equal(prepare("codecks_card_get", { short_code: "$444" }).cardId, "$444");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
+assert.deepEqual(
+  prepare("codecks_card_list_missing_effort", { skip_codes: ["$101"], include_done: true, include_excluded: false, include_archived: true, format: "markdown" }),
+  {
+    skip_codes: ["$101"],
+    include_done: true,
+    include_excluded: false,
+    include_archived: true,
+    format: "text",
+    skipCodes: ["$101"],
+    includeDone: true,
+    includeExcluded: false,
+    includeArchived: true,
+  },
+);
 
 const original = { card_id: "$3cv", message: "hello", format: "markdown" };
 const prepared = prepare("codecks_card_add_review", original);
@@ -163,6 +178,12 @@ const listGuidance = [listTool.promptSnippet, ...(listTool.promptGuidelines ?? [
 assert.match(listGuidance, /comments, reviews, blockers/i);
 assert.match(listGuidance, /includeClosed=true/i);
 
+const missingEffortTool = getTool("codecks_card_list_missing_effort");
+const missingEffortGuidance = [missingEffortTool.promptSnippet, ...(missingEffortTool.promptGuidelines ?? [])].join("\n");
+assert.match(missingEffortGuidance, /preview/i);
+assert.match(missingEffortGuidance, /without mutating|does not apply/i);
+assert.match(missingEffortGuidance, /codecks_card_update_effort/i);
+
 const decisionFixture = replyGuidance.toLowerCase();
 assert.ok(decisionFixture.includes("codecks_card_list_resolvables"), "reply guidance should direct ambiguous card/comment requests to list resolvables first");
 assert.ok(decisionFixture.includes("codecks_card_reply_resolvable"), "reply guidance should direct existing-thread replies to the reply tool");
@@ -178,6 +199,7 @@ for (const phrase of [
   "codecks_card_get",
   "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
+  "codecks_card_list_missing_effort",
   "codecks_card_reply_resolvable",
   "codecks_card_reopen_resolvable",
 ]) {
