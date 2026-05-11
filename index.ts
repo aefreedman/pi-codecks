@@ -182,7 +182,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       "Use this before bulk effort updates so the agent can show candidates and exclusions without mutating cards.",
       "Deck or milestone values infer the corresponding scope when location is omitted.",
-      "Review eligibleCards before calling codecks_card_update_effort; this tool does not apply effort values.",
+      "Present eligibleCards to the user and ask for explicit approval plus target effort values before calling codecks_card_update_effort; this tool does not apply effort values.",
       "Use skipCodes to exclude cards the user explicitly wants skipped.",
     ],
   },

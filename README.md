@@ -88,7 +88,7 @@ Use `codecks_card_get_formatted` when the agent needs to present human-readable 
 
 Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns those fields.
 
-Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; apply effort separately with explicit `codecks_card_update_effort` calls after reviewing the preview.
+Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
 
 ## Vision Board Tool
 

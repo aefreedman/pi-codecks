@@ -2406,6 +2406,10 @@ const cardSummaryFields = [
     { deck: ["id", "title", "accountSeq"] },
     { milestone: ["id", "name", "title", "accountSeq"] },
     { assignee: ["id", "name", "fullName"] },
+];
+
+const cardPlanningFields = [
+    ...cardSummaryFields,
     { childCards: ["cardId", "accountSeq"] },
 ];
 
@@ -3393,16 +3397,43 @@ const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unk
         return { error: "location=milestone cannot be combined with deck. Use location=deck or remove deck." };
     }
 
+    if (["hand", "bookmarks"].includes(requestedLocation) && (hasDeck || hasMilestone))
+    {
+        return { error: `location=${requestedLocation} cannot be combined with deck or milestone filters. Remove those filters or use location=deck/location=milestone.` };
+    }
+
     return requestedLocation;
 };
 
+const hasOwn = (value: CodecksEntity, key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(value, key);
+
+const getCardChildCountInfo = (card: CodecksEntity): { known: boolean; count: number | null } =>
+{
+    if (!hasOwn(card, "childCards"))
+    {
+        return { known: false, count: null };
+    }
+
+    return {
+        known: true,
+        count: normalizeCollection(getRelation(card, "childCards") as unknown[] | undefined).length,
+    };
+};
+
 const getCardChildCount = (card: CodecksEntity): number =>
-    normalizeCollection(getRelation(card, "childCards") as unknown[] | undefined).length;
+    getCardChildCountInfo(card).count ?? 0;
+
+const isCardTypeKnown = (card: CodecksEntity): boolean =>
+    hasOwn(card, "isDoc") || hasOwn(card, "derivedStatus") || hasOwn(card, "status");
 
 const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown> =>
 {
     const deck = card.deck as CodecksEntity | undefined;
     const milestone = card.milestone as CodecksEntity | undefined;
+
+    const childCount = getCardChildCountInfo(card);
+    const hasEffort = hasOwn(card, "effort");
 
     return {
         cardId: card.cardId,
@@ -3412,17 +3443,20 @@ const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown
         status: card.status,
         derivedStatus: card.derivedStatus,
         visibility: card.visibility,
-        cardType: resolveCardType(card),
+        cardType: isCardTypeKnown(card) ? resolveCardType(card) : "unknown",
+        cardTypeKnown: isCardTypeKnown(card),
         isDoc: Boolean(card.isDoc),
-        effort: card.effort ?? null,
+        effortKnown: hasEffort,
+        effort: hasEffort ? (card.effort ?? null) : undefined,
         priority: card.priority ?? null,
         lastUpdatedAt: card.lastUpdatedAt ?? null,
         dueDate: card.dueDate ?? null,
-        childCount: getCardChildCount(card),
+        childCountKnown: childCount.known,
+        childCount: childCount.count,
         deck: deck?.title,
         deckId: deck?.id ?? null,
         deckAccountSeq: deck?.accountSeq ?? null,
-        milestone: milestone?.name ?? milestone?.title,
+        milestone: milestone?.title ?? milestone?.name,
         milestoneId: milestone?.id ?? null,
         milestoneAccountSeq: milestone?.accountSeq ?? null,
         assignee: (card.assignee as CodecksEntity | undefined)?.name
@@ -3431,7 +3465,7 @@ const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown
     };
 };
 
-const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[] }> =>
+const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[]; rawCount?: number }> =>
 {
     const includeArchived = args.includeArchived ?? (args.cardCode !== undefined);
     const filterArchived = (cards: CodecksEntity[]): CodecksEntity[] => cards.filter((card) =>
@@ -3465,7 +3499,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                 {
                     account: [
                         {
-                            [relationQuery("cards", { accountSeq: [seq] })]: cardSummaryFields,
+                            [relationQuery("cards", { accountSeq: [seq] })]: cardPlanningFields,
                         },
                     ],
                 },
@@ -3474,7 +3508,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
 
         const payload = await runQuery(query);
         const cards = extractCardsFromPayload(payload, "cards");
-        return { cards: filterArchived(cards) };
+        return { cards: filterArchived(cards), rawCount: cards.length };
     }
 
     if (args.title)
@@ -3513,10 +3547,12 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     if (location === "hand")
     {
         const user = await fetchLoggedInUser();
+        const limit = args.limit ?? 7;
         const queueFilters = {
             userId: user.id,
             cardDoneAt: null,
             $order: "sortIndex",
+            $limit: limit,
         };
         const query = {
             _root: [
@@ -3526,7 +3562,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                             [relationQuery("queueEntries", queueFilters)]: [
                                 "sortIndex",
                                 {
-                                    card: cardSummaryFields,
+                                    card: cardPlanningFields,
                                 },
                             ],
                         },
@@ -3558,17 +3594,19 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
             : cards;
 
-        const limit = args.limit ?? 7;
-        return { cards: filterArchived(filteredCards).slice(0, limit) };
+        const visibleCards = filterArchived(filteredCards);
+        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
     }
 
     if (location === "bookmarks")
     {
         const user = await fetchLoggedInUser();
+        const limit = args.limit ?? 20;
         const handFilters = {
             userId: user.id,
             isVisible: true,
             $order: "sortIndex",
+            $limit: limit,
         };
         const query = {
             _root: [
@@ -3613,8 +3651,8 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
             : cards;
 
-        const limit = args.limit ?? 20;
-        return { cards: filterArchived(filteredCards).slice(0, limit) };
+        const visibleCards = filterArchived(filteredCards);
+        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
     }
 
     const limit = args.limit ?? 20;
@@ -3626,7 +3664,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             {
                 account: [
                     {
-                        [relationQuery("cards", filters)]: cardSummaryFields,
+                        [relationQuery("cards", filters)]: cardPlanningFields,
                     },
                 ],
             },
@@ -3634,7 +3672,8 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     };
 
     const payload = await runQuery(query);
-    return { cards: filterArchived(extractCardsFromPayload(payload, "cards")) };
+    const cards = extractCardsFromPayload(payload, "cards");
+    return { cards: filterArchived(cards), rawCount: cards.length };
 };
 
 export const query = tool({
@@ -3745,14 +3784,22 @@ export const card_search = tool({
 
         if (result.error)
         {
-            return result.error;
+            return toStructuredErrorResult(format, "card-search", "validation_error", result.error);
         }
 
         const cards = result.cards ?? [];
 
         if (cards.length === 0)
         {
-            return "No cards matched the search criteria.";
+            return toStructuredErrorResult(format, "card-search", "not_found", "No cards matched the search criteria.", {
+                criteria: {
+                    title: args.title ?? null,
+                    cardCode: args.cardCode ?? inferredCode ?? null,
+                    location: args.location ?? null,
+                    deck: args.deck ?? null,
+                    milestone: args.milestone ?? null,
+                },
+            });
         }
 
         const lines = [
@@ -3800,22 +3847,39 @@ const buildMissingEffortCandidates = (cards: CodecksEntity[], args: { skipCodes?
             exclusionReasons.push("skipped_by_request");
         }
 
-        if (card.effort !== undefined && card.effort !== null && card.effort !== "")
+        if (!hasOwn(card, "effort"))
+        {
+            exclusionReasons.push("effort_unknown");
+        }
+        else if (card.effort !== undefined && card.effort !== null && card.effort !== "")
         {
             exclusionReasons.push("effort_already_set");
         }
 
-        if (resolveCardType(card) === "documentation" || card.isDoc)
+        if (!isCardTypeKnown(card))
+        {
+            exclusionReasons.push("card_type_unknown");
+        }
+        else if (resolveCardType(card) === "documentation" || card.isDoc)
         {
             exclusionReasons.push("documentation_card");
         }
 
-        if (getCardChildCount(card) > 0)
+        const childCount = getCardChildCountInfo(card);
+        if (!childCount.known)
+        {
+            exclusionReasons.push("child_count_unknown");
+        }
+        else if ((childCount.count ?? 0) > 0)
         {
             exclusionReasons.push("hero_card");
         }
 
-        if (!args.includeDone && status === "done")
+        if (!hasOwn(card, "status"))
+        {
+            exclusionReasons.push("status_unknown");
+        }
+        else if (!args.includeDone && status === "done")
         {
             exclusionReasons.push("done_card");
         }
@@ -3847,14 +3911,29 @@ export const card_list_missing_effort = tool({
     {
         const format = args.format ?? "text";
         const scanLimit = args.limit ?? 300;
-        const result = await fetchCardMatches({
-            title: args.title,
-            location: args.location,
-            deck: args.deck,
-            milestone: args.milestone,
-            limit: scanLimit,
-            includeArchived: args.includeArchived,
-        });
+        let result: { error?: string; cards?: CodecksEntity[]; rawCount?: number };
+        try
+        {
+            result = await fetchCardMatches({
+                title: args.title,
+                location: args.location,
+                deck: args.deck,
+                milestone: args.milestone,
+                limit: scanLimit,
+                includeArchived: args.includeArchived,
+            });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "card-list-missing-effort", "api_error", toErrorMessage(error), {
+                scope: {
+                    title: args.title ?? null,
+                    location: args.location ?? null,
+                    deck: args.deck ?? null,
+                    milestone: args.milestone ?? null,
+                },
+            });
+        }
 
         if (result.error)
         {
@@ -3900,8 +3979,8 @@ export const card_list_missing_effort = tool({
                     ? excluded.map((entry) => ({ ...entry.summary, exclusionReasons: entry.exclusionReasons }))
                     : undefined,
             },
-            candidates.length >= scanLimit ? [`Output scanned ${scanLimit} card(s). Increase limit if more cards may match the scope.`] : undefined,
-            "Review eligibleCards, then call codecks_card_update_effort only for cards you intentionally want to update.",
+            (result.rawCount ?? candidates.length) >= scanLimit ? [`Output scanned ${scanLimit} raw card(s). Increase limit if more cards may match the scope.`] : undefined,
+            "Present eligibleCards to the user, ask for explicit approval and target effort values, then call codecks_card_update_effort only for approved cards.",
         );
     },
 });
