@@ -5,6 +5,7 @@ allowed-tools:
   - codecks_query
   - codecks_dispatch
   - codecks_card_search
+  - codecks_card_list_missing_effort
   - codecks_card_list_done_within_timeframe
   - codecks_card_get
   - codecks_card_get_formatted
@@ -64,6 +65,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not open new Comment threads for follow-up work, progress updates, or completion reports.
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
+- Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons; apply effort separately only after explicit user approval.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
 ## Workflow semantics
@@ -105,6 +107,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - For retrieval, pass the card identifier as `cardId`.
 - Bare numeric identifiers like `387` should be passed as `cardId: "387"` or `cardId: 387` and treated as short codes.
 - `codecks_card_search` excludes archived/deleted cards by default; set `includeArchived=true` only when explicitly needed.
+- `codecks_card_search` infers `location=deck` or `location=milestone` when `deck` or `milestone` is supplied without an explicit location.
+- `codecks_card_list_missing_effort` is preview-only and is the preferred first step for bulk effort-estimation workflows.
 - If raw dispatch is required for `cards/update`, `sessionId` must be a UUID or omitted so the tool auto-generates one.
 
 ## Security and privacy

@@ -11,6 +11,7 @@ Default tools:
 - `codecks_query`
 - `codecks_dispatch`
 - `codecks_card_search`
+- `codecks_card_list_missing_effort`
 - `codecks_card_list_done_within_timeframe`
 - `codecks_card_get`
 - `codecks_card_get_formatted`
@@ -85,7 +86,9 @@ Use `codecks_card_get` when an agent needs structured card data for reasoning, p
 
 Use `codecks_card_get_formatted` when the agent needs to present human-readable card details to a user.
 
-Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation.
+Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns those fields.
+
+Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
 
 ## Vision Board Tool
 
@@ -138,7 +141,7 @@ Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolva
 npm test
 ```
 
-The default test command runs unit tests and then the integration validation script. Integration validation skips safely when Codecks credentials are absent.
+The default test command runs unit tests and then the integration validation script. Integration validation skips safely when Codecks credentials are absent. Any change that adds or changes Codecks query/dispatch shapes must be verified with live integration validation against a real Codecks account before release.
 
 Optional integration settings:
 

@@ -2404,8 +2404,13 @@ const cardSummaryFields = [
     "priority",
     "masterTags",
     { deck: ["id", "title", "accountSeq"] },
-    { milestone: ["name", "accountSeq"] },
+    { milestone: ["id", "name", "accountSeq"] },
     { assignee: ["id", "name", "fullName"] },
+];
+
+const cardPlanningFields = [
+    ...cardSummaryFields,
+    { childCards: ["cardId", "accountSeq"] },
 ];
 
 const cardDetailFields = [
@@ -2444,11 +2449,18 @@ const handCardFields = [
             "accountSeq",
             "title",
             "status",
+            "derivedStatus",
+            "isDoc",
+            "visibility",
             "lastUpdatedAt",
+            "dueDate",
+            "effort",
+            "priority",
             "masterTags",
             { deck: ["id", "title", "accountSeq"] },
-            { milestone: ["name", "accountSeq"] },
+            { milestone: ["id", "name", "accountSeq"] },
             { assignee: ["id", "name", "fullName"] },
+            { childCards: ["cardId", "accountSeq"] },
         ],
     },
     { user: ["id", "name", "fullName"] },
@@ -3339,17 +3351,155 @@ const extractCardsFromPayload = (payload: unknown, relationName = "cards"): Code
         .map((entry) => hydrateCard(entry, { user: userMap, deck: deckMap, milestone: milestoneMap }));
 };
 
+type CardLocationScope = "any" | "deck" | "milestone" | "hand" | "bookmarks";
+
 type CardSearchParams = {
     title?: string;
     cardCode?: string;
-    location?: "any" | "deck" | "milestone" | "hand" | "bookmarks";
+    location?: CardLocationScope;
     deck?: string | number;
     milestone?: string | number;
     limit?: number;
     includeArchived?: boolean;
 };
 
-const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[] }> =>
+const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unknown; milestone?: unknown }): CardLocationScope | { error: string } =>
+{
+    const requestedLocation = args.location ?? "any";
+    const hasDeck = args.deck !== undefined && String(args.deck).trim() !== "";
+    const hasMilestone = args.milestone !== undefined && String(args.milestone).trim() !== "";
+
+    if (requestedLocation === "any")
+    {
+        if (hasDeck && hasMilestone)
+        {
+            return { error: "Provide either deck or milestone for card search scope, not both." };
+        }
+
+        if (hasDeck)
+        {
+            return "deck";
+        }
+
+        if (hasMilestone)
+        {
+            return "milestone";
+        }
+    }
+
+    if (requestedLocation === "deck" && hasMilestone)
+    {
+        return { error: "location=deck cannot be combined with milestone. Use location=milestone or remove milestone." };
+    }
+
+    if (requestedLocation === "milestone" && hasDeck)
+    {
+        return { error: "location=milestone cannot be combined with deck. Use location=deck or remove deck." };
+    }
+
+    if (["hand", "bookmarks"].includes(requestedLocation) && (hasDeck || hasMilestone))
+    {
+        return { error: `location=${requestedLocation} cannot be combined with deck or milestone filters. Remove those filters or use location=deck/location=milestone.` };
+    }
+
+    return requestedLocation;
+};
+
+const hasOwn = (value: CodecksEntity, key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(value, key);
+
+const getCardChildCountInfo = (card: CodecksEntity): { known: boolean; count: number | null } =>
+{
+    if (!hasOwn(card, "childCards"))
+    {
+        return { known: false, count: null };
+    }
+
+    return {
+        known: true,
+        count: normalizeCollection(getRelation(card, "childCards") as unknown[] | undefined).length,
+    };
+};
+
+const getCardChildCount = (card: CodecksEntity): number =>
+    getCardChildCountInfo(card).count ?? 0;
+
+const isCardTypeKnown = (card: CodecksEntity): boolean =>
+    hasOwn(card, "isDoc") || hasOwn(card, "derivedStatus") || hasOwn(card, "status");
+
+type ClientCardScopeFilter = {
+    type: "deck" | "milestone";
+    id: string | number;
+};
+
+const relationMatchesLookupId = (value: unknown, lookupId: string | number): boolean =>
+{
+    const target = String(lookupId);
+    if (typeof value === "string" || typeof value === "number")
+    {
+        return String(value) === target;
+    }
+
+    if (!value || typeof value !== "object")
+    {
+        return false;
+    }
+
+    const entity = value as CodecksEntity;
+    return [entity.id, entity.accountSeq]
+        .filter((candidate) => candidate !== undefined && candidate !== null)
+        .some((candidate) => String(candidate) === target);
+};
+
+const cardMatchesClientScope = (card: CodecksEntity, scope: ClientCardScopeFilter | undefined): boolean =>
+{
+    if (!scope)
+    {
+        return true;
+    }
+
+    return relationMatchesLookupId(card[scope.type], scope.id);
+};
+
+const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown> =>
+{
+    const deck = card.deck as CodecksEntity | undefined;
+    const milestone = card.milestone as CodecksEntity | undefined;
+
+    const childCount = getCardChildCountInfo(card);
+    const hasEffort = hasOwn(card, "effort");
+
+    return {
+        cardId: card.cardId,
+        accountSeq: card.accountSeq,
+        shortCode: formatShortCode(card.accountSeq as number | undefined),
+        title: card.title,
+        status: card.status,
+        derivedStatus: card.derivedStatus,
+        visibility: card.visibility,
+        cardType: isCardTypeKnown(card) ? resolveCardType(card) : "unknown",
+        cardTypeKnown: isCardTypeKnown(card),
+        isDoc: Boolean(card.isDoc),
+        effortKnown: hasEffort,
+        effort: hasEffort ? (card.effort ?? null) : undefined,
+        priority: card.priority ?? null,
+        lastUpdatedAt: card.lastUpdatedAt ?? null,
+        dueDate: card.dueDate ?? null,
+        childCountKnown: childCount.known,
+        childCount: childCount.count,
+        deck: deck?.title,
+        deckId: deck?.id ?? null,
+        deckAccountSeq: deck?.accountSeq ?? null,
+        milestone: milestone?.title ?? milestone?.name,
+        milestoneId: milestone?.id ?? null,
+        milestoneAccountSeq: milestone?.accountSeq ?? null,
+        assignee: (card.assignee as CodecksEntity | undefined)?.name
+            ?? (card.assignee as CodecksEntity | undefined)?.fullName,
+        tags: formatTags(card.masterTags),
+    };
+};
+
+const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[]; rawCount?: number }> =>
 {
     const includeArchived = args.includeArchived ?? (args.cardCode !== undefined);
     const filterArchived = (cards: CodecksEntity[]): CodecksEntity[] => cards.filter((card) =>
@@ -3363,7 +3513,13 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         return visibility !== "archived" && visibility !== "deleted";
     });
     const filters: Record<string, unknown> = {};
-    const location = args.location ?? "any";
+    let clientScopeFilter: ClientCardScopeFilter | undefined;
+    const inferredLocation = inferCardLocationScope(args);
+    if (typeof inferredLocation !== "string")
+    {
+        return { error: inferredLocation.error };
+    }
+    const location = inferredLocation;
 
     if (args.cardCode)
     {
@@ -3378,7 +3534,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                 {
                     account: [
                         {
-                            [relationQuery("cards", { accountSeq: [seq] })]: cardSummaryFields,
+                            [relationQuery("cards", { accountSeq: [seq] })]: cardPlanningFields,
                         },
                     ],
                 },
@@ -3387,7 +3543,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
 
         const payload = await runQuery(query);
         const cards = extractCardsFromPayload(payload, "cards");
-        return { cards: filterArchived(cards) };
+        return { cards: filterArchived(cards), rawCount: cards.length };
     }
 
     if (args.title)
@@ -3406,7 +3562,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         {
             return { error: renderLookupMessage(deckResult, String(args.deck ?? "")) };
         }
-        filters.deckId = deckResult.id;
+        clientScopeFilter = { type: "deck", id: deckResult.id };
     }
 
     if (location === "milestone")
@@ -3420,16 +3576,18 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         {
             return { error: renderLookupMessage(milestoneResult, String(args.milestone ?? "")) };
         }
-        filters.milestoneId = milestoneResult.id;
+        clientScopeFilter = { type: "milestone", id: milestoneResult.id };
     }
 
     if (location === "hand")
     {
         const user = await fetchLoggedInUser();
+        const limit = args.limit ?? 7;
         const queueFilters = {
             userId: user.id,
             cardDoneAt: null,
             $order: "sortIndex",
+            $limit: limit,
         };
         const query = {
             _root: [
@@ -3439,7 +3597,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                             [relationQuery("queueEntries", queueFilters)]: [
                                 "sortIndex",
                                 {
-                                    card: cardSummaryFields,
+                                    card: cardPlanningFields,
                                 },
                             ],
                         },
@@ -3471,17 +3629,19 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
             : cards;
 
-        const limit = args.limit ?? 7;
-        return { cards: filterArchived(filteredCards).slice(0, limit) };
+        const visibleCards = filterArchived(filteredCards);
+        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
     }
 
     if (location === "bookmarks")
     {
         const user = await fetchLoggedInUser();
+        const limit = args.limit ?? 20;
         const handFilters = {
             userId: user.id,
             isVisible: true,
             $order: "sortIndex",
+            $limit: limit,
         };
         const query = {
             _root: [
@@ -3526,20 +3686,21 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
             : cards;
 
-        const limit = args.limit ?? 20;
-        return { cards: filterArchived(filteredCards).slice(0, limit) };
+        const visibleCards = filterArchived(filteredCards);
+        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
     }
 
     const limit = args.limit ?? 20;
+    const queryLimit = clientScopeFilter ? 3000 : limit;
     filters.$order = "-lastUpdatedAt";
-    filters.$limit = limit;
+    filters.$limit = queryLimit;
 
     const query = {
         _root: [
             {
                 account: [
                     {
-                        [relationQuery("cards", filters)]: cardSummaryFields,
+                        [relationQuery("cards", filters)]: cardPlanningFields,
                     },
                 ],
             },
@@ -3547,7 +3708,9 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     };
 
     const payload = await runQuery(query);
-    return { cards: filterArchived(extractCardsFromPayload(payload, "cards")) };
+    const cards = extractCardsFromPayload(payload, "cards")
+        .filter((card) => cardMatchesClientScope(card, clientScopeFilter));
+    return { cards: filterArchived(cards).slice(0, limit), rawCount: cards.length };
 };
 
 export const query = tool({
@@ -3658,14 +3821,22 @@ export const card_search = tool({
 
         if (result.error)
         {
-            return result.error;
+            return toStructuredErrorResult(format, "card-search", "validation_error", result.error);
         }
 
         const cards = result.cards ?? [];
 
         if (cards.length === 0)
         {
-            return "No cards matched the search criteria.";
+            return toStructuredErrorResult(format, "card-search", "not_found", "No cards matched the search criteria.", {
+                criteria: {
+                    title: args.title ?? null,
+                    cardCode: args.cardCode ?? inferredCode ?? null,
+                    location: args.location ?? null,
+                    deck: args.deck ?? null,
+                    milestone: args.milestone ?? null,
+                },
+            });
         }
 
         const lines = [
@@ -3682,20 +3853,171 @@ export const card_search = tool({
             lines.join("\n"),
             {
                 matches: cards.length,
-                cards: cards.map((card) => ({
-                    cardId: card.cardId,
-                    accountSeq: card.accountSeq,
-                    shortCode: formatShortCode(card.accountSeq as number | undefined),
-                    title: card.title,
-                    status: card.status,
-                    deck: (card.deck as CodecksEntity | undefined)?.title,
-                    milestone: (card.milestone as CodecksEntity | undefined)?.name
-                        ?? (card.milestone as CodecksEntity | undefined)?.title,
-                    assignee: (card.assignee as CodecksEntity | undefined)?.name
-                        ?? (card.assignee as CodecksEntity | undefined)?.fullName,
-                    tags: formatTags(card.masterTags),
-                })),
+                cards: cards.map(normalizeCardSearchSummary),
             },
+        );
+    },
+});
+
+type MissingEffortCandidate = {
+    card: CodecksEntity;
+    summary: Record<string, unknown>;
+    exclusionReasons: string[];
+};
+
+const buildMissingEffortCandidates = (cards: CodecksEntity[], args: { skipCodes?: string[]; includeDone?: boolean }): MissingEffortCandidate[] =>
+{
+    const skipCodes = new Set((args.skipCodes ?? [])
+        .map((code) => code.trim().replace(/^\$/, "").toLowerCase())
+        .filter((code) => code.length > 0));
+
+    return cards.map((card) =>
+    {
+        const summary = normalizeCardSearchSummary(card);
+        const shortCode = String(summary.shortCode ?? "").replace(/^\$/, "").toLowerCase();
+        const exclusionReasons: string[] = [];
+        const status = String(card.status ?? "").trim().toLowerCase();
+        const visibility = String(card.visibility ?? "default").trim().toLowerCase();
+
+        if (skipCodes.has(shortCode))
+        {
+            exclusionReasons.push("skipped_by_request");
+        }
+
+        if (!hasOwn(card, "effort"))
+        {
+            exclusionReasons.push("effort_unknown");
+        }
+        else if (card.effort !== undefined && card.effort !== null && card.effort !== "")
+        {
+            exclusionReasons.push("effort_already_set");
+        }
+
+        if (!isCardTypeKnown(card))
+        {
+            exclusionReasons.push("card_type_unknown");
+        }
+        else if (resolveCardType(card) === "documentation" || card.isDoc)
+        {
+            exclusionReasons.push("documentation_card");
+        }
+
+        const childCount = getCardChildCountInfo(card);
+        if (!childCount.known)
+        {
+            exclusionReasons.push("child_count_unknown");
+        }
+        else if ((childCount.count ?? 0) > 0)
+        {
+            exclusionReasons.push("hero_card");
+        }
+
+        if (!hasOwn(card, "status"))
+        {
+            exclusionReasons.push("status_unknown");
+        }
+        else if (!args.includeDone && status === "done")
+        {
+            exclusionReasons.push("done_card");
+        }
+
+        if (["archived", "deleted"].includes(visibility))
+        {
+            exclusionReasons.push(visibility);
+        }
+
+        return { card, summary, exclusionReasons };
+    });
+};
+
+export const card_list_missing_effort = tool({
+    description: "Preview Codecks cards in a scope that are eligible for effort estimation and currently have no effort.",
+    args: {
+        title: tool.schema.string().optional().describe("Optional partial title filter."),
+        location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope. Inferred from deck or milestone when omitted."),
+        deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID. Implies location=deck when location is omitted."),
+        milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID. Implies location=milestone when location is omitted."),
+        skipCodes: tool.schema.array(tool.schema.string()).optional().describe("Short codes to exclude from the eligible list."),
+        includeDone: tool.schema.boolean().optional().describe("Include done cards in eligible results (default: false)."),
+        includeExcluded: tool.schema.boolean().optional().describe("Include excluded cards with reason codes in the result (default: true)."),
+        limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum cards to scan in the requested scope."),
+        includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards in the scan (default: false)."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const scanLimit = args.limit ?? 300;
+        let result: { error?: string; cards?: CodecksEntity[]; rawCount?: number };
+        try
+        {
+            result = await fetchCardMatches({
+                title: args.title,
+                location: args.location,
+                deck: args.deck,
+                milestone: args.milestone,
+                limit: scanLimit,
+                includeArchived: args.includeArchived,
+            });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "card-list-missing-effort", "api_error", toErrorMessage(error), {
+                scope: {
+                    title: args.title ?? null,
+                    location: args.location ?? null,
+                    deck: args.deck ?? null,
+                    milestone: args.milestone ?? null,
+                },
+            });
+        }
+
+        if (result.error)
+        {
+            return toStructuredErrorResult(format, "card-list-missing-effort", "validation_error", result.error);
+        }
+
+        const candidates = buildMissingEffortCandidates(result.cards ?? [], {
+            skipCodes: args.skipCodes,
+            includeDone: args.includeDone,
+        });
+        const eligible = candidates.filter((entry) => entry.exclusionReasons.length === 0);
+        const excluded = candidates.filter((entry) => entry.exclusionReasons.length > 0);
+        const includeExcluded = args.includeExcluded ?? true;
+
+        const lines = [
+            "## Missing Effort Preview",
+            "",
+            `Eligible cards: ${eligible.length}`,
+            `Excluded cards: ${excluded.length}`,
+            "",
+            ...eligible.map((entry, index) => `${index + 1}. ${formatCardLine(entry.card)}`),
+        ];
+
+        if (includeExcluded && excluded.length > 0)
+        {
+            lines.push("", "Excluded:", ...excluded.map((entry) => {
+                const shortCode = String(entry.summary.shortCode ?? entry.summary.cardId ?? "n/a");
+                const title = String(entry.summary.title ?? "(untitled)");
+                return `- ${shortCode} ${title} — ${entry.exclusionReasons.join(", ")}`;
+            }));
+        }
+
+        return toStructuredResult(
+            format,
+            "card-list-missing-effort",
+            lines.join("\n"),
+            {
+                scanned: candidates.length,
+                eligibleCount: eligible.length,
+                excludedCount: excluded.length,
+                eligibleCards: eligible.map((entry) => entry.summary),
+                excludedCards: includeExcluded
+                    ? excluded.map((entry) => ({ ...entry.summary, exclusionReasons: entry.exclusionReasons }))
+                    : undefined,
+            },
+            (result.rawCount ?? candidates.length) >= scanLimit ? [`Output scanned ${scanLimit} raw card(s). Increase limit if more cards may match the scope.`] : undefined,
+            "Present eligibleCards to the user, ask for explicit approval and target effort values, then call codecks_card_update_effort only for approved cards.",
         );
     },
 });

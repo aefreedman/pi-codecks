@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [Unreleased]
+
+### Fixed
+
+- Avoided live Codecks API 500s in card search and missing-effort previews by removing the unsupported `milestone.title` card-list field and filtering deck/milestone scopes client-side instead of using unsupported `cards({ deckId })` / `cards({ milestoneId })` filters.
+- Added live integration checks for broad card search, deck-scoped search, and deck-scoped missing-effort previews so future query-shape changes are verified against a real Codecks account.
+
 ## [0.2.0] - 2026-04-29
 
 ### Added
