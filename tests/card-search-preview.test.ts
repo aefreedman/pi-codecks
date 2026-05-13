@@ -12,7 +12,8 @@ type FetchMockOptions = {
 };
 
 const deck = { id: "deck-dev", title: "Dev", accountSeq: 2 };
-const milestone = { id: "milestone-alpha", name: "Alpha", title: "Alpha", accountSeq: 84 };
+const otherDeck = { id: "deck-other", title: "Other", accountSeq: 3 };
+const milestone = { id: "milestone-alpha", name: "Alpha", accountSeq: 84 };
 
 const parseStructuredJson = (text: string): Record<string, any> => {
   const match = text.match(/```json\n([\s\S]*?)\n```/);
@@ -24,13 +25,11 @@ const makeCardsPayload = (cards: MockCard[]) => ({
   data: {
     _root: {
       account: {
-        'cards({"deckId":"deck-dev","$order":"-lastUpdatedAt","$limit":300})': cards.map((card) => card.cardId),
-        'cards({"deckId":"deck-dev","$order":"-lastUpdatedAt","$limit":20})': cards.map((card) => card.cardId),
-        'cards({"milestoneId":"milestone-alpha","$order":"-lastUpdatedAt","$limit":20})': cards.map((card) => card.cardId),
+        'cards({"$order":"-lastUpdatedAt","$limit":3000})': cards.map((card) => card.cardId),
       },
     },
     card: Object.fromEntries(cards.map((card) => [String(card.cardId), card])),
-    deck: { "deck-dev": deck },
+    deck: { "deck-dev": deck, "deck-other": otherDeck },
     milestone: { "milestone-alpha": milestone },
   },
 });
@@ -45,8 +44,8 @@ const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => 
     if (queryText.includes("decks")) {
       return new Response(JSON.stringify({
         data: {
-          _root: { account: { decks: ["deck-dev"] } },
-          deck: { "deck-dev": deck },
+          _root: { account: { decks: ["deck-dev", "deck-other"] } },
+          deck: { "deck-dev": deck, "deck-other": otherDeck },
         },
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
@@ -136,6 +135,18 @@ const cards: MockCard[] = [
     deck: "deck-dev",
     childCards: [],
   },
+  {
+    cardId: "card-other-deck",
+    accountSeq: 106,
+    title: "Other deck card",
+    status: "not_started",
+    derivedStatus: "assigned",
+    visibility: "default",
+    isDoc: false,
+    effort: null,
+    deck: "deck-other",
+    childCards: [],
+  },
 ];
 
 {
@@ -146,8 +157,8 @@ const cards: MockCard[] = [
   assert.equal(payload.ok, true);
   assert.equal(payload.action, "card-search");
   assert.equal(payload.data.matches, 5);
-  assert.ok(JSON.stringify(requests[1].query).includes("deckId"), "deck argument should infer deck-scoped search");
-  assert.ok(JSON.stringify(requests[1].query).includes("deck-dev"), "deck-scoped search should use resolved deck id");
+  assert.ok(!JSON.stringify(requests[1].query).includes("deckId"), "deck-scoped search should avoid the live-API-unsafe deckId cards filter");
+  assert.ok(JSON.stringify(requests[1].query).includes('"deck"'), "deck-scoped search should request deck relation data for client-side filtering");
 
   const first = payload.data.cards[0];
   assert.equal(first.shortCode, "$14j");
@@ -169,8 +180,8 @@ const cards: MockCard[] = [
 
   assert.equal(payload.ok, true);
   assert.equal(payload.action, "card-search");
-  assert.ok(JSON.stringify(requests[1].query).includes("milestoneId"), "milestone argument should infer milestone-scoped search");
-  assert.ok(JSON.stringify(requests[1].query).includes("milestone-alpha"), "milestone-scoped search should use resolved milestone id");
+  assert.ok(!JSON.stringify(requests[1].query).includes("milestoneId"), "milestone-scoped search should avoid the live-API-unsafe milestoneId cards filter");
+  assert.ok(JSON.stringify(requests[1].query).includes('"milestone"'), "milestone-scoped search should request milestone relation data for client-side filtering");
 }
 
 {

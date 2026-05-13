@@ -2404,7 +2404,7 @@ const cardSummaryFields = [
     "priority",
     "masterTags",
     { deck: ["id", "title", "accountSeq"] },
-    { milestone: ["id", "name", "title", "accountSeq"] },
+    { milestone: ["id", "name", "accountSeq"] },
     { assignee: ["id", "name", "fullName"] },
 ];
 
@@ -2458,7 +2458,7 @@ const handCardFields = [
             "priority",
             "masterTags",
             { deck: ["id", "title", "accountSeq"] },
-            { milestone: ["id", "name", "title", "accountSeq"] },
+            { milestone: ["id", "name", "accountSeq"] },
             { assignee: ["id", "name", "fullName"] },
             { childCards: ["cardId", "accountSeq"] },
         ],
@@ -3427,6 +3427,40 @@ const getCardChildCount = (card: CodecksEntity): number =>
 const isCardTypeKnown = (card: CodecksEntity): boolean =>
     hasOwn(card, "isDoc") || hasOwn(card, "derivedStatus") || hasOwn(card, "status");
 
+type ClientCardScopeFilter = {
+    type: "deck" | "milestone";
+    id: string | number;
+};
+
+const relationMatchesLookupId = (value: unknown, lookupId: string | number): boolean =>
+{
+    const target = String(lookupId);
+    if (typeof value === "string" || typeof value === "number")
+    {
+        return String(value) === target;
+    }
+
+    if (!value || typeof value !== "object")
+    {
+        return false;
+    }
+
+    const entity = value as CodecksEntity;
+    return [entity.id, entity.accountSeq]
+        .filter((candidate) => candidate !== undefined && candidate !== null)
+        .some((candidate) => String(candidate) === target);
+};
+
+const cardMatchesClientScope = (card: CodecksEntity, scope: ClientCardScopeFilter | undefined): boolean =>
+{
+    if (!scope)
+    {
+        return true;
+    }
+
+    return relationMatchesLookupId(card[scope.type], scope.id);
+};
+
 const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown> =>
 {
     const deck = card.deck as CodecksEntity | undefined;
@@ -3479,6 +3513,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         return visibility !== "archived" && visibility !== "deleted";
     });
     const filters: Record<string, unknown> = {};
+    let clientScopeFilter: ClientCardScopeFilter | undefined;
     const inferredLocation = inferCardLocationScope(args);
     if (typeof inferredLocation !== "string")
     {
@@ -3527,7 +3562,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         {
             return { error: renderLookupMessage(deckResult, String(args.deck ?? "")) };
         }
-        filters.deckId = deckResult.id;
+        clientScopeFilter = { type: "deck", id: deckResult.id };
     }
 
     if (location === "milestone")
@@ -3541,7 +3576,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         {
             return { error: renderLookupMessage(milestoneResult, String(args.milestone ?? "")) };
         }
-        filters.milestoneId = milestoneResult.id;
+        clientScopeFilter = { type: "milestone", id: milestoneResult.id };
     }
 
     if (location === "hand")
@@ -3656,8 +3691,9 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     }
 
     const limit = args.limit ?? 20;
+    const queryLimit = clientScopeFilter ? 3000 : limit;
     filters.$order = "-lastUpdatedAt";
-    filters.$limit = limit;
+    filters.$limit = queryLimit;
 
     const query = {
         _root: [
@@ -3672,8 +3708,9 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     };
 
     const payload = await runQuery(query);
-    const cards = extractCardsFromPayload(payload, "cards");
-    return { cards: filterArchived(cards), rawCount: cards.length };
+    const cards = extractCardsFromPayload(payload, "cards")
+        .filter((card) => cardMatchesClientScope(card, clientScopeFilter));
+    return { cards: filterArchived(cards).slice(0, limit), rawCount: cards.length };
 };
 
 export const query = tool({

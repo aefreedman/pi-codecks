@@ -141,7 +141,7 @@ Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolva
 npm test
 ```
 
-The default test command runs unit tests and then the integration validation script. Integration validation skips safely when Codecks credentials are absent.
+The default test command runs unit tests and then the integration validation script. Integration validation skips safely when Codecks credentials are absent. Any change that adds or changes Codecks query/dispatch shapes must be verified with live integration validation against a real Codecks account before release.
 
 Optional integration settings:
 

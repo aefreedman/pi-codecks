@@ -1367,6 +1367,63 @@ const run = async (): Promise<number> => {
     }
 
     try {
+      const broadSearch = await invokeTool("card_search", {
+        title: "",
+        limit: 10,
+        format: "json",
+      });
+      if (structuredOk(broadSearch)) {
+        pass("card_search broad listing works against the live Codecks API");
+      } else {
+        hardFailures += 1;
+        fail(`card_search broad listing failed against live API: ${broadSearch}`);
+      }
+    } catch (error) {
+      hardFailures += 1;
+      fail(`card_search broad live-API check failed: ${(error as Error).message}`);
+    }
+
+    try {
+      const deckSearch = await invokeTool("card_search", {
+        deck: CREATE_DECK_ENV,
+        limit: 10,
+        format: "json",
+      });
+      const deckData = structuredData(deckSearch);
+      const deckCards = Array.isArray(deckData?.cards) ? deckData.cards : [];
+      const foundCreated = deckCards.some((card) => isObject(card) && String(card.cardId ?? "") === cardId);
+      if (structuredOk(deckSearch) && foundCreated) {
+        pass("card_search deck-scoped listing finds the created validation card against the live API");
+      } else {
+        hardFailures += 1;
+        fail(`card_search deck-scoped live-API check failed: ${deckSearch}`);
+      }
+    } catch (error) {
+      hardFailures += 1;
+      fail(`card_search deck-scoped live-API check failed: ${(error as Error).message}`);
+    }
+
+    try {
+      const missingEffortPreview = await invokeTool("card_list_missing_effort", {
+        deck: CREATE_DECK_ENV,
+        limit: 20,
+        format: "json",
+      });
+      const previewData = structuredData(missingEffortPreview);
+      const eligibleCards = Array.isArray(previewData?.eligibleCards) ? previewData.eligibleCards : [];
+      const foundCreated = eligibleCards.some((card) => isObject(card) && String(card.cardId ?? "") === cardId);
+      if (structuredOk(missingEffortPreview) && foundCreated) {
+        pass("card_list_missing_effort deck preview finds the created validation card against the live API");
+      } else {
+        hardFailures += 1;
+        fail(`card_list_missing_effort deck live-API check failed: ${missingEffortPreview}`);
+      }
+    } catch (error) {
+      hardFailures += 1;
+      fail(`card_list_missing_effort deck live-API check failed: ${(error as Error).message}`);
+    }
+
+    try {
       if (!cardCode) {
         skip("short-code lookup validation skipped (created card has no account sequence)");
       } else {
