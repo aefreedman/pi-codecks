@@ -25,11 +25,11 @@ const TEST_RETRY_BASE_DELAY_MS = (() => {
 })();
 const TEST_RETRY_JITTER_MS = 125;
 const REQUEST_RATE_LIMIT = (() => {
-  const raw = Number.parseInt(process.env.CODECKS_TEST_RATE_LIMIT ?? "16", 10);
+  const raw = Number.parseInt(process.env.CODECKS_TEST_RATE_LIMIT ?? "8", 10);
   if (!Number.isFinite(raw)) {
-    return 32;
+    return 8;
   }
-  return Math.max(5, Math.min(60, raw));
+  return Math.max(4, Math.min(60, raw));
 })();
 const REQUEST_RATE_WINDOW_MS = (() => {
   const raw = Number.parseInt(process.env.CODECKS_TEST_RATE_WINDOW_MS ?? "5000", 10);
@@ -74,6 +74,7 @@ const profileDeckOverride = TEST_PROFILE
 const CREATE_DECK_ENV = process.env.CODECKS_TEST_DECK ?? profileDeckOverride ?? "";
 const ATTACHMENT_PATH_ENV = process.env.CODECKS_TEST_ATTACHMENT_PATH ?? "";
 const VISION_BOARD_CARD_ENV = (process.env.CODECKS_TEST_VISION_BOARD_CARD ?? "").trim();
+const TEST_RUN_ENV = (process.env.CODECKS_TEST_RUN ?? "").trim();
 
 if (!process.env.CODECKS_REQUEST_TIMEOUT_MS) {
   process.env.CODECKS_REQUEST_TIMEOUT_MS = String(REQUEST_TIMEOUT_MS);
@@ -791,6 +792,40 @@ const run = async (): Promise<number> => {
     }
   } else {
     skip("vision board reference checks skipped (set CODECKS_TEST_VISION_BOARD_CARD to enable)");
+  }
+
+  try {
+    const runList = await invokeTool("run_list", {
+      includeCompleted: true,
+      limit: 5,
+      format: "json",
+    });
+    if (structuredOk(runList)) {
+      pass("run_list read-only lookup works against the live Codecks API");
+    } else if (structuredErrorCategory(runList) === "disabled_by_org") {
+      skip("run_list read-only lookup skipped because Runs/Sprints are disabled");
+    } else {
+      preflightFailures += 1;
+      fail(`run_list read-only lookup failed: ${runList}`);
+    }
+
+    if (TEST_RUN_ENV) {
+      const runGet = await invokeTool("run_get", {
+        runId: TEST_RUN_ENV,
+        format: "json",
+      });
+      if (structuredOk(runGet)) {
+        pass("run_get read-only lookup works for CODECKS_TEST_RUN");
+      } else {
+        preflightFailures += 1;
+        fail(`run_get read-only lookup failed for CODECKS_TEST_RUN='${TEST_RUN_ENV}': ${runGet}`);
+      }
+    } else {
+      skip("run_get explicit test-run lookup skipped (set CODECKS_TEST_RUN to enable)");
+    }
+  } catch (error) {
+    preflightFailures += 1;
+    fail(`run read-only validation failed: ${(error as Error).message}`);
   }
 
   if (!CREATE_DECK_ENV.trim()) {

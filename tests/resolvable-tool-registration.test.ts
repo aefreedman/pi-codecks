@@ -44,6 +44,12 @@ const prepare = (toolName: string, args: AnyRecord): AnyRecord => {
 
 assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "includeArchived", "format"]);
 assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "includeArchived", "format"]);
+assertProperties("codecks_run_list", ["title", "includeDeleted", "includeCompleted", "limit", "format"]);
+assertProperties("codecks_run_get", ["runId", "title", "format"]);
+assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
+assertRequired("codecks_run_update", ["runId"]);
+assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "clearRun", "format"]);
+assertRequired("codecks_card_update_run", ["cardId"]);
 
 assertProperties("codecks_card_reply_resolvable", ["resolvableId", "cardId", "context", "content", "format"]);
 assertRequired("codecks_card_reply_resolvable", ["content"]);
@@ -131,6 +137,14 @@ assert.equal(prepare("codecks_card_get", { card_id_or_code: "$333" }).cardId, "$
 assert.equal(prepare("codecks_card_get", { short_code: "$444" }).cardId, "$444");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
+assert.equal(prepare("codecks_run_get", { run_id: 91 }).runId, 91);
+assert.equal(prepare("codecks_run_get", { sprint_id: 92 }).runId, 92);
+assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
+assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
+assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
+assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).cardId, "$3cv");
+assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).runId, 91);
+assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).clearRun, true);
 assert.deepEqual(
   prepare("codecks_card_list_missing_effort", { skip_codes: ["$101"], include_done: true, include_excluded: false, include_archived: true, format: "markdown" }),
   {
@@ -200,6 +214,10 @@ for (const phrase of [
   "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
   "codecks_card_list_missing_effort",
+  "codecks_run_list",
+  "codecks_run_get",
+  "codecks_run_update",
+  "codecks_card_update_run",
   "codecks_card_reply_resolvable",
   "codecks_card_reopen_resolvable",
 ]) {

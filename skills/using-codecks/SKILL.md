@@ -12,6 +12,10 @@ allowed-tools:
   - codecks_card_get_vision_board
   - codecks_card_create
   - codecks_card_set_parent
+  - codecks_run_list
+  - codecks_run_get
+  - codecks_run_update
+  - codecks_card_update_run
   - codecks_card_add_attachment
   - codecks_card_update
   - codecks_card_update_status
@@ -37,6 +41,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 
 ## When to use this skill
 - Card search/retrieval, creation, updates, status/priority/effort changes.
+- Run/Sprint listing, lookup, custom-label/description updates, and card Run assignment.
 - Card comments, review/blocker conversation actions, and attachments.
 - Resolvable thread lifecycle actions (reply, close/reopen, edit your own entries).
 - Web-UI-style listing of cards that have open resolvables.
@@ -81,13 +86,22 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not use `codecks_card_add_comment` to reply to an existing thread; it opens a new general Comment thread.
 - Use `codecks_card_list_resolvables` when you need to find or verify the existing Review or Comment thread before replying.
 - Documentation cards do not support status transitions.
+- Cards with an open Review resolvable cannot change lifecycle status. Reply to or resolve the Review first.
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.
 - Do not transition a card to `done` / "Done" unless the user explicitly instructs that status change. Finishing local work, committing code, or reporting completion is not implicit permission to mark a card done.
 
+## Run updates
+- Use Run-facing language for users; Codecks API fields and dispatch paths use `sprint` / `sprints` internally.
+- Use `codecks_run_list` and `codecks_run_get` for Run lookup.
+- Use `codecks_run_update` to edit a Run custom label (`sprints/updateSprint.name`) or description (`sprints/updateSprint.description`).
+- Use `codecks_card_update_run` to assign a card to a Run (`cards/update` with `sprintId`) or remove it from a Run (`sprintId: null`).
+- Numeric Run identifiers refer to Run/Sprint account sequences, not card short codes.
+
 ## Card updates
 - Use markdown formatting for card content and comments.
 - Treat a Codecks card as one markdown document whose first stored line is the title.
+- Cards created without a deck are Private cards. They are allowed, but must have an owner/assignee; inform the user after creation when no deck was assigned.
 - `codecks_card_create.title` and `codecks_card_update.title` set that first-line title.
 - `codecks_card_create.content` and `codecks_card_update.content` should normally be body content only.
 - In user-visible text fields, write card references as plain `$123` tokens.
