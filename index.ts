@@ -89,6 +89,10 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_get_vision_board",
   "card_create",
   "card_set_parent",
+  "run_list",
+  "run_get",
+  "run_update",
+  "card_update_run",
   "card_add_attachment",
   "card_update",
   "card_update_status",
@@ -296,6 +300,89 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  run_list: {
+    parameters: Type.Object({
+      title: Type.Optional(Type.String({ description: "Optional partial custom label/date filter." })),
+      includeDeleted: Type.Optional(Type.Boolean()),
+      includeCompleted: Type.Optional(Type.Boolean()),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.include_deleted !== undefined && input.includeDeleted === undefined) input.includeDeleted = input.include_deleted;
+      if (input.include_completed !== undefined && input.includeCompleted === undefined) input.includeCompleted = input.include_completed;
+      return input;
+    },
+    promptSnippet: "List Codecks Runs using the underlying Sprint API model.",
+    promptGuidelines: [
+      "Use Run-facing language for users; Codecks API fields and dispatch paths use sprint/sprints internally.",
+      "Use codecks_run_get when a specific run must be inspected before mutation.",
+      "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
+    ],
+  },
+  run_get: {
+    parameters: Type.Object({
+      runId: Type.Optional(cardRefSchema),
+      title: Type.Optional(Type.String({ description: "Partial custom label/date search if runId is not provided." })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyRunIdAliases(input);
+      return input;
+    },
+    promptSnippet: "Fetch one Codecks Run using the underlying Sprint API model.",
+    promptGuidelines: [
+      "Use Run-facing language for users; Codecks API fields and dispatch paths use sprint/sprints internally.",
+      "Numeric runId values refer to the Run/Sprint account sequence, not a card short code.",
+    ],
+  },
+  run_update: {
+    parameters: Type.Object({
+      runId: cardRefSchema,
+      customLabel: Type.Optional(Type.String({ description: "Run custom label. Maps to sprint.name." })),
+      name: Type.Optional(Type.String({ description: "Alias for customLabel. Maps to sprint.name." })),
+      clearCustomLabel: Type.Optional(Type.Boolean()),
+      description: Type.Optional(Type.String({ description: "Run description. Maps to sprint.description." })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyRunIdAliases(input);
+      if (input.custom_label !== undefined && input.customLabel === undefined) input.customLabel = input.custom_label;
+      if (input.clear_custom_label !== undefined && input.clearCustomLabel === undefined) input.clearCustomLabel = input.clear_custom_label;
+      return input;
+    },
+    promptSnippet: "Update a Codecks Run custom label or description.",
+    promptGuidelines: [
+      "Run custom labels map to sprints/updateSprint name; run descriptions map to sprints/updateSprint description.",
+      "Set clearCustomLabel=true to clear a custom label instead of guessing an empty-string convention.",
+    ],
+  },
+  card_update_run: {
+    parameters: Type.Object({
+      cardId: cardRefSchema,
+      runId: Type.Optional(cardRefSchema),
+      sprintId: Type.Optional(cardRefSchema),
+      clearRun: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyCardIdAliases(input);
+      applyRunIdAliases(input);
+      if (input.sprint_id !== undefined && input.sprintId === undefined) input.sprintId = input.sprint_id;
+      if (input.clear_run !== undefined && input.clearRun === undefined) input.clearRun = input.clear_run;
+      return input;
+    },
+    promptSnippet: "Assign a card to a Codecks Run or remove it from its current Run.",
+    promptGuidelines: [
+      ...CARD_REFERENCE_WRITE_GUIDELINES,
+      "Assigning a card to a Run maps to cards/update sprintId internally.",
+      "Set clearRun=true to remove a card from its Run by setting sprintId to null.",
+    ],
   },
   card_add_comment: {
     parameters: Type.Object(conversationCreateParameters),
@@ -546,6 +633,14 @@ function applyResolvableIdAliases(input: Record<string, unknown>): void {
 
 function applyEntryIdAliases(input: Record<string, unknown>): void {
   if (input.entry_id !== undefined && input.entryId === undefined) input.entryId = input.entry_id;
+}
+
+function applyRunIdAliases(input: Record<string, unknown>): void {
+  if (input.run_id !== undefined && input.runId === undefined) input.runId = input.run_id;
+  if (input.sprint_id !== undefined && input.runId === undefined) input.runId = input.sprint_id;
+  if (input.sprintId !== undefined && input.runId === undefined) input.runId = input.sprintId;
+  if (input.run !== undefined && input.runId === undefined) input.runId = input.run;
+  if (input.sprint !== undefined && input.runId === undefined) input.runId = input.sprint;
 }
 
 function applyContentAliases(input: Record<string, unknown>): void {

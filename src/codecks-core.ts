@@ -1815,6 +1815,17 @@ const formatCardUrl = (shortCode?: string): string =>
     return `https://${config.account}.codecks.io/card/${shortCode.replace("$", "")}`;
 };
 
+const formatRunUrl = (accountSeq?: number): string =>
+{
+    if (accountSeq === undefined)
+    {
+        return "";
+    }
+
+    const config = getConfig();
+    return `https://${config.account}.codecks.io/sprint/${accountSeq}`;
+};
+
 type SignedUploadInfo = {
     signedUrl: string;
     fields: Record<string, string>;
@@ -1983,6 +1994,68 @@ const fetchCardById = async (
         ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
 };
 
+const statusUpdateCardFields = [
+    "cardId",
+    "accountSeq",
+    "title",
+    "content",
+    "status",
+    "derivedStatus",
+    "isDoc",
+    {
+        [relationQuery("resolvables", { isClosed: false })]: ["id", "context", "isClosed"],
+    },
+];
+
+const fetchCardForStatusUpdate = async (args: { cardId?: string; accountSeq?: number }): Promise<{ card?: CodecksEntity; openContexts: Set<string> }> =>
+{
+    let payload: unknown;
+    let lookupKey = "";
+    if (args.accountSeq !== undefined)
+    {
+        const relationKey = relationQuery("cards", { accountSeq: [args.accountSeq] });
+        lookupKey = relationKey;
+        payload = await runQuery({
+            _root: [
+                {
+                    account: [
+                        {
+                            [relationKey]: statusUpdateCardFields,
+                        },
+                    ],
+                },
+            ],
+        });
+    }
+    else if (args.cardId)
+    {
+        const idLiteral = formatIdForQuery(args.cardId);
+        lookupKey = `card(${idLiteral})`;
+        payload = await runQuery({
+            [lookupKey]: statusUpdateCardFields,
+        });
+    }
+    else
+    {
+        return { openContexts: new Set() };
+    }
+
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const cardMap = getEntityMap(data, "card");
+    const resolvableMap = getEntityMap(data, "resolvable");
+    const card = args.accountSeq !== undefined
+        ? extractCardsFromPayload(payload, "cards")[0]
+        : cardMap[String(args.cardId)]
+            ?? resolveFromMap(data ? data[lookupKey] : undefined, cardMap)
+            ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
+    const openContexts = new Set(extractRelationEntities(card, "resolvables", resolvableMap)
+        .filter((entry) => !entry.isClosed)
+        .map((entry) => normalizeResolvableContextInput(entry.context))
+        .filter((entry): entry is { context: "comment" | "review" | "block"; label: string } => !("error" in entry))
+        .map((entry) => entry.context));
+    return { card, openContexts };
+};
+
 const fetchVisionBoardCapability = async (): Promise<boolean | undefined> =>
 {
     const payload = await runQuery({
@@ -2051,6 +2124,217 @@ const fetchAccountVisionBoardQueries = async (
     const account = getAccount(payload);
     const queryMap = getEntityMap(data, "visionBoardQuery");
     return extractRelationEntities(account, "visionBoardQueries", queryMap);
+};
+
+type RunLookupResult = {
+    run: CodecksEntity;
+    runId: string;
+    accountSeq?: number;
+    label: string;
+    dateRange: string;
+};
+
+const hydrateRun = (run: CodecksEntity, maps: {
+    sprintConfig: Record<string, CodecksEntity>;
+    card: Record<string, CodecksEntity>;
+}): CodecksEntity =>
+{
+    const cards = normalizeCollection(run.cards as unknown[] | undefined)
+        .map((entry) => (typeof entry === "object" && entry ? entry as CodecksEntity : resolveFromMap(entry, maps.card)))
+        .filter((entry): entry is CodecksEntity => Boolean(entry));
+    return {
+        ...run,
+        sprintConfig: resolveFromMap(run.sprintConfig, maps.sprintConfig) ?? run.sprintConfig,
+        ...(cards.length > 0 ? { cards } : {}),
+    };
+};
+
+const fetchAccountRuns = async (fields: Array<string | Record<string, unknown>> = runSummaryFields): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    "sprintsEnabled",
+                    {
+                        sprints: fields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    if (account?.sprintsEnabled === false)
+    {
+        throw new Error("Codecks Runs/Sprints are not enabled for this account.");
+    }
+
+    const sprintMap = getEntityMap(data, "sprint");
+    const sprintConfigMap = getEntityMap(data, "sprintConfig");
+    const cardMap = getEntityMap(data, "card");
+    return extractRelationEntities(account, "sprints", sprintMap)
+        .map((run) => hydrateRun(run, { sprintConfig: sprintConfigMap, card: cardMap }));
+};
+
+const fetchRunsByAccountSeq = async (
+    accountSeq: number,
+    fields: Array<string | Record<string, unknown>> = runDetailFields,
+): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    {
+                        [relationQuery("sprints", { accountSeq: [accountSeq] })]: fields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    const sprintMap = getEntityMap(data, "sprint");
+    const sprintConfigMap = getEntityMap(data, "sprintConfig");
+    const cardMap = getEntityMap(data, "card");
+    return extractRelationEntities(account, "sprints", sprintMap)
+        .map((run) => hydrateRun(run, { sprintConfig: sprintConfigMap, card: cardMap }));
+};
+
+const parseRunAccountSeq = (value: unknown): number | undefined =>
+{
+    if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    {
+        return value;
+    }
+
+    if (typeof value !== "string")
+    {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    const explicit = trimmed.match(/^(?:run|sprint|seq|accountseq)\s*:?\s*(\d+)$/i);
+    if (explicit)
+    {
+        return Number(explicit[1]);
+    }
+
+    if (/^\d+$/.test(trimmed))
+    {
+        return Number(trimmed);
+    }
+
+    return undefined;
+};
+
+const getRunId = (run: CodecksEntity | undefined): string => String(run?.id ?? "").trim();
+
+const getRunAccountSeq = (run: CodecksEntity | undefined): number | undefined =>
+{
+    const value = run?.accountSeq;
+    if (typeof value === "number")
+    {
+        return value;
+    }
+    if (typeof value === "string" && /^\d+$/.test(value))
+    {
+        return Number(value);
+    }
+    return undefined;
+};
+
+const getRunDateRange = (run: CodecksEntity): string =>
+{
+    const start = String(run.startDate ?? "").trim();
+    const end = String(run.endDate ?? "").trim();
+    if (start && end)
+    {
+        return `${start} – ${end}`;
+    }
+    return start || end || "";
+};
+
+const getRunLabel = (run: CodecksEntity): string =>
+{
+    const customLabel = String(run.name ?? "").trim();
+    if (customLabel)
+    {
+        return customLabel;
+    }
+    const accountSeq = getRunAccountSeq(run);
+    const dateRange = getRunDateRange(run);
+    return [accountSeq !== undefined ? `Run ${accountSeq}` : "Run", dateRange].filter(Boolean).join(" • ");
+};
+
+const normalizeRunSummary = (run: CodecksEntity): Record<string, unknown> =>
+{
+    const sprintConfig = typeof run.sprintConfig === "object" && run.sprintConfig ? run.sprintConfig as CodecksEntity : undefined;
+    const accountSeq = getRunAccountSeq(run);
+    return {
+        runId: getRunId(run) || null,
+        sprintId: getRunId(run) || null,
+        accountSeq: accountSeq ?? null,
+        label: getRunLabel(run),
+        customLabel: run.name ?? null,
+        description: run.description ?? null,
+        startDate: run.startDate ?? null,
+        endDate: run.endDate ?? null,
+        dateRange: getRunDateRange(run) || null,
+        sprintConfig: sprintConfig ? {
+            id: sprintConfig.id ?? null,
+            name: sprintConfig.name ?? null,
+            color: sprintConfig.color ?? null,
+        } : (run.sprintConfig ?? null),
+        isDeleted: Boolean(run.isDeleted),
+        completedAt: run.completedAt ?? null,
+        lockedAt: run.lockedAt ?? null,
+        url: accountSeq !== undefined ? formatRunUrl(accountSeq) : null,
+    };
+};
+
+const resolveRunForUpdate = async (value: string | number): Promise<RunLookupResult | null> =>
+{
+    const accountSeq = parseRunAccountSeq(value);
+    const trimmed = String(value).trim();
+    let matches: CodecksEntity[] = [];
+
+    if (accountSeq !== undefined)
+    {
+        matches = await fetchRunsByAccountSeq(accountSeq);
+    }
+    else if (UUID_PATTERN.test(trimmed))
+    {
+        const runs = await fetchAccountRuns(runDetailFields);
+        matches = runs.filter((run) => getRunId(run) === trimmed);
+    }
+    else
+    {
+        const query = trimmed.toLowerCase();
+        const runs = await fetchAccountRuns(runDetailFields);
+        matches = runs.filter((run) =>
+        {
+            const label = getRunLabel(run).toLowerCase();
+            const customLabel = String(run.name ?? "").toLowerCase();
+            return label.includes(query) || customLabel.includes(query);
+        });
+    }
+
+    const run = matches[0];
+    const runId = getRunId(run);
+    if (!run || !runId)
+    {
+        return null;
+    }
+
+    return {
+        run,
+        runId,
+        accountSeq: getRunAccountSeq(run),
+        label: getRunLabel(run),
+        dateRange: getRunDateRange(run),
+    };
 };
 
 const resolveCardForUpdate = async (
@@ -2419,6 +2703,30 @@ const cardDetailFields = [
     { creator: ["id", "name", "fullName"] },
     { parentCard: ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"] },
     { childCards: ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"] },
+];
+
+const runSummaryFields = [
+    "id",
+    "accountSeq",
+    "name",
+    "description",
+    "index",
+    "startDate",
+    "endDate",
+    "stats",
+    "manualOrderLabels",
+    "userCapacities",
+    "handSyncEnabled",
+    "createdAt",
+    "isDeleted",
+    "completedAt",
+    "lockedAt",
+    { sprintConfig: ["id", "name", "color"] },
+];
+
+const runDetailFields = [
+    ...runSummaryFields,
+    { cards: ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc", "sprintId"] },
 ];
 
 const visionBoardCardFields = ["cardId", "accountSeq", "title", "visionBoard"];
@@ -5327,15 +5635,7 @@ export const card_create = tool({
             parentCardId = parentResolved.cardId;
         }
 
-        if (!deckId && !args.putOnHand && !parentCardId)
-        {
-            return toStructuredErrorResult(
-                format,
-                "card-create",
-                "validation_error",
-                "Provide a deck (name or ID), parentCardId, or set putOnHand=true.",
-            );
-        }
+        const createsPrivateCard = !deckId && !parentCardId;
 
         const payload: Record<string, unknown> = {
             assigneeId,
@@ -5435,7 +5735,11 @@ export const card_create = tool({
             `- Priority: ${normalizedPriority?.label ?? "None"}`,
             `- Tags: ${normalizedTags.length > 0 ? normalizedTags.join(", ") : "None"}`,
             `- Body Hashtags: ${bodyHashtagTokens.length > 0 ? bodyHashtagTokens.map((tag) => `#${tag}`).join(" ") : "None"}`,
+            `- Private Card: ${createsPrivateCard ? "Yes (no deck assigned)" : "No"}`,
         ];
+        const warnings = createsPrivateCard
+            ? ["Card was created as a Private card because no deck was assigned."]
+            : undefined;
         return toStructuredResult(
             format,
             "card-create",
@@ -5447,10 +5751,14 @@ export const card_create = tool({
                 url: url || null,
                 cardType: createdCardType,
                 parentCardId: parentCardId ?? null,
+                privateCard: createsPrivateCard,
+                ownerId: assigneeId,
+                assigneeId,
                 priority: normalizedPriority?.label ?? "None",
                 tags: normalizedTags,
                 bodyHashtags: bodyHashtagTokens,
             },
+            warnings,
         );
     },
 });
@@ -5539,6 +5847,301 @@ export const card_set_parent = tool({
                         title: parentResolved.title || "(untitled)",
                     }
                     : null,
+            },
+        );
+    },
+});
+
+export const run_list = tool({
+    description: "List Codecks Runs (Sprint API model) for the account.",
+    args: {
+        title: tool.schema.string().optional().describe("Optional partial custom label/date filter."),
+        includeDeleted: tool.schema.boolean().optional().describe("Include deleted runs."),
+        includeCompleted: tool.schema.boolean().optional().describe("Include completed runs."),
+        limit: tool.schema.number().optional().describe("Maximum runs to return."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const limit = Math.max(1, Math.min(500, Math.floor(Number(args.limit ?? 50))));
+        let runs: CodecksEntity[];
+        try
+        {
+            runs = await fetchAccountRuns(runSummaryFields);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "run-list", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+
+        const titleFilter = String(args.title ?? "").trim().toLowerCase();
+        const filtered = runs
+            .filter((run) => args.includeDeleted || !run.isDeleted)
+            .filter((run) => args.includeCompleted || !run.completedAt)
+            .filter((run) =>
+            {
+                if (!titleFilter)
+                {
+                    return true;
+                }
+                return getRunLabel(run).toLowerCase().includes(titleFilter)
+                    || getRunDateRange(run).toLowerCase().includes(titleFilter)
+                    || String(getRunAccountSeq(run) ?? "").includes(titleFilter);
+            })
+            .sort((left, right) => String(right.startDate ?? "").localeCompare(String(left.startDate ?? "")));
+        const truncated = filtered.length > limit;
+        const selected = filtered.slice(0, limit);
+        const summaries = selected.map(normalizeRunSummary);
+        const lines = [
+            "## Codecks Runs",
+            "",
+            `- Matches: ${filtered.length}`,
+            `- Returned: ${selected.length}`,
+            ...(truncated ? [`- Truncated: Yes (limit ${limit})`] : []),
+            "",
+            ...summaries.map((run) => `- #${run.accountSeq ?? "?"} ${run.label} (${run.startDate ?? "?"} → ${run.endDate ?? "?"})`),
+        ];
+
+        return toStructuredResult(
+            format,
+            "run-list",
+            lines.join("\n"),
+            {
+                matches: filtered.length,
+                returned: selected.length,
+                truncated,
+                runs: summaries,
+            },
+        );
+    },
+});
+
+export const run_get = tool({
+    description: "Fetch one Codecks Run using the Sprint API model.",
+    args: {
+        runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Run/Sprint ID, account sequence, or label search."),
+        title: tool.schema.string().optional().describe("Partial custom label/date search if runId is not provided."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const rawTarget = args.runId ?? args.title;
+        if (rawTarget === undefined || String(rawTarget).trim() === "")
+        {
+            return toStructuredErrorResult(format, "run-get", "validation_error", "Provide runId or title.");
+        }
+
+        let run: RunLookupResult | null;
+        try
+        {
+            run = await resolveRunForUpdate(rawTarget);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "run-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+
+        if (!run)
+        {
+            return toStructuredErrorResult(format, "run-get", "not_found", "Run not found.", { target: String(rawTarget) });
+        }
+
+        const summary = normalizeRunSummary(run.run);
+        const cards = extractRelationEntities(run.run, "cards", {});
+        const cardSummaries = cards.map((card) => ({
+            cardId: card.cardId ?? null,
+            shortCode: typeof card.accountSeq === "number" ? formatShortCode(card.accountSeq) : null,
+            accountSeq: card.accountSeq ?? null,
+            title: card.title ?? null,
+            status: card.status ?? null,
+        }));
+        const lines = [
+            "## Codecks Run",
+            "",
+            `- Run: #${summary.accountSeq ?? "?"} ${summary.label}`,
+            `- ID: ${summary.runId ?? ""}`,
+            `- Date Range: ${summary.dateRange ?? ""}`,
+            `- Custom Label: ${summary.customLabel ?? "(none)"}`,
+            `- Description: ${summary.description ?? "(none)"}`,
+            `- Cards: ${cardSummaries.length}`,
+        ];
+
+        return toStructuredResult(
+            format,
+            "run-get",
+            lines.join("\n"),
+            {
+                run: {
+                    ...summary,
+                    cards: cardSummaries,
+                },
+            },
+        );
+    },
+});
+
+export const run_update = tool({
+    description: "Update a Codecks Run custom label or description using sprints/updateSprint.",
+    args: {
+        runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Run/Sprint ID, account sequence, or label search."),
+        customLabel: tool.schema.string().optional().describe("Run custom label. Maps to sprint.name."),
+        name: tool.schema.string().optional().describe("Alias for customLabel. Maps to sprint.name."),
+        clearCustomLabel: tool.schema.boolean().optional().describe("Clear the run custom label by setting name to null."),
+        description: tool.schema.string().optional().describe("Run description. Maps to sprint.description."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const hasCustomLabel = args.customLabel !== undefined || args.name !== undefined || args.clearCustomLabel === true;
+        const hasDescription = args.description !== undefined;
+        if (!hasCustomLabel && !hasDescription)
+        {
+            return toStructuredErrorResult(format, "run-update", "validation_error", "Provide customLabel/name, clearCustomLabel=true, or description.");
+        }
+
+        let run: RunLookupResult | null;
+        try
+        {
+            run = await resolveRunForUpdate(args.runId);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "run-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+
+        if (!run)
+        {
+            return toStructuredErrorResult(format, "run-update", "not_found", "Run not found.");
+        }
+
+        const payload: Record<string, unknown> = {
+            sessionId: generateSessionId(),
+            id: run.runId,
+        };
+        if (args.description !== undefined)
+        {
+            payload.description = args.description;
+        }
+        if (args.clearCustomLabel === true)
+        {
+            payload.name = null;
+        }
+        else if (args.customLabel !== undefined || args.name !== undefined)
+        {
+            payload.name = args.customLabel ?? args.name ?? null;
+        }
+
+        try
+        {
+            await runDispatch("sprints/updateSprint", payload);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "run-update", "api_error", toErrorMessage(error));
+        }
+
+        const updatedFields = Object.keys(payload).filter((key) => !["sessionId", "id"].includes(key));
+        const lines = [
+            "## Run Updated",
+            "",
+            `- Run: #${run.accountSeq ?? "?"} ${run.label}`,
+            `- ID: ${run.runId}`,
+            `- Updated Fields: ${updatedFields.join(", ")}`,
+        ];
+
+        return toStructuredResult(
+            format,
+            "run-update",
+            lines.join("\n"),
+            {
+                runId: run.runId,
+                sprintId: run.runId,
+                accountSeq: run.accountSeq ?? null,
+                updatedFields,
+                customLabel: hasCustomLabel ? (payload.name ?? null) : undefined,
+                description: hasDescription ? payload.description : undefined,
+            },
+        );
+    },
+});
+
+export const card_update_run = tool({
+    description: "Assign a Codecks card to a Run, or remove it from its Run, by updating sprintId.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
+        runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Run/Sprint ID, account sequence, or label search."),
+        sprintId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Alias for runId."),
+        clearRun: tool.schema.boolean().optional().describe("Remove the card from its current Run by setting sprintId to null."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const card = await resolveCardForUpdate(args.cardId);
+        if (!card)
+        {
+            return toStructuredErrorResult(format, "card-update-run", "not_found", "Card not found.");
+        }
+
+        const rawRunId = args.runId ?? args.sprintId;
+        if (args.clearRun !== true && (rawRunId === undefined || String(rawRunId).trim() === ""))
+        {
+            return toStructuredErrorResult(format, "card-update-run", "validation_error", "Provide runId/sprintId or set clearRun=true.");
+        }
+
+        let run: RunLookupResult | null = null;
+        if (args.clearRun !== true && rawRunId !== undefined)
+        {
+            try
+            {
+                run = await resolveRunForUpdate(rawRunId);
+            }
+            catch (error)
+            {
+                return toStructuredErrorResult(format, "card-update-run", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            }
+
+            if (!run)
+            {
+                return toStructuredErrorResult(format, "card-update-run", "not_found", "Run not found.");
+            }
+        }
+
+        try
+        {
+            await runDispatch("cards/update", {
+                sessionId: generateSessionId(),
+                id: card.cardId,
+                sprintId: run ? run.runId : null,
+            });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "card-update-run", "api_error", toErrorMessage(error));
+        }
+
+        const lines = [
+            "## Card Run Updated",
+            "",
+            `- Card: ${card.shortCode || card.cardId} ${card.title || "(untitled)"}`,
+            run
+                ? `- Run: #${run.accountSeq ?? "?"} ${run.label}`
+                : "- Run: (cleared)",
+        ];
+
+        return toStructuredResult(
+            format,
+            "card-update-run",
+            lines.join("\n"),
+            {
+                cardId: card.cardId,
+                shortCode: card.shortCode || null,
+                runId: run?.runId ?? null,
+                sprintId: run?.runId ?? null,
+                runAccountSeq: run?.accountSeq ?? null,
             },
         );
     },
@@ -5910,11 +6513,12 @@ export const card_update_status = tool({
         let cardId = parsed.cardId ?? args.cardId;
         let accountSeq = parsed.accountSeq;
         let shortCode = parsed.cardCode ? `$${parsed.cardCode}` : "";
-        const current = accountSeq !== undefined
-            ? await fetchCardByAccountSeq(accountSeq)
+        const statusTarget = accountSeq !== undefined
+            ? await fetchCardForStatusUpdate({ accountSeq })
             : typeof cardId === "string"
-                ? await fetchCardById(cardId)
-                : undefined;
+                ? await fetchCardForStatusUpdate({ cardId })
+                : { openContexts: new Set<string>() };
+        const current = statusTarget.card;
 
         if (!current?.cardId)
         {
@@ -5991,6 +6595,22 @@ export const card_update_status = tool({
 
         try
         {
+            if (statusTarget.openContexts.has("review"))
+            {
+                return toStructuredErrorResult(
+                    format,
+                    "card-update-status",
+                    "validation_error",
+                    "Cannot change card status while the card has an open Review. Reply to or resolve the Review first.",
+                    {
+                        cardId,
+                        shortCode: shortCode || null,
+                        title: title || null,
+                        blockedByContext: "review",
+                    },
+                );
+            }
+
             await runDispatch("cards/update", {
                 sessionId: generateSessionId(),
                 id: cardId,

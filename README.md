@@ -18,6 +18,10 @@ Default tools:
 - `codecks_card_get_vision_board`
 - `codecks_card_create`
 - `codecks_card_set_parent`
+- `codecks_run_list`
+- `codecks_run_get`
+- `codecks_run_update`
+- `codecks_card_update_run`
 - `codecks_card_add_attachment`
 - `codecks_card_update`
 - `codecks_card_update_status`
@@ -89,6 +93,17 @@ Use `codecks_card_get_formatted` when the agent needs to present human-readable 
 Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns those fields.
 
 Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
+
+## Run Tools
+
+Codecks user-facing “Runs” use the underlying Sprint API model. Pi exposes Run-facing tool names while mapping to `sprint` / `sprints` relations and dispatch paths internally.
+
+- `codecks_run_list` lists runs from the account `sprints` relation.
+- `codecks_run_get` fetches one run by run id, sprint id, account sequence, or label search.
+- `codecks_run_update` edits a run custom label via `sprints/updateSprint.name` and a run description via `sprints/updateSprint.description`.
+- `codecks_card_update_run` assigns a card to a run with `cards/update` `sprintId`, or removes it with `sprintId: null`.
+
+Numeric `runId` values refer to the Run/Sprint account sequence, not a card short code. Use the `Test` deck and explicit test run/card configuration for live mutation validation.
 
 ## Vision Board Tool
 
