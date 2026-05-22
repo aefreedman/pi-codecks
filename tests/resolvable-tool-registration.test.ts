@@ -48,6 +48,8 @@ assertProperties("codecks_run_list", ["title", "includeDeleted", "includeComplet
 assertProperties("codecks_run_get", ["runId", "title", "format"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
+assertProperties("codecks_milestone_update", ["milestoneId", "description", "clearDescription", "format"]);
+assertRequired("codecks_milestone_update", ["milestoneId"]);
 assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "clearRun", "format"]);
 assertRequired("codecks_card_update_run", ["cardId"]);
 
@@ -142,6 +144,9 @@ assert.equal(prepare("codecks_run_get", { sprint_id: 92 }).runId, 92);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
+assert.equal(prepare("codecks_milestone_update", { milestone: "Alpha", clear_description: true }).milestoneId, "Alpha");
+assert.equal(prepare("codecks_milestone_update", { milestone: "Alpha", clear_description: true }).clearDescription, true);
+assert.equal(prepare("codecks_milestone_update", { milestone_id: 84, description: "Desc" }).milestoneId, 84);
 assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).runId, 91);
 assert.equal(prepare("codecks_card_update_run", { card_id: "$3cv", sprint_id: 91, clear_run: true }).clearRun, true);
@@ -214,6 +219,7 @@ for (const phrase of [
   "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
   "codecks_card_list_missing_effort",
+  "codecks_milestone_update",
   "codecks_run_list",
   "codecks_run_get",
   "codecks_run_update",

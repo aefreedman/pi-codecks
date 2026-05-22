@@ -12,6 +12,7 @@ allowed-tools:
   - codecks_card_get_vision_board
   - codecks_card_create
   - codecks_card_set_parent
+  - codecks_milestone_update
   - codecks_run_list
   - codecks_run_get
   - codecks_run_update
@@ -42,6 +43,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 ## When to use this skill
 - Card search/retrieval, creation, updates, status/priority/effort changes.
 - Run/Sprint listing, lookup, custom-label/description updates, and card Run assignment.
+- Milestone description updates.
 - Card comments, review/blocker conversation actions, and attachments.
 - Resolvable thread lifecycle actions (reply, close/reopen, edit your own entries).
 - Web-UI-style listing of cards that have open resolvables.
@@ -90,6 +92,12 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.
 - Do not transition a card to `done` / "Done" unless the user explicitly instructs that status change. Finishing local work, committing code, or reporting completion is not implicit permission to mark a card done.
+
+## Milestone updates
+- Use `codecks_milestone_update` to edit a milestone description.
+- Milestone descriptions map to `milestones/update.description`.
+- Use `clearDescription=true` or `description: ""` to clear a milestone description; do not send `description: null`.
+- Other milestone management remains limited; card milestone assignment still belongs in `codecks_card_update`.
 
 ## Run updates
 - Use Run-facing language for users; Codecks API fields and dispatch paths use `sprint` / `sprints` internally.

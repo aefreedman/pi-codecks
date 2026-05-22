@@ -6,6 +6,7 @@ type ToolModule = typeof import("../src/codecks-core.ts");
 const ACCOUNT_ID = "account-test";
 const CARD_ID = "11111111-1111-4111-8111-111111111111";
 const RUN_ID = "22222222-2222-4222-8222-222222222222";
+const MILESTONE_ID = "44444444-4444-4444-8444-444444444444";
 const USER_ID = "33333333-3333-4333-8333-333333333333";
 
 const isObject = (value: unknown): value is AnyRecord => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -98,6 +99,35 @@ const buildRunPayload = (relationKey: string, run: AnyRecord = buildRun(), cards
       },
     },
     card: Object.fromEntries(cards.map((card) => [String(card.cardId), card])),
+  },
+});
+
+const buildMilestone = (overrides: AnyRecord = {}): AnyRecord => ({
+  id: MILESTONE_ID,
+  accountSeq: 84,
+  name: "Alpha",
+  description: "Existing description",
+  date: "2026-06-28",
+  startDate: null,
+  color: "green",
+  isGlobal: true,
+  handSyncEnabled: false,
+  isDeleted: false,
+  ...overrides,
+});
+
+const buildMilestonePayload = (relationKey: string, milestone: AnyRecord = buildMilestone()): AnyRecord => ({
+  data: {
+    _root: { account: ACCOUNT_ID },
+    account: {
+      [ACCOUNT_ID]: {
+        id: ACCOUNT_ID,
+        [relationKey]: [String(milestone.id)],
+      },
+    },
+    milestone: {
+      [String(milestone.id)]: milestone,
+    },
   },
 });
 
@@ -274,6 +304,77 @@ const testCardRunAssignmentDispatchesSprintId = async (tools: ToolModule): Promi
   });
 };
 
+const testMilestoneUpdateDispatchesDescription = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "milestones/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "milestones");
+    assert.ok(relationKey, `expected milestones query: ${JSON.stringify(query)}`);
+    assert.match(relationKey, /accountSeq/);
+    return jsonResponse(buildMilestonePayload(relationKey));
+  }, async () => {
+    const result = await tools.milestone_update.execute({ milestoneId: 84, description: "New description", format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.milestoneId, MILESTONE_ID);
+    assert.equal(data.description, "New description");
+    assert.equal(data.descriptionCleared, false);
+    assert.ok(updatePayload, "expected milestone update dispatch");
+    assert.equal(updatePayload!.id, MILESTONE_ID);
+    assert.equal(updatePayload!.description, "New description");
+    assert.equal("sessionId" in updatePayload!, false, "milestone update should not add cards/update session metadata");
+  });
+};
+
+const testMilestoneUpdateClearsDescriptionWithEmptyString = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "milestones/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "milestones");
+    assert.ok(relationKey, `expected milestones query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildMilestonePayload(relationKey));
+  }, async () => {
+    const result = await tools.milestone_update.execute({ milestoneId: 84, clearDescription: true, format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.description, "");
+    assert.equal(data.descriptionCleared, true);
+    assert.ok(updatePayload, "expected milestone update dispatch");
+    assert.equal(updatePayload!.id, MILESTONE_ID);
+    assert.equal(updatePayload!.description, "");
+  });
+};
+
+const testMilestoneUpdateRequiresDescription = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(() => {
+    assert.fail("milestone update without description should not reach Codecks");
+  }, async () => {
+    const result = await tools.milestone_update.execute({ milestoneId: 84, format: "json" });
+    const error = getError(String(result));
+    assert.equal(error.category, "validation_error");
+    assert.match(String(error.message), /description/i);
+  });
+};
+
+const testMilestoneUpdateRejectsNullDescription = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(() => {
+    assert.fail("milestone update with null description should not reach Codecks");
+  }, async () => {
+    const result = await tools.milestone_update.execute({ milestoneId: 84, description: null, format: "json" });
+    const error = getError(String(result));
+    assert.equal(error.category, "validation_error");
+    assert.match(String(error.message), /description must be a string/i);
+  });
+};
+
 const testCardRunClearDispatchesNullSprintId = async (tools: ToolModule): Promise<void> => {
   let cardUpdatePayload: AnyRecord | undefined;
   await withMockedCodecks(({ path, query, payload }) => {
@@ -301,6 +402,10 @@ await testStatusUpdateBlocksOpenReview(tools);
 await testPrivateCardCreationDefaultsOwner(tools);
 await testRunUpdateDispatchesSprintUpdate(tools);
 await testRunUpdateClearsCustomLabel(tools);
+await testMilestoneUpdateDispatchesDescription(tools);
+await testMilestoneUpdateClearsDescriptionWithEmptyString(tools);
+await testMilestoneUpdateRequiresDescription(tools);
+await testMilestoneUpdateRejectsNullDescription(tools);
 await testCardRunAssignmentDispatchesSprintId(tools);
 await testCardRunClearDispatchesNullSprintId(tools);
 
