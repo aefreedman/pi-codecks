@@ -89,6 +89,7 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_get_vision_board",
   "card_create",
   "card_set_parent",
+  "milestone_update",
   "run_list",
   "run_get",
   "run_update",
@@ -300,6 +301,26 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  milestone_update: {
+    parameters: Type.Object({
+      milestoneId: cardRefSchema,
+      description: Type.Optional(Type.String({ description: "Milestone description. Use an empty string to clear." })),
+      clearDescription: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyMilestoneIdAliases(input);
+      if (input.clear_description !== undefined && input.clearDescription === undefined) input.clearDescription = input.clear_description;
+      return input;
+    },
+    promptSnippet: "Update a Codecks Milestone description.",
+    promptGuidelines: [
+      "Use this tool to edit milestone descriptions instead of raw dispatch.",
+      "Milestone descriptions map to milestones/update description.",
+      "Set clearDescription=true, or pass description as an empty string, to clear a milestone description.",
+    ],
   },
   run_list: {
     parameters: Type.Object({
@@ -641,6 +662,11 @@ function applyRunIdAliases(input: Record<string, unknown>): void {
   if (input.sprintId !== undefined && input.runId === undefined) input.runId = input.sprintId;
   if (input.run !== undefined && input.runId === undefined) input.runId = input.run;
   if (input.sprint !== undefined && input.runId === undefined) input.runId = input.sprint;
+}
+
+function applyMilestoneIdAliases(input: Record<string, unknown>): void {
+  if (input.milestone_id !== undefined && input.milestoneId === undefined) input.milestoneId = input.milestone_id;
+  if (input.milestone !== undefined && input.milestoneId === undefined) input.milestoneId = input.milestone;
 }
 
 function applyContentAliases(input: Record<string, unknown>): void {

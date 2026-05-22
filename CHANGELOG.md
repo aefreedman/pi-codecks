@@ -7,6 +7,10 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+### Added
+
+- Added `codecks_milestone_update` for editing Codecks milestone descriptions via `milestones/update`, including empty-string clearing behavior.
+
 ## [0.3.0] - 2026-05-15
 
 ### Added

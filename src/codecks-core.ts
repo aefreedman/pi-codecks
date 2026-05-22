@@ -1826,6 +1826,17 @@ const formatRunUrl = (accountSeq?: number): string =>
     return `https://${config.account}.codecks.io/sprint/${accountSeq}`;
 };
 
+const formatMilestoneUrl = (accountSeq?: number): string =>
+{
+    if (accountSeq === undefined)
+    {
+        return "";
+    }
+
+    const config = getConfig();
+    return `https://${config.account}.codecks.io/milestones/${accountSeq}`;
+};
+
 type SignedUploadInfo = {
     signedUrl: string;
     fields: Record<string, string>;
@@ -2705,6 +2716,19 @@ const cardDetailFields = [
     { childCards: ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"] },
 ];
 
+const milestoneDetailFields = [
+    "id",
+    "accountSeq",
+    "name",
+    "description",
+    "date",
+    "startDate",
+    "color",
+    "isGlobal",
+    "handSyncEnabled",
+    "isDeleted",
+];
+
 const runSummaryFields = [
     "id",
     "accountSeq",
@@ -2803,6 +2827,16 @@ type LookupResult =
     | { kind: "resolved"; id: string | number; label: string }
     | { kind: "ambiguous"; label: string; candidates: Array<{ id?: string | number; title?: string; accountSeq?: number }> }
     | { kind: "missing"; label: string };
+
+type MilestoneLookupResult =
+    | {
+        kind: "resolved";
+        id: string | number;
+        label: string;
+        milestone: CodecksEntity;
+        accountSeq?: number;
+    }
+    | Extract<LookupResult, { kind: "ambiguous" | "missing" }>;
 
 type DoneTransitionEvent = {
     activityId: string;
@@ -2989,6 +3023,144 @@ const resolveMilestone = async (value: string | number | undefined): Promise<Loo
         raw,
         "milestone",
     );
+};
+
+const fetchAccountMilestones = async (fields: Array<string | Record<string, unknown>> = milestoneDetailFields): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    {
+                        milestones: fields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    const milestoneMap = getEntityMap(data, "milestone");
+    return extractRelationEntities(account, "milestones", milestoneMap);
+};
+
+const fetchMilestonesByAccountSeq = async (accountSeq: number): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    {
+                        [relationQuery("milestones", { accountSeq: [accountSeq] })]: milestoneDetailFields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    const milestoneMap = getEntityMap(data, "milestone");
+    return extractRelationEntities(account, "milestones", milestoneMap);
+};
+
+const getMilestoneId = (milestone: CodecksEntity | undefined): string => String(milestone?.id ?? "").trim();
+
+const getMilestoneAccountSeq = (milestone: CodecksEntity | undefined): number | undefined =>
+{
+    const value = milestone?.accountSeq;
+    if (typeof value === "number")
+    {
+        return value;
+    }
+    if (typeof value === "string" && /^\d+$/.test(value))
+    {
+        return Number(value);
+    }
+    return undefined;
+};
+
+const getMilestoneLabel = (milestone: CodecksEntity): string =>
+    String(milestone.name ?? milestone.title ?? "").trim()
+    || (getMilestoneAccountSeq(milestone) !== undefined ? `Milestone ${getMilestoneAccountSeq(milestone)}` : "Milestone");
+
+const parseMilestoneAccountSeq = (value: unknown): number | undefined =>
+{
+    if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    {
+        return value;
+    }
+
+    if (typeof value !== "string")
+    {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    const explicit = trimmed.match(/^(?:milestone|seq|accountseq)\s*:?\s*(\d+)$/i);
+    if (explicit)
+    {
+        return Number(explicit[1]);
+    }
+
+    if (/^\d+$/.test(trimmed))
+    {
+        return Number(trimmed);
+    }
+
+    return undefined;
+};
+
+const resolveMilestoneForUpdate = async (value: string | number): Promise<MilestoneLookupResult> =>
+{
+    const accountSeq = parseMilestoneAccountSeq(value);
+    const raw = String(value).trim();
+    let matches: CodecksEntity[] = [];
+
+    if (accountSeq !== undefined)
+    {
+        matches = await fetchMilestonesByAccountSeq(accountSeq);
+    }
+    else
+    {
+        const milestones = await fetchAccountMilestones();
+        if (isUuidLike(raw))
+        {
+            matches = milestones.filter((milestone) => getMilestoneId(milestone) === raw);
+        }
+        else
+        {
+            const lookup = resolveByNameWithCaseFallback(
+                milestones.map((milestone) => ({
+                    id: milestone.id as string | number | undefined,
+                    accountSeq: getMilestoneAccountSeq(milestone),
+                    name: milestone.name as string | undefined,
+                    title: milestone.title as string | undefined,
+                })),
+                raw,
+                "milestone",
+            );
+            if (lookup.kind !== "resolved")
+            {
+                return lookup;
+            }
+            matches = milestones.filter((milestone) => String(milestone.id ?? "") === String(lookup.id));
+        }
+    }
+
+    const milestone = matches[0];
+    const milestoneId = getMilestoneId(milestone);
+    if (!milestone || !milestoneId)
+    {
+        return { kind: "missing", label: "milestone" };
+    }
+
+    return {
+        kind: "resolved",
+        id: milestoneId,
+        label: getMilestoneLabel(milestone),
+        milestone,
+        accountSeq: getMilestoneAccountSeq(milestone),
+    };
 };
 
 const renderLookupMessage = (result: LookupResult, labelValue?: string): string =>
@@ -5847,6 +6019,90 @@ export const card_set_parent = tool({
                         title: parentResolved.title || "(untitled)",
                     }
                     : null,
+            },
+        );
+    },
+});
+
+export const milestone_update = tool({
+    description: "Update a Codecks Milestone description using milestones/update.",
+    args: {
+        milestoneId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Milestone ID, account sequence, or name search."),
+        description: tool.schema.string().optional().describe("Milestone description. Use an empty string to clear."),
+        clearDescription: tool.schema.boolean().optional().describe("Clear the milestone description by setting description to an empty string."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const hasDescription = args.description !== undefined;
+        const shouldClearDescription = args.clearDescription === true;
+        if (!hasDescription && !shouldClearDescription)
+        {
+            return toStructuredErrorResult(format, "milestone-update", "validation_error", "Provide description or set clearDescription=true.");
+        }
+        if (hasDescription && !shouldClearDescription && typeof args.description !== "string")
+        {
+            return toStructuredErrorResult(format, "milestone-update", "validation_error", "description must be a string. Use clearDescription=true or description: \"\" to clear.");
+        }
+
+        let milestone: MilestoneLookupResult;
+        try
+        {
+            milestone = await resolveMilestoneForUpdate(args.milestoneId);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "milestone-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+
+        if (milestone.kind !== "resolved")
+        {
+            return toStructuredErrorResult(
+                format,
+                "milestone-update",
+                milestone.kind === "ambiguous" ? "ambiguous_match" : "not_found",
+                renderLookupMessage(milestone, String(args.milestoneId ?? "")),
+            );
+        }
+
+        const description = shouldClearDescription ? "" : String(args.description ?? "");
+        try
+        {
+            await runDispatch("milestones/update", {
+                id: milestone.id,
+                description,
+            });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "milestone-update", "api_error", toErrorMessage(error));
+        }
+
+        const accountSeq = milestone.accountSeq;
+        const url = accountSeq !== undefined ? formatMilestoneUrl(accountSeq) : "";
+        const lines = [
+            "## Milestone Updated",
+            "",
+            `- Milestone: #${accountSeq ?? "?"} ${milestone.label}`,
+            `- ID: ${milestone.id}`,
+            `- URL: ${url || ""}`,
+            `- Updated Fields: description`,
+            `- Description Cleared: ${description.length === 0 ? "Yes" : "No"}`,
+        ];
+
+        return toStructuredResult(
+            format,
+            "milestone-update",
+            lines.join("\n"),
+            {
+                milestoneId: milestone.id,
+                accountSeq: accountSeq ?? null,
+                name: milestone.label,
+                url: url || null,
+                updatedFields: ["description"],
+                description,
+                descriptionCleared: description.length === 0,
             },
         );
     },

@@ -18,6 +18,7 @@ Default tools:
 - `codecks_card_get_vision_board`
 - `codecks_card_create`
 - `codecks_card_set_parent`
+- `codecks_milestone_update`
 - `codecks_run_list`
 - `codecks_run_get`
 - `codecks_run_update`
@@ -93,6 +94,14 @@ Use `codecks_card_get_formatted` when the agent needs to present human-readable 
 Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns those fields.
 
 Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
+
+## Milestone Tools
+
+Milestones are mostly supported as card metadata and card search/update scopes. `codecks_milestone_update` adds first-class support for editing a milestone description through Codecks' `milestones/update` dispatch endpoint.
+
+- `codecks_milestone_update` resolves a milestone by id, account sequence, or name search.
+- It sets `milestones/update.description` to the supplied string.
+- To clear a milestone description, pass `description: ""` or `clearDescription: true`; Codecks rejects `description: null`.
 
 ## Run Tools
 
