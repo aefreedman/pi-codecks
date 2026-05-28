@@ -15,6 +15,8 @@ allowed-tools:
   - codecks_milestone_update
   - codecks_run_list
   - codecks_run_get
+  - codecks_run_delivered_effort
+  - codecks_run_average_effort
   - codecks_run_update
   - codecks_card_update_run
   - codecks_card_add_attachment
@@ -42,7 +44,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 
 ## When to use this skill
 - Card search/retrieval, creation, updates, status/priority/effort changes.
-- Run/Sprint listing, lookup, custom-label/description updates, and card Run assignment.
+- Run/Sprint listing, lookup, cached delivered-effort reports, average effort summaries, custom-label/description updates, and card Run assignment.
 - Milestone description updates.
 - Card comments, review/blocker conversation actions, and attachments.
 - Resolvable thread lifecycle actions (reply, close/reopen, edit your own entries).
@@ -102,6 +104,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 ## Run updates
 - Use Run-facing language for users; Codecks API fields and dispatch paths use `sprint` / `sprints` internally.
 - Use `codecks_run_list` and `codecks_run_get` for Run lookup.
+- Use `codecks_run_delivered_effort` to report delivered effort from cached Run `stats.finishStats` without card-by-card recalculation.
+- Use `codecks_run_average_effort` to average cached delivered effort across completed Runs; `minDeliveredEffort` defaults to `1` to filter out zero-effort vacation/break Runs.
 - Use `codecks_run_update` to edit a Run custom label (`sprints/updateSprint.name`) or description (`sprints/updateSprint.description`).
 - Use `codecks_card_update_run` to assign a card to a Run (`cards/update` with `sprintId`) or remove it from a Run (`sprintId: null`).
 - Numeric Run identifiers refer to Run/Sprint account sequences, not card short codes.

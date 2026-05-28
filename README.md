@@ -21,6 +21,8 @@ Default tools:
 - `codecks_milestone_update`
 - `codecks_run_list`
 - `codecks_run_get`
+- `codecks_run_delivered_effort`
+- `codecks_run_average_effort`
 - `codecks_run_update`
 - `codecks_card_update_run`
 - `codecks_card_add_attachment`
@@ -109,6 +111,8 @@ Codecks user-facing “Runs” use the underlying Sprint API model. Pi exposes R
 
 - `codecks_run_list` lists runs from the account `sprints` relation.
 - `codecks_run_get` fetches one run by run id, sprint id, account sequence, or label search.
+- `codecks_run_delivered_effort` reports cached delivered effort from Run `stats.finishStats`, optionally scoped by sprint config and user, without querying every card.
+- `codecks_run_average_effort` averages cached delivered effort across completed Runs and supports low-effort filtering; `minDeliveredEffort` defaults to `1` to skip zero-effort vacation/break Runs.
 - `codecks_run_update` edits a run custom label via `sprints/updateSprint.name` and a run description via `sprints/updateSprint.description`.
 - `codecks_card_update_run` assigns a card to a run with `cards/update` `sprintId`, or removes it with `sprintId: null`.
 

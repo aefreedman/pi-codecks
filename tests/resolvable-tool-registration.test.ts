@@ -46,6 +46,8 @@ assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "mi
 assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "includeArchived", "format"]);
 assertProperties("codecks_run_list", ["title", "includeDeleted", "includeCompleted", "limit", "format"]);
 assertProperties("codecks_run_get", ["runId", "title", "format"]);
+assertProperties("codecks_run_delivered_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "includeCurrentStats", "format"]);
+assertProperties("codecks_run_average_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "minDeliveredEffort", "excludeBelowEffort", "includeFilteredRuns", "format"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
 assertProperties("codecks_milestone_update", ["milestoneId", "description", "clearDescription", "format"]);
@@ -141,6 +143,14 @@ assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "ne
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
 assert.equal(prepare("codecks_run_get", { run_id: 91 }).runId, 91);
 assert.equal(prepare("codecks_run_get", { sprint_id: 92 }).runId, 92);
+assert.equal(prepare("codecks_run_delivered_effort", { sprint_config: "dive", user_id: "user-1", completed_runs: 4, include_current_stats: true }).sprintConfig, "dive");
+assert.equal(prepare("codecks_run_delivered_effort", { sprint_config: "dive", user_id: "user-1", completed_runs: 4, include_current_stats: true }).userId, "user-1");
+assert.equal(prepare("codecks_run_delivered_effort", { sprint_config: "dive", user_id: "user-1", completed_runs: 4, include_current_stats: true }).completedRuns, 4);
+assert.equal(prepare("codecks_run_delivered_effort", { sprint_config: "dive", user_id: "user-1", completed_runs: 4, include_current_stats: true }).includeCurrentStats, true);
+assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).sprintConfig, "dive");
+assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).completedRuns, 8);
+assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).minDeliveredEffort, 2);
+assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).includeFilteredRuns, false);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
@@ -222,6 +232,8 @@ for (const phrase of [
   "codecks_milestone_update",
   "codecks_run_list",
   "codecks_run_get",
+  "codecks_run_delivered_effort",
+  "codecks_run_average_effort",
   "codecks_run_update",
   "codecks_card_update_run",
   "codecks_card_reply_resolvable",

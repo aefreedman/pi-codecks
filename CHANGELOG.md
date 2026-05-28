@@ -10,6 +10,8 @@ and this project follows semantic versioning for public package releases.
 ### Added
 
 - Added `codecks_milestone_update` for editing Codecks milestone descriptions via `milestones/update`, including empty-string clearing behavior.
+- Added `codecks_run_delivered_effort` for cached Run/Sprint `stats.finishStats` delivered-effort reporting without card-by-card recalculation.
+- Added `codecks_run_average_effort` for averaging cached delivered effort across completed Runs with default low-effort filtering for vacation/break Runs.
 
 ## [0.3.0] - 2026-05-15
 

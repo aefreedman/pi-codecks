@@ -92,6 +92,8 @@ const DEFAULT_CODECKS_EXPORTS = [
   "milestone_update",
   "run_list",
   "run_get",
+  "run_delivered_effort",
+  "run_average_effort",
   "run_update",
   "card_update_run",
   "card_add_attachment",
@@ -358,6 +360,57 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       "Use Run-facing language for users; Codecks API fields and dispatch paths use sprint/sprints internally.",
       "Numeric runId values refer to the Run/Sprint account sequence, not a card short code.",
+    ],
+  },
+  run_delivered_effort: {
+    parameters: Type.Object({
+      sprintConfig: Type.Optional(Type.String({ description: "Optional Run/Sprint config name/id filter, for example 'dive'." })),
+      user: Type.Optional(Type.String({ description: "Optional user name to resolve from recent card assignees/creators. Use 'me' for the logged-in user." })),
+      userId: Type.Optional(Type.String({ description: "Optional exact Codecks user id." })),
+      completedRuns: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      includeCurrentStats: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyRunStatsAliases(input);
+      return input;
+    },
+    promptSnippet: "Report cached delivered effort from Codecks Runs without querying every card.",
+    promptGuidelines: [
+      "Use Run-facing language for users; Codecks API fields use sprint/sprints internally.",
+      "For completed Runs, this tool uses stats.finishStats instead of card-by-card recalculation.",
+      "Use userId when known; user name lookup is derived from recent card assignees/creators.",
+    ],
+  },
+  run_average_effort: {
+    parameters: Type.Object({
+      sprintConfig: Type.Optional(Type.String({ description: "Optional Run/Sprint config name/id filter, for example 'dive'." })),
+      user: Type.Optional(Type.String({ description: "Optional user name to resolve from recent card assignees/creators. Use 'me' for the logged-in user." })),
+      userId: Type.Optional(Type.String({ description: "Optional exact Codecks user id." })),
+      completedRuns: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      minDeliveredEffort: Type.Optional(Type.Number({ description: "Exclude runs with delivered effort below this value. Defaults to 1." })),
+      excludeBelowEffort: Type.Optional(Type.Number({ description: "Alias for minDeliveredEffort." })),
+      includeFilteredRuns: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyRunStatsAliases(input);
+      if (input.min_delivered_effort !== undefined && input.minDeliveredEffort === undefined) input.minDeliveredEffort = input.min_delivered_effort;
+      if (input.exclude_below_effort !== undefined && input.excludeBelowEffort === undefined) input.excludeBelowEffort = input.exclude_below_effort;
+      if (input.effort_threshold !== undefined && input.minDeliveredEffort === undefined) input.minDeliveredEffort = input.effort_threshold;
+      if (input.threshold !== undefined && input.minDeliveredEffort === undefined) input.minDeliveredEffort = input.threshold;
+      if (input.include_filtered_runs !== undefined && input.includeFilteredRuns === undefined) input.includeFilteredRuns = input.include_filtered_runs;
+      return input;
+    },
+    promptSnippet: "Average cached delivered effort across completed Codecks Runs, optionally filtering low-effort runs.",
+    promptGuidelines: [
+      "Use Run-facing language for users; Codecks API fields use sprint/sprints internally.",
+      "This tool uses cached Run finishStats and does not query every card for effort math.",
+      "minDeliveredEffort defaults to 1, which filters out zero-effort vacation/break Runs by default.",
     ],
   },
   run_update: {
@@ -662,6 +715,16 @@ function applyRunIdAliases(input: Record<string, unknown>): void {
   if (input.sprintId !== undefined && input.runId === undefined) input.runId = input.sprintId;
   if (input.run !== undefined && input.runId === undefined) input.runId = input.run;
   if (input.sprint !== undefined && input.runId === undefined) input.runId = input.sprint;
+}
+
+function applyRunStatsAliases(input: Record<string, unknown>): void {
+  if (input.sprint_config !== undefined && input.sprintConfig === undefined) input.sprintConfig = input.sprint_config;
+  if (input.sprintConfigName !== undefined && input.sprintConfig === undefined) input.sprintConfig = input.sprintConfigName;
+  if (input.sprint_config_name !== undefined && input.sprintConfig === undefined) input.sprintConfig = input.sprint_config_name;
+  if (input.user_id !== undefined && input.userId === undefined) input.userId = input.user_id;
+  if (input.completed_runs !== undefined && input.completedRuns === undefined) input.completedRuns = input.completed_runs;
+  if (input.run_count !== undefined && input.completedRuns === undefined) input.completedRuns = input.run_count;
+  if (input.include_current_stats !== undefined && input.includeCurrentStats === undefined) input.includeCurrentStats = input.include_current_stats;
 }
 
 function applyMilestoneIdAliases(input: Record<string, unknown>): void {
