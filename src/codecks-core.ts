@@ -4113,14 +4113,19 @@ const extractCardsFromPayload = (payload: unknown, relationName = "cards"): Code
 
 type CardLocationScope = "any" | "deck" | "milestone" | "hand" | "bookmarks";
 
+type CardSearchIn = "title" | "content" | "title_or_content";
+
 type CardSearchParams = {
     title?: string;
+    text?: string;
+    searchIn?: CardSearchIn;
     cardCode?: string;
     location?: CardLocationScope;
     deck?: string | number;
     milestone?: string | number;
     limit?: number;
     includeArchived?: boolean;
+    includeDone?: boolean;
 };
 
 const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unknown; milestone?: unknown }): CardLocationScope | { error: string } =>
@@ -4211,6 +4216,7 @@ const relationMatchesLookupId = (value: unknown, lookupId: string | number): boo
         .some((candidate) => String(candidate) === target);
 };
 
+
 const cardMatchesClientScope = (card: CodecksEntity, scope: ClientCardScopeFilter | undefined): boolean =>
 {
     if (!scope)
@@ -4221,13 +4227,164 @@ const cardMatchesClientScope = (card: CodecksEntity, scope: ClientCardScopeFilte
     return relationMatchesLookupId(card[scope.type], scope.id);
 };
 
-const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown> =>
+type TextSearchMatcher = {
+    raw: string;
+    normalized: string;
+    hasWildcard: boolean;
+    backendContains?: string;
+    matches(value: unknown): boolean;
+};
+
+const normalizeTextForSearch = (value: unknown): string => String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9*?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const escapeRegex = (value: string): string => value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+
+const wildcardToRegex = (normalizedPattern: string): RegExp =>
+{
+    const source = Array.from(normalizedPattern)
+        .map((char) =>
+        {
+            if (char === "*")
+            {
+                return ".*";
+            }
+
+            if (char === "?")
+            {
+                return ".";
+            }
+
+            return escapeRegex(char);
+        })
+        .join("");
+
+    return new RegExp(`^${source}$`);
+};
+
+const selectBackendContainsToken = (normalizedPattern: string): string | undefined =>
+{
+    const tokens = normalizedPattern
+        .split(/[*?\s]+/)
+        .map((token) => token.trim())
+        .filter((token) => /^[a-z0-9]{2,}$/.test(token))
+        .sort((left, right) => right.length - left.length);
+
+    return tokens[0];
+};
+
+const createTextSearchMatcher = (pattern: string | undefined): TextSearchMatcher | undefined =>
+{
+    const raw = String(pattern ?? "").trim();
+    if (!raw)
+    {
+        return undefined;
+    }
+
+    const normalized = normalizeTextForSearch(raw);
+    if (!normalized)
+    {
+        return undefined;
+    }
+
+    const hasWildcard = /[*?]/.test(raw);
+    const regex = hasWildcard ? wildcardToRegex(normalized) : undefined;
+    const canSafelyUseBackendContains = /^[a-z0-9*?]+$/i.test(raw);
+    const backendContains = canSafelyUseBackendContains ? selectBackendContainsToken(normalized) : undefined;
+
+    return {
+        raw,
+        normalized,
+        hasWildcard,
+        backendContains,
+        matches(value: unknown): boolean
+        {
+            const normalizedValue = normalizeTextForSearch(value).replace(/[*?]/g, "");
+            return regex ? regex.test(normalizedValue) : normalizedValue.includes(normalized);
+        },
+    };
+};
+
+const cardMatchesText = (card: CodecksEntity, matcher: TextSearchMatcher | undefined, searchIn: CardSearchIn): boolean =>
+{
+    if (!matcher)
+    {
+        return true;
+    }
+
+    if (searchIn === "title")
+    {
+        return matcher.matches(card.title);
+    }
+
+    if (searchIn === "content")
+    {
+        return matcher.matches(card.content);
+    }
+
+    return matcher.matches(card.title) || matcher.matches(card.content);
+};
+
+const cardMatchesDoneFilter = (card: CodecksEntity, includeDone: boolean | undefined): boolean =>
+{
+    if (includeDone !== false)
+    {
+        return true;
+    }
+
+    const status = String(card.status ?? "").trim().toLowerCase();
+    const derivedStatus = String(card.derivedStatus ?? "").trim().toLowerCase();
+    return status !== "done" && derivedStatus !== "done";
+};
+
+type CardSearchRenderContext = {
+    titleMatcher?: TextSearchMatcher;
+    textMatcher?: TextSearchMatcher;
+    searchIn: CardSearchIn;
+};
+
+const getCardMatchedFields = (card: CodecksEntity, context?: CardSearchRenderContext): string[] | undefined =>
+{
+    if (!context)
+    {
+        return undefined;
+    }
+
+    const fields = new Set<string>();
+    if (context.titleMatcher?.matches(card.title))
+    {
+        fields.add("title");
+    }
+
+    if (context.textMatcher)
+    {
+        if ((context.searchIn === "title" || context.searchIn === "title_or_content") && context.textMatcher.matches(card.title))
+        {
+            fields.add("title");
+        }
+
+        if ((context.searchIn === "content" || context.searchIn === "title_or_content") && context.textMatcher.matches(card.content))
+        {
+            fields.add("content");
+        }
+    }
+
+    return fields.size > 0 ? Array.from(fields) : undefined;
+};
+
+const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRenderContext): Record<string, unknown> =>
 {
     const deck = card.deck as CodecksEntity | undefined;
     const milestone = card.milestone as CodecksEntity | undefined;
 
     const childCount = getCardChildCountInfo(card);
     const hasEffort = hasOwn(card, "effort");
+    const matchedFields = getCardMatchedFields(card, context);
 
     return {
         cardId: card.cardId,
@@ -4256,12 +4413,18 @@ const normalizeCardSearchSummary = (card: CodecksEntity): Record<string, unknown
         assignee: (card.assignee as CodecksEntity | undefined)?.name
             ?? (card.assignee as CodecksEntity | undefined)?.fullName,
         tags: formatTags(card.masterTags),
+        ...(matchedFields ? { matchedFields } : {}),
     };
 };
 
-const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[]; rawCount?: number }> =>
+const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[]; rawCount?: number; renderContext?: CardSearchRenderContext }> =>
 {
     const includeArchived = args.includeArchived ?? (args.cardCode !== undefined);
+    const titleMatcher = createTextSearchMatcher(args.title);
+    const textMatcher = createTextSearchMatcher(args.text);
+    const searchIn: CardSearchIn = args.searchIn ?? (textMatcher ? "title_or_content" : "title");
+    const needsContent = Boolean(textMatcher && (searchIn === "content" || searchIn === "title_or_content"));
+    const renderContext = (titleMatcher || textMatcher) ? { titleMatcher, textMatcher, searchIn } : undefined;
     const filterArchived = (cards: CodecksEntity[]): CodecksEntity[] => cards.filter((card) =>
     {
         if (includeArchived)
@@ -4272,6 +4435,10 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         const visibility = String(card.visibility ?? "default").trim().toLowerCase();
         return visibility !== "archived" && visibility !== "deleted";
     });
+    const filterCards = (cards: CodecksEntity[]): CodecksEntity[] => filterArchived(cards)
+        .filter((card) => cardMatchesDoneFilter(card, args.includeDone))
+        .filter((card) => cardMatchesText(card, titleMatcher, "title"))
+        .filter((card) => cardMatchesText(card, textMatcher, searchIn));
     const filters: Record<string, unknown> = {};
     let clientScopeFilter: ClientCardScopeFilter | undefined;
     const inferredLocation = inferCardLocationScope(args);
@@ -4294,7 +4461,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                 {
                     account: [
                         {
-                            [relationQuery("cards", { accountSeq: [seq] })]: cardPlanningFields,
+                            [relationQuery("cards", { accountSeq: [seq] })]: needsContent ? cardDetailFields : cardPlanningFields,
                         },
                     ],
                 },
@@ -4303,12 +4470,12 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
 
         const payload = await runQuery(query);
         const cards = extractCardsFromPayload(payload, "cards");
-        return { cards: filterArchived(cards), rawCount: cards.length };
+        return { cards: filterCards(cards), rawCount: cards.length, renderContext };
     }
 
-    if (args.title)
+    if (titleMatcher?.backendContains)
     {
-        filters.title = { op: "contains", value: args.title };
+        filters.title = { op: "contains", value: titleMatcher.backendContains };
     }
 
     if (location === "deck")
@@ -4357,7 +4524,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
                             [relationQuery("queueEntries", queueFilters)]: [
                                 "sortIndex",
                                 {
-                                    card: cardPlanningFields,
+                                    card: needsContent ? cardDetailFields : cardPlanningFields,
                                 },
                             ],
                         },
@@ -4385,12 +4552,8 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             .filter((entry): entry is CodecksEntity => Boolean(entry))
             .map((entry) => hydrateCard(entry, { user: userMap, deck: deckMap, milestone: milestoneMap }));
 
-        const filteredCards = args.title
-            ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
-            : cards;
-
-        const visibleCards = filterArchived(filteredCards);
-        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
+        const filteredCards = filterCards(cards);
+        return { cards: filteredCards.slice(0, limit), rawCount: filteredCards.length, renderContext };
     }
 
     if (location === "bookmarks")
@@ -4403,12 +4566,15 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             $order: "sortIndex",
             $limit: limit,
         };
+        const handCardFieldsForSearch = needsContent
+            ? handCardFields.map((field) => (typeof field === "object" && field && "card" in field ? { card: cardDetailFields } : field))
+            : handCardFields;
         const query = {
             _root: [
                 {
                     account: [
                         {
-                            [relationQuery("handCards", handFilters)]: handCardFields,
+                            [relationQuery("handCards", handFilters)]: handCardFieldsForSearch,
                         },
                     ],
                 },
@@ -4442,16 +4608,13 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             .filter((entry): entry is CodecksEntity => Boolean(entry))
             .map((entry) => hydrateCard(entry, { user: userMap, deck: deckMap, milestone: milestoneMap }));
 
-        const filteredCards = args.title
-            ? cards.filter((card) => String(card.title ?? "").toLowerCase().includes(args.title?.toLowerCase() ?? ""))
-            : cards;
-
-        const visibleCards = filterArchived(filteredCards);
-        return { cards: visibleCards.slice(0, limit), rawCount: filteredCards.length };
+        const filteredCards = filterCards(cards);
+        return { cards: filteredCards.slice(0, limit), rawCount: filteredCards.length, renderContext };
     }
 
     const limit = args.limit ?? 20;
-    const queryLimit = clientScopeFilter ? 3000 : limit;
+    const fullScanNeeded = Boolean(clientScopeFilter || titleMatcher || textMatcher || needsContent);
+    const queryLimit = fullScanNeeded ? 3000 : limit;
     filters.$order = "-lastUpdatedAt";
     filters.$limit = queryLimit;
 
@@ -4460,7 +4623,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
             {
                 account: [
                     {
-                        [relationQuery("cards", filters)]: cardPlanningFields,
+                        [relationQuery("cards", filters)]: needsContent ? cardDetailFields : cardPlanningFields,
                     },
                 ],
             },
@@ -4468,9 +4631,10 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     };
 
     const payload = await runQuery(query);
-    const cards = extractCardsFromPayload(payload, "cards")
+    const scopedCards = extractCardsFromPayload(payload, "cards")
         .filter((card) => cardMatchesClientScope(card, clientScopeFilter));
-    return { cards: filterArchived(cards).slice(0, limit), rawCount: cards.length };
+    const cards = filterCards(scopedCards);
+    return { cards: cards.slice(0, limit), rawCount: cards.length, renderContext };
 };
 
 export const query = tool({
@@ -4554,15 +4718,18 @@ export const dispatch = tool({
 });
 
 export const card_search = tool({
-    description: "Search for Codecks cards by location and title.",
+    description: "Search for Codecks cards by location and title/body text.",
     args: {
-        title: tool.schema.string().optional().describe("Partial title to match."),
+        title: tool.schema.string().optional().describe("Partial or glob-style title to match. Supports * and ? wildcards."),
+        text: tool.schema.string().optional().describe("Partial or glob-style text to match using searchIn (defaults to title_or_content). Supports * and ? wildcards."),
+        searchIn: tool.schema.enum(["title", "content", "title_or_content"]).optional().describe("Fields searched by text. Defaults to title_or_content when text is provided."),
         cardCode: tool.schema.string().optional().describe("Short card code like $1e1."),
         location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID when location=deck."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
         limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum number of cards to return."),
         includeArchived: tool.schema.boolean().optional().describe("Include cards whose visibility is archived/deleted (default: false)."),
+        includeDone: tool.schema.boolean().optional().describe("Include cards whose status/derivedStatus is done (default: true). Set false for open/undone searches."),
         format: outputFormatArg,
     },
     async execute(args)
@@ -4571,12 +4738,15 @@ export const card_search = tool({
         const inferredCode = args.title ? extractCardCode(args.title) : null;
         const result = await fetchCardMatches({
             title: args.title,
+            text: args.text,
+            searchIn: args.searchIn as CardSearchIn | undefined,
             cardCode: args.cardCode ?? inferredCode ?? undefined,
             location: args.location,
             deck: args.deck,
             milestone: args.milestone,
             limit: args.limit,
             includeArchived: args.includeArchived,
+            includeDone: args.includeDone,
         });
 
         if (result.error)
@@ -4591,10 +4761,13 @@ export const card_search = tool({
             return toStructuredErrorResult(format, "card-search", "not_found", "No cards matched the search criteria.", {
                 criteria: {
                     title: args.title ?? null,
+                    text: args.text ?? null,
+                    searchIn: args.searchIn ?? null,
                     cardCode: args.cardCode ?? inferredCode ?? null,
                     location: args.location ?? null,
                     deck: args.deck ?? null,
                     milestone: args.milestone ?? null,
+                    includeDone: args.includeDone ?? null,
                 },
             });
         }
@@ -4613,7 +4786,7 @@ export const card_search = tool({
             lines.join("\n"),
             {
                 matches: cards.length,
-                cards: cards.map(normalizeCardSearchSummary),
+                cards: cards.map((card) => normalizeCardSearchSummary(card, result.renderContext)),
             },
         );
     },

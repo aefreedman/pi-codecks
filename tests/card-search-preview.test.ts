@@ -185,6 +185,72 @@ const cards: MockCard[] = [
 }
 
 {
+  const requests = installFetchMock(cards);
+  const text = String(await core.card_search.execute({ title: "*eligible*", deck: "Dev", format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.matches, 1);
+  assert.equal(payload.data.cards[0].title, "Eligible card");
+  assert.deepEqual(payload.data.cards[0].matchedFields, ["title"]);
+  assert.ok(!JSON.stringify(requests[1].query).includes("*eligible*"), "wildcards should be interpreted client-side, not sent literally to Codecks title contains");
+}
+
+{
+  installFetchMock([
+    {
+      cardId: "card-accented",
+      accountSeq: 120,
+      title: "SS Île-de-France backgrounds",
+      status: "not_started",
+      visibility: "default",
+      deck: "deck-dev",
+      childCards: [],
+    },
+  ]);
+  const text = String(await core.card_search.execute({ title: "ile de france", deck: "Dev", format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.matches, 1);
+  assert.equal(payload.data.cards[0].title, "SS Île-de-France backgrounds");
+}
+
+{
+  installFetchMock([
+    {
+      cardId: "card-body-match",
+      accountSeq: 121,
+      title: "Open body match",
+      content: "The body still mentions IDF.",
+      status: "started",
+      derivedStatus: "started",
+      visibility: "default",
+      deck: "deck-dev",
+      childCards: [],
+    },
+    {
+      cardId: "card-done-body-match",
+      accountSeq: 122,
+      title: "Done body match",
+      content: "The body still mentions IDF.",
+      status: "done",
+      derivedStatus: "done",
+      visibility: "default",
+      deck: "deck-dev",
+      childCards: [],
+    },
+  ]);
+  const text = String(await core.card_search.execute({ text: "idf", searchIn: "title_or_content", includeDone: false, deck: "Dev", format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.matches, 1);
+  assert.equal(payload.data.cards[0].title, "Open body match");
+  assert.deepEqual(payload.data.cards[0].matchedFields, ["content"]);
+}
+
+{
   installFetchMock(cards);
   const text = String(await core.card_list_missing_effort.execute({
     deck: "Dev",

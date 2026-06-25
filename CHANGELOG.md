@@ -7,11 +7,22 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-25
+
 ### Added
 
 - Added `codecks_milestone_update` for editing Codecks milestone descriptions via `milestones/update`, including empty-string clearing behavior.
 - Added `codecks_run_delivered_effort` for cached Run/Sprint `stats.finishStats` delivered-effort reporting without card-by-card recalculation.
 - Added `codecks_run_average_effort` for averaging cached delivered effort across completed Runs with default low-effort filtering for vacation/break Runs.
+- Added glob-style `*` / `?` wildcard support to `codecks_card_search.title`.
+- Added `codecks_card_search.text` and `searchIn` for title/body text searches, including body-only and title-or-body modes.
+- Added `includeDone=false` support to `codecks_card_search` for open/undone-only searches.
+
+### Changed
+
+- Made Codecks card search matching accent- and punctuation-insensitive so searches like `ile de france` can match titles such as `Île-de-France`.
+- Included `matchedFields` in structured card search results when the tool can identify whether a match came from title and/or content.
+- Expanded README and `using-codecks` skill guidance for wildcard, body, and open-card search workflows.
 
 ## [0.3.0] - 2026-05-15
 

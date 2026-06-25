@@ -93,7 +93,7 @@ Use `codecks_card_get` when an agent needs structured card data for reasoning, p
 
 Use `codecks_card_get_formatted` when the agent needs to present human-readable card details to a user.
 
-Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns those fields.
+Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Title searches support `*` / `?` glob wildcards and accent/punctuation-insensitive matching. Use `text` with `searchIn: "title_or_content"` (or `content`) for body searches, and `includeDone: false` for open/undone-only searches. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, matched fields, and update dates when Codecks returns those fields.
 
 Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
 

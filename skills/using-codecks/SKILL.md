@@ -134,6 +134,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Bare numeric identifiers like `387` should be passed as `cardId: "387"` or `cardId: 387` and treated as short codes.
 - `codecks_card_search` excludes archived/deleted cards by default; set `includeArchived=true` only when explicitly needed.
 - `codecks_card_search` infers `location=deck` or `location=milestone` when `deck` or `milestone` is supplied without an explicit location.
+- `codecks_card_search.title` supports partial and glob-style `*`/`?` matching; use `text` + `searchIn: "title_or_content"` or `"content"` when searching card bodies.
+- For open/undone search requests, use `codecks_card_search` with `includeDone=false` instead of post-filtering done cards manually.
 - `codecks_card_list_missing_effort` is preview-only and is the preferred first step for bulk effort-estimation workflows.
 - If raw dispatch is required for `cards/update`, `sessionId` must be a UUID or omitted so the tool auto-generates one.
 
