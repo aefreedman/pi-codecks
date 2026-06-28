@@ -16,6 +16,7 @@ type ToolConfig = {
 
 const ANY_PARAMETERS = Type.Object({}, { additionalProperties: true });
 const outputFormatEnum = Type.Union([Type.Literal("text"), Type.Literal("json")]);
+const cardSearchOutputModeEnum = Type.Union([Type.Literal("compact"), Type.Literal("detailed"), Type.Literal("counts")]);
 const cardRefSchema = Type.Union([Type.String(), Type.Number()]);
 const LOCATION_VALUES = ["any", "deck", "milestone", "hand", "bookmarks"] as const;
 const locationEnum = Type.Union([
@@ -147,18 +148,25 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   card_search: {
     parameters: Type.Object({
       title: Type.Optional(Type.String({ description: "Partial title to match." })),
+      text: Type.Optional(Type.String({ description: "Partial body/title text filter." })),
+      searchIn: Type.Optional(Type.Union([Type.Literal("title"), Type.Literal("content"), Type.Literal("title_or_content")])),
       cardCode: Type.Optional(Type.String({ description: "Short card code like $1e1." })),
       location: Type.Optional(locationEnum),
       deck: Type.Optional(cardRefSchema),
       milestone: Type.Optional(cardRefSchema),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 3000 })),
       includeArchived: Type.Optional(Type.Boolean()),
+      includeDone: Type.Optional(Type.Boolean()),
+      outputMode: Type.Optional(cardSearchOutputModeEnum),
       format: Type.Optional(outputFormatEnum),
     }),
     prepareArguments(args) {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
       if (input.card_code !== undefined && input.cardCode === undefined) input.cardCode = input.card_code;
+      if (input.search_in !== undefined && input.searchIn === undefined) input.searchIn = input.search_in;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      if (input.include_done !== undefined && input.includeDone === undefined) input.includeDone = input.include_done;
+      if (input.output_mode !== undefined && input.outputMode === undefined) input.outputMode = input.output_mode;
       normalizeCardLocationAliases(input);
       return input;
     },
@@ -166,6 +174,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       "For Codecks retrieval, prefer codecks_card_get when the agent needs structured card data, codecks_card_get_formatted when presenting details to a user, and codecks_card_search when you need disambiguation.",
       "When deck or milestone is supplied without location, the tool infers the matching scope instead of running a broad search.",
+      "Search results use compact output by default to protect session context; use outputMode='counts' for bulk/aggregate analysis and outputMode='detailed' only when every returned card row is required.",
       "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns them.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
     ],

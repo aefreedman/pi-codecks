@@ -7,6 +7,13 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-28
+
+### Changed
+
+- Made `codecks_card_search` default to compact output with capped card rows to protect session context during broad/bulk searches.
+- Added `outputMode: "counts"` for aggregate card-search analysis and `outputMode: "detailed"` for explicit full-row output.
+
 ## [0.5.2] - 2026-06-28
 
 ### Fixed

@@ -27,6 +27,7 @@ type CardTypeValue = "regular" | "documentation";
 const DEFAULT_BASE_URL = "https://api.codecks.io";
 const TOOL_VERSION = "v2.0.0";
 type OutputFormat = "text" | "json";
+type CardSearchOutputMode = "compact" | "detailed" | "counts";
 const outputFormatArg = tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to text.");
 const RATE_LIMIT = (() =>
 {
@@ -4148,6 +4149,7 @@ type CardSearchParams = {
     limit?: number;
     includeArchived?: boolean;
     includeDone?: boolean;
+    outputMode?: CardSearchOutputMode;
 };
 
 const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unknown; milestone?: unknown }): CardLocationScope | { error: string } =>
@@ -4437,6 +4439,43 @@ const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRen
         tags: formatTags(card.masterTags),
         ...(matchedFields ? { matchedFields } : {}),
     };
+};
+
+const incrementFacet = (counter: Record<string, number>, value: unknown, fallback = "(none)"): void =>
+{
+    const key = String(value ?? fallback).trim() || fallback;
+    counter[key] = (counter[key] ?? 0) + 1;
+};
+
+const buildCardSearchFacets = (cards: CodecksEntity[]): Record<string, Record<string, number>> =>
+{
+    const facets: Record<string, Record<string, number>> = {
+        status: {},
+        derivedStatus: {},
+        deck: {},
+        milestone: {},
+        assignee: {},
+        effort: {},
+        priority: {},
+        cardType: {},
+    };
+
+    for (const card of cards)
+    {
+        const deck = card.deck as CodecksEntity | undefined;
+        const milestone = card.milestone as CodecksEntity | undefined;
+        const assignee = card.assignee as CodecksEntity | undefined;
+        incrementFacet(facets.status, card.status);
+        incrementFacet(facets.derivedStatus, card.derivedStatus);
+        incrementFacet(facets.deck, deck?.title);
+        incrementFacet(facets.milestone, milestone?.title ?? milestone?.name);
+        incrementFacet(facets.assignee, assignee?.name ?? assignee?.fullName);
+        incrementFacet(facets.effort, hasOwn(card, "effort") ? (card.effort ?? "(unset)") : "(unknown)");
+        incrementFacet(facets.priority, card.priority);
+        incrementFacet(facets.cardType, isCardTypeKnown(card) ? resolveCardType(card) : "unknown");
+    }
+
+    return facets;
 };
 
 const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: string; cards?: CodecksEntity[]; rawCount?: number; renderContext?: CardSearchRenderContext }> =>
@@ -4752,6 +4791,7 @@ export const card_search = tool({
         limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum number of cards to return."),
         includeArchived: tool.schema.boolean().optional().describe("Include cards whose visibility is archived/deleted (default: false)."),
         includeDone: tool.schema.boolean().optional().describe("Include cards whose status/derivedStatus is done (default: true). Set false for open/undone searches."),
+        outputMode: tool.schema.enum(["compact", "detailed", "counts"]).optional().describe("Response size/detail. compact is default and caps returned card summaries, detailed returns all matched summaries, counts returns aggregate facets and samples only."),
         format: outputFormatArg,
     },
     async execute(args)
@@ -4769,6 +4809,7 @@ export const card_search = tool({
             limit: args.limit,
             includeArchived: args.includeArchived,
             includeDone: args.includeDone,
+            outputMode: args.outputMode as CardSearchOutputMode | undefined,
         });
 
         if (result.error)
@@ -4793,6 +4834,13 @@ export const card_search = tool({
         }
 
         const cards = result.cards ?? [];
+        const outputMode: CardSearchOutputMode = args.outputMode ?? "compact";
+        const compactCardLimit = 25;
+        const detailCards = outputMode === "detailed" ? cards : cards.slice(0, compactCardLimit);
+        const sampleCards = cards.slice(0, Math.min(10, compactCardLimit));
+        const returnedCards = outputMode === "counts" ? 0 : detailCards.length;
+        const truncated = outputMode !== "detailed" && cards.length > returnedCards;
+        const rawMatches = result.rawCount ?? cards.length;
 
         if (cards.length === 0)
         {
@@ -4820,6 +4868,9 @@ export const card_search = tool({
                 lines.join("\n"),
                 {
                     matches: 0,
+                    rawMatches: 0,
+                    returnedCards: 0,
+                    outputMode,
                     cards: [],
                     criteria,
                     searchTips: [
@@ -4834,19 +4885,39 @@ export const card_search = tool({
         const lines = [
             "## Card Search Results",
             "",
-            `Matches: ${cards.length}`,
+            `Matches: ${cards.length}${rawMatches !== cards.length ? ` (${rawMatches} raw before limit)` : ""}`,
+            outputMode !== "detailed" && cards.length > compactCardLimit
+                ? `Showing ${outputMode === "counts" ? sampleCards.length : detailCards.length} sample${(outputMode === "counts" ? sampleCards.length : detailCards.length) === 1 ? "" : "s"}; use outputMode=detailed only when you need every card row in context.`
+                : undefined,
             "",
-            ...cards.map((card, index) => `${index + 1}. ${formatCardLine(card)}`),
-        ];
+            ...(outputMode === "counts" ? sampleCards : detailCards).map((card, index) => `${index + 1}. ${formatCardLine(card)}`),
+        ].filter((line): line is string => line !== undefined);
+
+        const baseData: Record<string, unknown> = {
+            matches: cards.length,
+            rawMatches,
+            returnedCards,
+            outputMode,
+            truncated,
+            facets: outputMode === "counts" || truncated ? buildCardSearchFacets(cards) : undefined,
+        };
+
+        if (outputMode === "counts")
+        {
+            baseData.sampleCards = sampleCards.map((card) => normalizeCardSearchSummary(card, result.renderContext));
+        }
+        else
+        {
+            baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext));
+        }
 
         return toStructuredResult(
             format,
             "card-search",
             lines.join("\n"),
-            {
-                matches: cards.length,
-                cards: cards.map((card) => normalizeCardSearchSummary(card, result.renderContext)),
-            },
+            baseData,
+            truncated ? ["card_search compact output truncated card summaries to protect session context. Use outputMode='counts' for aggregate analysis or outputMode='detailed' only when every row is required."] : undefined,
+            truncated ? "For bulk analysis, prefer outputMode='counts' or narrow the search before requesting detailed card rows." : undefined,
         );
     },
 });

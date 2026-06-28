@@ -343,4 +343,38 @@ const cards: MockCard[] = [
   assert.deepEqual(payload.data.cards, []);
 }
 
+{
+  const manyCards = Array.from({ length: 30 }, (_, index) => ({
+    cardId: `bulk-${index}`,
+    accountSeq: 200 + index,
+    title: `Bulk card ${index}`,
+    status: index % 2 === 0 ? "not_started" : "done",
+    derivedStatus: index % 2 === 0 ? "assigned" : "done",
+    visibility: "default",
+    isDoc: false,
+    effort: index % 3,
+    priority: index % 2 === 0 ? "b" : "c",
+    deck: "deck-dev",
+    milestone: "milestone-alpha",
+    childCards: [],
+  }));
+  installFetchMock(manyCards);
+  const compactText = String(await core.card_search.execute({ deck: "Dev", limit: 100, format: "json" }));
+  const compact = parseStructuredJson(compactText);
+  assert.equal(compact.data.matches, 30);
+  assert.equal(compact.data.returnedCards, 25);
+  assert.equal(compact.data.truncated, true);
+  assert.equal(compact.data.cards.length, 25);
+  assert.equal(compact.data.facets.status.done, 15);
+  assert.match(compact.warnings[0], /truncated/);
+
+  const countsText = String(await core.card_search.execute({ deck: "Dev", limit: 100, outputMode: "counts", format: "json" }));
+  const counts = parseStructuredJson(countsText);
+  assert.equal(counts.data.matches, 30);
+  assert.equal(counts.data.returnedCards, 0);
+  assert.equal(counts.data.cards, undefined);
+  assert.equal(counts.data.sampleCards.length, 10);
+  assert.equal(counts.data.facets.derivedStatus.done, 15);
+}
+
 console.log("Codecks card search preview tests passed");
