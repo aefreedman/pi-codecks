@@ -5353,11 +5353,20 @@ const normalizeMilestoneSummary = (entity: unknown): Record<string, unknown> | n
     }
 
     const value = entity as CodecksEntity;
+    const accountSeq = getMilestoneAccountSeq(value);
     return {
         id: value.id ?? null,
-        accountSeq: value.accountSeq ?? null,
+        accountSeq: accountSeq ?? null,
         name: value.name ?? null,
         title: value.title ?? null,
+        description: value.description ?? null,
+        date: value.date ?? null,
+        startDate: value.startDate ?? null,
+        color: value.color ?? null,
+        isGlobal: value.isGlobal ?? null,
+        handSyncEnabled: value.handSyncEnabled ?? null,
+        isDeleted: value.isDeleted ?? null,
+        url: accountSeq !== undefined ? formatMilestoneUrl(accountSeq) : null,
     };
 };
 
@@ -6773,6 +6782,159 @@ export const card_set_parent = tool({
                     : null,
             },
         );
+    },
+});
+
+const filterMilestonesBySearch = (milestones: CodecksEntity[], search: string | undefined): CodecksEntity[] =>
+{
+    const needle = search?.trim().toLowerCase();
+    if (!needle)
+    {
+        return milestones;
+    }
+
+    return milestones.filter((milestone) => {
+        const haystack = [
+            milestone.name,
+            milestone.title,
+            milestone.description,
+            getMilestoneAccountSeq(milestone)?.toString(),
+            milestone.id,
+        ]
+            .filter((value) => value !== undefined && value !== null)
+            .map((value) => String(value).toLowerCase())
+            .join("\n");
+        return haystack.includes(needle);
+    });
+};
+
+const renderMilestoneListText = (milestones: CodecksEntity[], heading: string): string =>
+{
+    const lines = [
+        `## ${heading}`,
+        "",
+        `Milestones: ${milestones.length}`,
+        "",
+        ...milestones.map((milestone) => {
+            const accountSeq = getMilestoneAccountSeq(milestone);
+            const url = accountSeq !== undefined ? ` — ${formatMilestoneUrl(accountSeq)}` : "";
+            const deleted = milestone.isDeleted === true ? " [deleted]" : "";
+            return `- #${accountSeq ?? "?"} ${getMilestoneLabel(milestone)}${deleted}${url}`;
+        }),
+    ];
+    return lines.join("\n");
+};
+
+export const milestone_list = tool({
+    description: "List Codecks Milestones with optional text filtering.",
+    args: {
+        search: tool.schema.string().optional().describe("Optional text filter for milestone name, description, account sequence, or ID."),
+        includeDeleted: tool.schema.boolean().optional().describe("Include deleted milestones. Defaults to false."),
+        limit: tool.schema.number().int().min(1).max(500).optional().describe("Maximum milestones to return. Defaults to 100."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "json";
+        const includeDeleted = args.includeDeleted ?? false;
+        const limit = args.limit ?? 100;
+
+        try
+        {
+            const allMilestones = await fetchAccountMilestones();
+            const filtered = filterMilestonesBySearch(
+                allMilestones.filter((milestone) => includeDeleted || milestone.isDeleted !== true),
+                args.search,
+            ).slice(0, limit);
+            const dataMilestones = filtered
+                .map((milestone) => normalizeMilestoneSummary(milestone))
+                .filter((milestone): milestone is Record<string, unknown> => milestone !== null);
+
+            return toStructuredResult(
+                format,
+                "milestone-list",
+                renderMilestoneListText(filtered, "Codecks Milestones"),
+                {
+                    search: args.search ?? null,
+                    includeDeleted,
+                    limit,
+                    total: dataMilestones.length,
+                    milestones: dataMilestones,
+                },
+                undefined,
+                dataMilestones.length === 0 ? "Try a different search term, increase the limit, or set includeDeleted=true when looking for archived/deleted milestones." : undefined,
+            );
+        }
+        catch (error)
+        {
+            const message = toErrorMessage(error);
+            return toStructuredErrorResult(format, "milestone-list", classifyApiErrorCategory(message), message);
+        }
+    },
+});
+
+export const milestone_get = tool({
+    description: "Fetch one Codecks Milestone by ID, account sequence, or name search.",
+    args: {
+        milestoneId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone ID, account sequence, or name search."),
+        title: tool.schema.string().optional().describe("Alias for milestoneId when searching by visible milestone name."),
+        includeDeleted: tool.schema.boolean().optional().describe("Allow deleted milestones in lookup results. Defaults to false."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "json";
+        const lookupValue = blankToUndefined(args.milestoneId) ?? blankToUndefined(args.title);
+        if (lookupValue === undefined)
+        {
+            return toStructuredErrorResult(format, "milestone-get", "validation_error", "Provide milestoneId, account sequence, or title.");
+        }
+
+        try
+        {
+            const milestone = await resolveMilestoneForUpdate(lookupValue);
+            if (milestone.kind !== "resolved")
+            {
+                return toStructuredErrorResult(
+                    format,
+                    "milestone-get",
+                    milestone.kind === "ambiguous" ? "ambiguous_match" : "not_found",
+                    renderLookupMessage(milestone, String(lookupValue ?? "")),
+                );
+            }
+            if (milestone.milestone.isDeleted === true && args.includeDeleted !== true)
+            {
+                return toStructuredErrorResult(format, "milestone-get", "not_found", "Matched milestone is deleted. Pass includeDeleted=true to return deleted milestones.");
+            }
+
+            const accountSeq = milestone.accountSeq;
+            const url = accountSeq !== undefined ? formatMilestoneUrl(accountSeq) : "";
+            const text = [
+                "## Codecks Milestone",
+                "",
+                `- Milestone: #${accountSeq ?? "?"} ${milestone.label}`,
+                `- ID: ${milestone.id}`,
+                ...(url ? [`- URL: ${url}`] : []),
+                `- Deleted: ${milestone.milestone.isDeleted === true ? "yes" : "no"}`,
+                "",
+                "Description:",
+                String(milestone.milestone.description ?? ""),
+            ].join("\n");
+
+            return toStructuredResult(
+                format,
+                "milestone-get",
+                text,
+                {
+                    milestone: normalizeMilestoneSummary(milestone.milestone),
+                },
+            );
+        }
+        catch (error)
+        {
+            const message = toErrorMessage(error);
+            return toStructuredErrorResult(format, "milestone-get", classifyApiErrorCategory(message), message);
+        }
     },
 });
 

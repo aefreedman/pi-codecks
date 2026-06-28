@@ -14,6 +14,8 @@ allowed-tools:
   - codecks_card_bulk_create
   - codecks_card_bulk_update
   - codecks_card_set_parent
+  - codecks_milestone_list
+  - codecks_milestone_get
   - codecks_milestone_update
   - codecks_run_list
   - codecks_run_get
@@ -47,7 +49,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 ## When to use this skill
 - Card search/retrieval, creation, updates, status/priority/effort changes.
 - Run/Sprint listing, lookup, cached delivered-effort reports, average effort summaries, custom-label/description updates, and card Run assignment.
-- Milestone description updates.
+- Milestone context lookup and description updates.
 - Card comments, review/blocker conversation actions, and attachments.
 - Resolvable thread lifecycle actions (reply, close/reopen, edit your own entries).
 - Web-UI-style listing of cards that have open resolvables.
@@ -98,8 +100,11 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.
 - Do not transition a card to `done` / "Done" unless the user explicitly instructs that status change. Finishing local work, committing code, or reporting completion is not implicit permission to mark a card done.
 
-## Milestone updates
-- Use `codecks_milestone_update` to edit a milestone description.
+## Milestone lookup and updates
+- Use `codecks_milestone_list` or `codecks_milestone_get` for milestone context instead of raw `codecks_query` milestone probes.
+- Use `codecks_milestone_list(search="Alpha")` when the visible milestone name may need disambiguation.
+- Use `codecks_milestone_get` when exactly one milestone description or URL must be inspected.
+- Use `codecks_milestone_update` only to edit a milestone description.
 - Milestone descriptions map to `milestones/update.description`.
 - Use `clearDescription=true` or `description: ""` to clear a milestone description; do not send `description: null`.
 - Other milestone management remains limited; card milestone assignment still belongs in `codecks_card_update`.

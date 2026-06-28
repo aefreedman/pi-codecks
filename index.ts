@@ -91,6 +91,8 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_bulk_create",
   "card_bulk_update",
   "card_set_parent",
+  "milestone_list",
+  "milestone_get",
   "milestone_update",
   "run_list",
   "run_get",
@@ -352,6 +354,47 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  milestone_list: {
+    parameters: Type.Object({
+      search: Type.Optional(Type.String({ description: "Optional text filter for milestone name, description, account sequence, or ID." })),
+      includeDeleted: Type.Optional(Type.Boolean()),
+      limit: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.include_deleted !== undefined && input.includeDeleted === undefined) input.includeDeleted = input.include_deleted;
+      return input;
+    },
+    promptSnippet: "List Codecks Milestones with optional text filtering.",
+    promptGuidelines: [
+      "Use codecks_milestone_list for milestone context instead of raw Codecks milestone queries.",
+      "Use search for visible milestone names like Alpha; no-match results are successful empty lists.",
+      "Use codecks_milestone_get when exactly one milestone must be inspected before editing or planning.",
+    ],
+  },
+  milestone_get: {
+    parameters: Type.Object({
+      milestoneId: Type.Optional(cardRefSchema),
+      title: Type.Optional(Type.String({ description: "Alias for milestoneId when searching by visible milestone name." })),
+      includeDeleted: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.milestone_id !== undefined && input.milestoneId === undefined) input.milestoneId = input.milestone_id;
+      if (input.milestone !== undefined && input.milestoneId === undefined) input.milestoneId = input.milestone;
+      if (input.name !== undefined && input.title === undefined) input.title = input.name;
+      if (input.include_deleted !== undefined && input.includeDeleted === undefined) input.includeDeleted = input.include_deleted;
+      return input;
+    },
+    promptSnippet: "Fetch one Codecks Milestone by ID, account sequence, or name search.",
+    promptGuidelines: [
+      "Use codecks_milestone_get for milestone context and descriptions; avoid raw codecks_query milestone lookups.",
+      "Numeric milestoneId values are milestone account sequences, not card short codes.",
+      "Use codecks_milestone_update only when the user explicitly wants to edit a milestone description.",
+    ],
   },
   milestone_update: {
     parameters: Type.Object({

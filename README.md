@@ -20,6 +20,8 @@ Default tools:
 - `codecks_card_bulk_create`
 - `codecks_card_bulk_update`
 - `codecks_card_set_parent`
+- `codecks_milestone_list`
+- `codecks_milestone_get`
 - `codecks_milestone_update`
 - `codecks_run_list`
 - `codecks_run_get`
@@ -103,10 +105,11 @@ Use `codecks_card_list_missing_effort` before bulk effort updates. It previews e
 
 ## Milestone Tools
 
-Milestones are mostly supported as card metadata and card search/update scopes. `codecks_milestone_update` adds first-class support for editing a milestone description through Codecks' `milestones/update` dispatch endpoint.
+Milestones are supported as card metadata, card search/update scopes, and first-class context helpers.
 
-- `codecks_milestone_update` resolves a milestone by id, account sequence, or name search.
-- It sets `milestones/update.description` to the supplied string.
+- `codecks_milestone_list` lists milestones and can filter by visible name, description, account sequence, or ID. Use it for milestone context instead of raw `codecks_query` milestone probes.
+- `codecks_milestone_get` fetches one milestone by ID, account sequence, or name search and returns its description and URL.
+- `codecks_milestone_update` resolves a milestone by id, account sequence, or name search and edits its description through Codecks' `milestones/update` dispatch endpoint.
 - To clear a milestone description, pass `description: ""` or `clearDescription: true`; Codecks rejects `description: null`.
 
 ## Run Tools

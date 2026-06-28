@@ -7,6 +7,13 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-28
+
+### Added
+
+- Added `codecks_milestone_list` and `codecks_milestone_get` for milestone context lookup without raw milestone queries.
+- Expanded README and `using-codecks` guidance to prefer first-class milestone lookup helpers before milestone edits or planning.
+
 ## [0.5.0] - 2026-06-27
 
 ### Added

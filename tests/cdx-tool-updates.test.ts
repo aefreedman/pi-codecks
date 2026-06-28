@@ -353,6 +353,38 @@ const testCardRunAssignmentDispatchesSprintId = async (tools: ToolModule): Promi
   });
 };
 
+const testMilestoneListReturnsFilteredMilestones = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "milestones");
+    assert.ok(relationKey, `expected milestones query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildMilestonePayload(relationKey, buildMilestone({ name: "Alpha Release" })));
+  }, async () => {
+    const result = await tools.milestone_list.execute({ search: "alpha", format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.total, 1);
+    assert.equal(data.milestones[0].id, MILESTONE_ID);
+    assert.equal(data.milestones[0].name, "Alpha Release");
+    assert.match(String(data.milestones[0].url), /milestones\/84/);
+  });
+};
+
+const testMilestoneGetReturnsDescription = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "milestones");
+    assert.ok(relationKey, `expected milestones query: ${JSON.stringify(query)}`);
+    assert.match(relationKey, /accountSeq/);
+    return jsonResponse(buildMilestonePayload(relationKey));
+  }, async () => {
+    const result = await tools.milestone_get.execute({ milestoneId: 84, format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.milestone.id, MILESTONE_ID);
+    assert.equal(data.milestone.description, "Existing description");
+    assert.match(String(data.milestone.url), /milestones\/84/);
+  });
+};
+
 const testMilestoneUpdateDispatchesDescription = async (tools: ToolModule): Promise<void> => {
   let updatePayload: AnyRecord | undefined;
   await withMockedCodecks(({ path, query, payload }) => {
@@ -498,6 +530,8 @@ await testCardSearchNoMatchesIsSuccessful(tools);
 await testBulkCreateDryRunReportsDuplicateCandidates(tools);
 await testRunUpdateDispatchesSprintUpdate(tools);
 await testRunUpdateClearsCustomLabel(tools);
+await testMilestoneListReturnsFilteredMilestones(tools);
+await testMilestoneGetReturnsDescription(tools);
 await testMilestoneUpdateDispatchesDescription(tools);
 await testMilestoneUpdateClearsDescriptionWithEmptyString(tools);
 await testMilestoneUpdateRequiresDescription(tools);

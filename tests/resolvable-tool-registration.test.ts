@@ -50,6 +50,8 @@ assertProperties("codecks_run_delivered_effort", ["sprintConfig", "user", "userI
 assertProperties("codecks_run_average_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "minDeliveredEffort", "excludeBelowEffort", "includeFilteredRuns", "format"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
+assertProperties("codecks_milestone_list", ["search", "includeDeleted", "limit", "format"]);
+assertProperties("codecks_milestone_get", ["milestoneId", "title", "includeDeleted", "format"]);
 assertProperties("codecks_milestone_update", ["milestoneId", "description", "clearDescription", "format"]);
 assertRequired("codecks_milestone_update", ["milestoneId"]);
 assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "clearRun", "format"]);
@@ -158,6 +160,10 @@ assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive",
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
+assert.equal(prepare("codecks_milestone_list", { include_deleted: true }).includeDeleted, true);
+assert.equal(prepare("codecks_milestone_get", { milestone: "Alpha", include_deleted: true }).milestoneId, "Alpha");
+assert.equal(prepare("codecks_milestone_get", { milestone_id: 84 }).milestoneId, 84);
+assert.equal(prepare("codecks_milestone_get", { name: "Alpha" }).title, "Alpha");
 assert.equal(prepare("codecks_milestone_update", { milestone: "Alpha", clear_description: true }).milestoneId, "Alpha");
 assert.equal(prepare("codecks_milestone_update", { milestone: "Alpha", clear_description: true }).clearDescription, true);
 assert.equal(prepare("codecks_milestone_update", { milestone_id: 84, description: "Desc" }).milestoneId, 84);
@@ -233,6 +239,8 @@ for (const phrase of [
   "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
   "codecks_card_list_missing_effort",
+  "codecks_milestone_list",
+  "codecks_milestone_get",
   "codecks_milestone_update",
   "codecks_run_list",
   "codecks_run_get",
