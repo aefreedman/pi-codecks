@@ -666,6 +666,28 @@ const toStructuredErrorResult = (
     return `## ${action}\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
 };
 
+const parseStructuredToolResult = (value: unknown): Record<string, unknown> | undefined =>
+{
+    const text = String(value ?? "");
+    const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
+    if (!match)
+    {
+        return undefined;
+    }
+
+    try
+    {
+        const parsed = JSON.parse(match[1]) as unknown;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : undefined;
+    }
+    catch
+    {
+        return undefined;
+    }
+};
+
 const toErrorMessage = (error: unknown): string =>
 {
     if (error instanceof Error)
@@ -4751,14 +4773,7 @@ export const card_search = tool({
 
         if (result.error)
         {
-            return toStructuredErrorResult(format, "card-search", "validation_error", result.error);
-        }
-
-        const cards = result.cards ?? [];
-
-        if (cards.length === 0)
-        {
-            return toStructuredErrorResult(format, "card-search", "not_found", "No cards matched the search criteria.", {
+            return toStructuredErrorResult(format, "card-search", "validation_error", result.error, {
                 criteria: {
                     title: args.title ?? null,
                     text: args.text ?? null,
@@ -4769,7 +4784,51 @@ export const card_search = tool({
                     milestone: args.milestone ?? null,
                     includeDone: args.includeDone ?? null,
                 },
+                searchTips: [
+                    "For title/content searches, prefer bare partial text over shell-style globs unless you need an exact wildcard pattern.",
+                    "For deck or milestone filters, pass an exact visible name, account sequence, or ID.",
+                    "Do not combine location=milestone with deck, or location=deck with milestone.",
+                ],
             });
+        }
+
+        const cards = result.cards ?? [];
+
+        if (cards.length === 0)
+        {
+            const criteria = {
+                title: args.title ?? null,
+                text: args.text ?? null,
+                searchIn: args.searchIn ?? null,
+                cardCode: args.cardCode ?? inferredCode ?? null,
+                location: args.location ?? null,
+                deck: args.deck ?? null,
+                milestone: args.milestone ?? null,
+                includeDone: args.includeDone ?? null,
+            };
+            const lines = [
+                "## Card Search Results",
+                "",
+                "Matches: 0",
+                "",
+                "No cards matched the search criteria.",
+                "Tip: prefer bare partial text like `idf` over shell-style globs like `*idf*` unless you need wildcard matching.",
+            ];
+            return toStructuredResult(
+                format,
+                "card-search",
+                lines.join("\n"),
+                {
+                    matches: 0,
+                    cards: [],
+                    criteria,
+                    searchTips: [
+                        "No matches is a successful empty search result, not an API failure.",
+                        "Prefer bare partial text over shell-style globs unless wildcard matching is intentional.",
+                        "If a deck or milestone filter was used, verify the exact visible deck/milestone name or pass an ID.",
+                    ],
+                },
+            );
         }
 
         const lines = [
@@ -6204,7 +6263,7 @@ export const card_create = tool({
                     renderLookupMessage(deckResult, String(deckArg ?? "")),
                 );
             }
-            deckId = deckResult.id;
+            deckId = String(deckResult.id);
         }
 
         let milestoneId: string | number | null = null;
@@ -6220,7 +6279,7 @@ export const card_create = tool({
                     renderLookupMessage(milestoneResult, String(milestoneArg ?? "")),
                 );
             }
-            milestoneId = milestoneResult.id;
+            milestoneId = String(milestoneResult.id);
         }
 
         let assigneeId: string | number;
@@ -6385,6 +6444,246 @@ export const card_create = tool({
             },
             warnings,
         );
+    },
+});
+
+type BulkCreateRecord = {
+    title?: string;
+    content?: string;
+    cardType?: string;
+    deck?: string | number;
+    milestone?: string | number;
+    effort?: number;
+    priority?: string;
+    assigneeId?: string | number;
+    putOnHand?: boolean;
+    parentCardId?: string | number;
+    tags?: string[];
+};
+
+type BulkUpdateRecord = {
+    cardId?: string | number;
+    title?: string;
+    content?: string;
+    cardType?: string;
+    deck?: string | number;
+    milestone?: string | number;
+    assigneeId?: string | number;
+    mode?: "replace" | "append" | "prepend";
+};
+
+const getStructuredOk = (result: unknown): boolean => parseStructuredToolResult(result)?.ok === true;
+
+const getStructuredData = (result: unknown): Record<string, unknown> | undefined =>
+{
+    const payload = parseStructuredToolResult(result);
+    const data = payload?.data;
+    return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+};
+
+const getStructuredError = (result: unknown): Record<string, unknown> | undefined =>
+{
+    const payload = parseStructuredToolResult(result);
+    const error = payload?.error;
+    return error && typeof error === "object" && !Array.isArray(error) ? error as Record<string, unknown> : undefined;
+};
+
+const recordTitle = (record: BulkCreateRecord): string => resolveCardDocument(record.title, record.content).titleLine;
+
+const buildBulkScope = (record: BulkCreateRecord, defaults: BulkCreateRecord): { deck?: string | number; milestone?: string | number } => ({
+    deck: record.deck ?? defaults.deck,
+    milestone: record.milestone ?? defaults.milestone,
+});
+
+const findPotentialDuplicateCards = async (title: string, scope: { deck?: string | number; milestone?: string | number }, limit: number): Promise<Record<string, unknown>[]> =>
+{
+    if (!title.trim())
+    {
+        return [];
+    }
+
+    const result = await fetchCardMatches({
+        title,
+        location: scope.deck !== undefined ? "deck" : (scope.milestone !== undefined ? "milestone" : "any"),
+        deck: scope.deck,
+        milestone: scope.milestone,
+        includeArchived: false,
+        limit,
+    });
+    if (result.error || !result.cards)
+    {
+        return [];
+    }
+    return result.cards
+        .filter((card) => String(card.title ?? "").trim().toLowerCase() === title.trim().toLowerCase())
+        .map((card) => normalizeCardSearchSummary(card));
+};
+
+export const card_bulk_create = tool({
+    description: "Preview or create multiple Codecks cards with duplicate detection and per-card status results.",
+    args: {
+        cards: tool.schema.array(tool.schema.any()).min(1).max(100).describe("Cards to create. Each item may include title, content, deck, milestone, parentCardId, effort, priority, assigneeId, tags, cardType, putOnHand."),
+        deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default deck name or ID for cards without a deck."),
+        milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default milestone name or ID for cards without a milestone."),
+        parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default parent Hero card for cards without a parentCardId."),
+        dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
+        duplicateLimit: tool.schema.number().min(0).max(20).optional().describe("Maximum duplicate candidates to record per card. Defaults to 5."),
+        continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const dryRun = args.dryRun !== false;
+        const duplicateLimit = args.duplicateLimit ?? 5;
+        const continueOnError = args.continueOnError !== false;
+        const records = (args.cards as BulkCreateRecord[]).map((record) => ({ ...record }));
+        const defaults: BulkCreateRecord = {
+            deck: blankToUndefined(args.deck),
+            milestone: blankToUndefined(args.milestone),
+            parentCardId: blankToUndefined(args.parentCardId),
+        };
+        const results: Record<string, unknown>[] = [];
+
+        for (let index = 0; index < records.length; index += 1)
+        {
+            const record = records[index];
+            const title = recordTitle(record);
+            const scope = buildBulkScope(record, defaults);
+            const duplicateCandidates = await findPotentialDuplicateCards(title, scope, duplicateLimit);
+            const planned = {
+                index,
+                title: title || "(untitled)",
+                deck: record.deck ?? defaults.deck ?? null,
+                milestone: record.milestone ?? defaults.milestone ?? null,
+                parentCardId: record.parentCardId ?? defaults.parentCardId ?? null,
+                duplicateCandidates,
+            };
+
+            if (dryRun)
+            {
+                results.push({ ...planned, status: duplicateCandidates.length > 0 ? "duplicate_candidate" : "ready" });
+                continue;
+            }
+
+            const createArgs = {
+                ...record,
+                deck: record.deck ?? defaults.deck,
+                milestone: record.milestone ?? defaults.milestone,
+                parentCardId: record.parentCardId ?? defaults.parentCardId,
+                format: "json" as OutputFormat,
+            };
+            const createResult = await card_create.execute(createArgs);
+            if (getStructuredOk(createResult))
+            {
+                results.push({ ...planned, status: "created", created: getStructuredData(createResult) ?? null });
+                continue;
+            }
+
+            const error = getStructuredError(createResult) ?? { message: String(createResult) };
+            results.push({ ...planned, status: "failed", error });
+            if (!continueOnError)
+            {
+                break;
+            }
+        }
+
+        const created = results.filter((entry) => entry.status === "created").length;
+        const failed = results.filter((entry) => entry.status === "failed").length;
+        const duplicateCandidates = results.filter((entry) => entry.status === "duplicate_candidate").length;
+        const lines = [
+            "## Bulk Card Create",
+            "",
+            `Mode: ${dryRun ? "dry-run" : "apply"}`,
+            `Records: ${records.length}`,
+            `Created: ${created}`,
+            `Failed: ${failed}`,
+            `Duplicate Candidates: ${duplicateCandidates}`,
+            "",
+            ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.title}`),
+        ];
+
+        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), {
+            dryRun,
+            count: records.length,
+            created,
+            failed,
+            duplicateCandidates,
+            results,
+        });
+    },
+});
+
+export const card_bulk_update = tool({
+    description: "Preview or apply multiple Codecks card updates with per-card status results.",
+    args: {
+        updates: tool.schema.array(tool.schema.any()).min(1).max(100).describe("Updates to apply. Each item needs cardId and at least one update field supported by card_update."),
+        dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
+        continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const dryRun = args.dryRun !== false;
+        const continueOnError = args.continueOnError !== false;
+        const records = args.updates as BulkUpdateRecord[];
+        const results: Record<string, unknown>[] = [];
+
+        for (let index = 0; index < records.length; index += 1)
+        {
+            const record = records[index];
+            const updatedFields = ["title", "content", "cardType", "deck", "milestone", "assigneeId"]
+                .filter((field) => (record as Record<string, unknown>)[field] !== undefined);
+            const planned = { index, cardId: record.cardId ?? null, updatedFields, mode: record.mode ?? "replace" };
+            if (record.cardId === undefined || updatedFields.length === 0)
+            {
+                results.push({ ...planned, status: "invalid", error: "Each update needs cardId and at least one update field." });
+                if (!continueOnError) break;
+                continue;
+            }
+
+            if (dryRun)
+            {
+                results.push({ ...planned, status: "ready" });
+                continue;
+            }
+
+            const updateResult = await card_update.execute({ ...record, format: "json" });
+            if (getStructuredOk(updateResult))
+            {
+                results.push({ ...planned, status: "updated", updated: getStructuredData(updateResult) ?? null });
+                continue;
+            }
+
+            const error = getStructuredError(updateResult) ?? { message: String(updateResult) };
+            results.push({ ...planned, status: "failed", error });
+            if (!continueOnError)
+            {
+                break;
+            }
+        }
+
+        const updated = results.filter((entry) => entry.status === "updated").length;
+        const failed = results.filter((entry) => entry.status === "failed" || entry.status === "invalid").length;
+        const lines = [
+            "## Bulk Card Update",
+            "",
+            `Mode: ${dryRun ? "dry-run" : "apply"}`,
+            `Records: ${records.length}`,
+            `Updated: ${updated}`,
+            `Failed: ${failed}`,
+            "",
+            ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.cardId ?? "(missing cardId)"}`),
+        ];
+
+        return toStructuredResult(format, "card-bulk-update", lines.join("\n"), {
+            dryRun,
+            count: records.length,
+            updated,
+            failed,
+            results,
+        });
     },
 });
 
@@ -8577,29 +8876,44 @@ export const card_list_resolvables = tool({
             return true;
         });
 
-        if (filtered.length === 0)
-        {
-            return toStructuredErrorResult(
-                format,
-                "card-list-resolvables",
-                "not_found",
-                "No resolvables matched the search criteria.",
-            );
-        }
-
         const limit = args.limit ?? 50;
         const limited = filtered.slice(0, limit);
         const resolvableIds = limited
             .map((entry) => String(entry.id ?? "").trim())
             .filter((value) => value.length > 0);
 
-        if (resolvableIds.length === 0)
+        if (limited.length === 0 || resolvableIds.length === 0)
         {
-            return toStructuredErrorResult(
+            const url = shortCode ? formatCardUrl(shortCode) : "";
+            const emptyText = [
+                "## Resolvables",
+                "",
+                `- Title: ${card.title ?? "(untitled)"}`,
+                `- ID: ${cardId}`,
+                `- Short Code: ${shortCode || "(n/a)"}`,
+                `- URL: ${url || ""}`,
+                `- Status: ${String(card.status ?? "unknown")}`,
+                `- Derived Status: ${String(card.derivedStatus ?? "unknown")}`,
+                "- Total: 0",
+                "",
+                "No resolvables matched the search criteria.",
+            ].join("\n");
+
+            return toStructuredResult(
                 format,
                 "card-list-resolvables",
-                "not_found",
-                "No resolvables matched the search criteria.",
+                emptyText,
+                {
+                    cardId,
+                    cardStatus: String(card.status ?? "unknown"),
+                    cardDerivedStatus: String(card.derivedStatus ?? "unknown"),
+                    shortCode: shortCode || null,
+                    total: 0,
+                    contexts: [],
+                    contextLabels: [],
+                    includeClosed,
+                    threads: [],
+                },
             );
         }
 

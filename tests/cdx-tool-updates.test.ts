@@ -231,6 +231,55 @@ const testPrivateCardCreationDefaultsOwner = async (tools: ToolModule): Promise<
   });
 };
 
+const testCardCreateCoercesNumericLocationIdsForDispatch = async (tools: ToolModule): Promise<void> => {
+  let createPayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "cards/create") {
+      createPayload = payload;
+      return jsonResponse({ payload: { card: { cardId: CARD_ID, accountSeq: 123 } } });
+    }
+
+    assert.equal(path, "query");
+    if (query!._root) {
+      return jsonResponse({ data: { _root: { loggedInUser: USER_ID }, user: { [USER_ID]: { id: USER_ID, name: "Agent" } } } });
+    }
+
+    const key = directCardKey(query!);
+    assert.ok(key, `expected created card lookup query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildCardPayload(buildCard({ accountSeq: 123 })));
+  }, async () => {
+    const result = await tools.card_create.execute({ title: "Scoped card", content: "Body", deck: 12, milestone: 84, format: "json" });
+    getData(String(result));
+    assert.ok(createPayload, "expected create dispatch");
+    assert.equal(createPayload!.deckId, "12");
+    assert.equal(createPayload!.milestoneId, "84");
+  });
+};
+
+const testCardListResolvablesEmptyIsSuccessful = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query");
+    const key = directCardKey(query!);
+    assert.ok(key, `expected direct card query: ${JSON.stringify(query)}`);
+    return jsonResponse({
+      data: {
+        card: {
+          [CARD_ID]: {
+            ...buildCard(),
+            resolvables: [],
+          },
+        },
+        resolvable: {},
+      },
+    });
+  }, async () => {
+    const result = await tools.card_list_resolvables.execute({ cardId: CARD_ID, contexts: ["review"], format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.total, 0);
+    assert.deepEqual(data.threads, []);
+  });
+};
+
 const testRunUpdateDispatchesSprintUpdate = async (tools: ToolModule): Promise<void> => {
   let updatePayload: AnyRecord | undefined;
   await withMockedCodecks(({ path, query, payload }) => {
@@ -375,6 +424,49 @@ const testMilestoneUpdateRejectsNullDescription = async (tools: ToolModule): Pro
   });
 };
 
+const testCardSearchNoMatchesIsSuccessful = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "cards");
+    assert.ok(relationKey, `expected cards relation query: ${JSON.stringify(query)}`);
+    return jsonResponse({
+      data: {
+        _root: { account: ACCOUNT_ID },
+        account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [relationKey]: [] } },
+        card: {},
+      },
+    });
+  }, async () => {
+    const result = await tools.card_search.execute({ title: "missing", format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.matches, 0);
+    assert.deepEqual(data.cards, []);
+    assert.ok(Array.isArray(data.searchTips), "expected search tips for no-match result");
+  });
+};
+
+const testBulkCreateDryRunReportsDuplicateCandidates = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "cards");
+    assert.ok(relationKey, `expected cards relation query: ${JSON.stringify(query)}`);
+    const card = buildCard({ title: "Duplicate title", accountSeq: 77 });
+    return jsonResponse({
+      data: {
+        _root: { account: ACCOUNT_ID },
+        account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [relationKey]: [CARD_ID] } },
+        card: { [CARD_ID]: card },
+      },
+    });
+  }, async () => {
+    const result = await tools.card_bulk_create.execute({ cards: [{ title: "Duplicate title", content: "Body" }], dryRun: true, format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.dryRun, true);
+    assert.equal(data.duplicateCandidates, 1);
+    assert.equal(data.results[0].status, "duplicate_candidate");
+  });
+};
+
 const testCardRunClearDispatchesNullSprintId = async (tools: ToolModule): Promise<void> => {
   let cardUpdatePayload: AnyRecord | undefined;
   await withMockedCodecks(({ path, query, payload }) => {
@@ -400,6 +492,10 @@ const testCardRunClearDispatchesNullSprintId = async (tools: ToolModule): Promis
 const tools = await loadTools();
 await testStatusUpdateBlocksOpenReview(tools);
 await testPrivateCardCreationDefaultsOwner(tools);
+await testCardCreateCoercesNumericLocationIdsForDispatch(tools);
+await testCardListResolvablesEmptyIsSuccessful(tools);
+await testCardSearchNoMatchesIsSuccessful(tools);
+await testBulkCreateDryRunReportsDuplicateCandidates(tools);
 await testRunUpdateDispatchesSprintUpdate(tools);
 await testRunUpdateClearsCustomLabel(tools);
 await testMilestoneUpdateDispatchesDescription(tools);

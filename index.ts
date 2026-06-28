@@ -88,6 +88,8 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_get_formatted",
   "card_get_vision_board",
   "card_create",
+  "card_bulk_create",
+  "card_bulk_update",
   "card_set_parent",
   "milestone_update",
   "run_list",
@@ -300,6 +302,53 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       return input;
     },
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  card_bulk_create: {
+    parameters: Type.Object({
+      cards: Type.Array(Type.Any(), { minimum: 1, maximum: 100, description: "Cards to create. Use dryRun=true first for CSV/import workflows." }),
+      deck: Type.Optional(cardRefSchema),
+      milestone: Type.Optional(cardRefSchema),
+      parentCardId: Type.Optional(cardRefSchema),
+      dryRun: Type.Optional(Type.Boolean()),
+      duplicateLimit: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
+      continueOnError: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.dry_run !== undefined && input.dryRun === undefined) input.dryRun = input.dry_run;
+      if (input.duplicate_limit !== undefined && input.duplicateLimit === undefined) input.duplicateLimit = input.duplicate_limit;
+      if (input.continue_on_error !== undefined && input.continueOnError === undefined) input.continueOnError = input.continue_on_error;
+      if (input.parent_card_id !== undefined && input.parentCardId === undefined) input.parentCardId = input.parent_card_id;
+      return input;
+    },
+    promptSnippet: "Preview or create multiple Codecks cards with duplicate detection and per-card status output.",
+    promptGuidelines: [
+      ...CARD_REFERENCE_WRITE_GUIDELINES,
+      "Use codecks_card_bulk_create for CSV/import-style card creation after mapping rows into card objects.",
+      "Run codecks_card_bulk_create with dryRun=true before applying creates, especially for imports or bulk deck/milestone work.",
+      "Review duplicateCandidates from codecks_card_bulk_create before rerunning with dryRun=false.",
+    ],
+  },
+  card_bulk_update: {
+    parameters: Type.Object({
+      updates: Type.Array(Type.Any(), { minimum: 1, maximum: 100, description: "Card updates. Each item needs cardId and update fields." }),
+      dryRun: Type.Optional(Type.Boolean()),
+      continueOnError: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      if (input.dry_run !== undefined && input.dryRun === undefined) input.dryRun = input.dry_run;
+      if (input.continue_on_error !== undefined && input.continueOnError === undefined) input.continueOnError = input.continue_on_error;
+      return input;
+    },
+    promptSnippet: "Preview or apply multiple Codecks card updates with per-card status output.",
+    promptGuidelines: [
+      ...CARD_REFERENCE_WRITE_GUIDELINES,
+      "Use codecks_card_bulk_update for CSV/import-style card updates after mapping rows into card update objects.",
+      "Run codecks_card_bulk_update with dryRun=true before applying broad tracker edits.",
+    ],
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,

@@ -337,9 +337,10 @@ const cards: MockCard[] = [
   const text = String(await core.card_search.execute({ deck: "Dev", format: "json" }));
   const payload = parseStructuredJson(text);
 
-  assert.equal(payload.ok, false);
+  assert.equal(payload.ok, true);
   assert.equal(payload.action, "card-search");
-  assert.equal(payload.error.category, "not_found");
+  assert.equal(payload.data.matches, 0);
+  assert.deepEqual(payload.data.cards, []);
 }
 
 console.log("Codecks card search preview tests passed");

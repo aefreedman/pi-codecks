@@ -7,6 +7,24 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-27
+
+### Added
+
+- Added `codecks_card_bulk_create` for dry-run-first bulk card creation with duplicate-candidate detection and per-card apply results.
+- Added `codecks_card_bulk_update` for dry-run-first bulk tracker updates with per-card apply results.
+
+### Changed
+
+- Made `codecks_card_search` return successful empty results for no-match searches and include search tips for wildcard/deck/milestone friction.
+
+## [0.4.1] - 2026-06-27
+
+### Fixed
+
+- Made `codecks_card_list_resolvables` return a successful empty result when a card has no matching threads instead of reporting a `not_found` tool error.
+- Coerced numeric deck and milestone references to string IDs in `codecks_card_create` dispatch payloads to match Codecks API expectations.
+
 ## [0.4.0] - 2026-06-25
 
 ### Added

@@ -11,6 +11,8 @@ allowed-tools:
   - codecks_card_get_formatted
   - codecks_card_get_vision_board
   - codecks_card_create
+  - codecks_card_bulk_create
+  - codecks_card_bulk_update
   - codecks_card_set_parent
   - codecks_milestone_update
   - codecks_run_list
@@ -75,6 +77,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
 - Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons; apply effort separately only after explicit user approval.
+- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the per-card preview and duplicate candidates, then apply only after approval.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
 ## Workflow semantics
@@ -135,6 +138,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - `codecks_card_search` excludes archived/deleted cards by default; set `includeArchived=true` only when explicitly needed.
 - `codecks_card_search` infers `location=deck` or `location=milestone` when `deck` or `milestone` is supplied without an explicit location.
 - `codecks_card_search.title` supports partial and glob-style `*`/`?` matching; use `text` + `searchIn: "title_or_content"` or `"content"` when searching card bodies.
+- No-match `codecks_card_search` results are successful empty searches; inspect returned tips/criteria instead of treating them as tool failures.
 - For open/undone search requests, use `codecks_card_search` with `includeDone=false` instead of post-filtering done cards manually.
 - `codecks_card_list_missing_effort` is preview-only and is the preferred first step for bulk effort-estimation workflows.
 - If raw dispatch is required for `cards/update`, `sessionId` must be a UUID or omitted so the tool auto-generates one.
