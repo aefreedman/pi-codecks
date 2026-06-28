@@ -7,6 +7,12 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-28
+
+### Fixed
+
+- Reinterpret invalid `location` strings on card lookup/search tools as deck names when no explicit deck or milestone was provided, matching common agent intent for visible deck names like `Design Docs` or `Vertical Slice`.
+
 ## [0.5.1] - 2026-06-28
 
 ### Added

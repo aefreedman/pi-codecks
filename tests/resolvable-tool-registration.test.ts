@@ -145,6 +145,17 @@ assert.equal(prepare("codecks_card_get", { card_id: "$3cv", include_archived: tr
 assert.equal(prepare("codecks_card_get", { id: "$111", cardId: "$222" }).cardId, "$222");
 assert.equal(prepare("codecks_card_get", { card_id_or_code: "$333" }).cardId, "$333");
 assert.equal(prepare("codecks_card_get", { short_code: "$444" }).cardId, "$444");
+assert.deepEqual(
+  prepare("codecks_card_search", { title: "Meeting prep", location: "Design Docs", format: "json" }),
+  { title: "Meeting prep", deck: "Design Docs", format: "json" },
+  "card_search should reinterpret invalid location strings as deck names",
+);
+assert.deepEqual(
+  prepare("codecks_card_search", { location: "milestone", milestone: "Alpha", format: "json" }),
+  { location: "milestone", milestone: "Alpha", format: "json" },
+  "valid card_search locations should be preserved",
+);
+assert.equal(prepare("codecks_card_get", { title: "Spec", location: "Production" }).deck, "Production");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
 assert.equal(prepare("codecks_run_get", { run_id: 91 }).runId, 91);

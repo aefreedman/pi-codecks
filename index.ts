@@ -17,6 +17,7 @@ type ToolConfig = {
 const ANY_PARAMETERS = Type.Object({}, { additionalProperties: true });
 const outputFormatEnum = Type.Union([Type.Literal("text"), Type.Literal("json")]);
 const cardRefSchema = Type.Union([Type.String(), Type.Number()]);
+const LOCATION_VALUES = ["any", "deck", "milestone", "hand", "bookmarks"] as const;
 const locationEnum = Type.Union([
   Type.Literal("any"),
   Type.Literal("deck"),
@@ -158,6 +159,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
       if (input.card_code !== undefined && input.cardCode === undefined) input.cardCode = input.card_code;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      normalizeCardLocationAliases(input);
       return input;
     },
     promptSnippet: "Search Codecks cards by title, card code, and optional location filters.",
@@ -187,6 +189,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       if (input.include_done !== undefined && input.includeDone === undefined) input.includeDone = input.include_done;
       if (input.include_excluded !== undefined && input.includeExcluded === undefined) input.includeExcluded = input.include_excluded;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      normalizeCardLocationAliases(input);
       return input;
     },
     promptSnippet: "Preview Codecks cards in a scope that are missing effort and eligible for estimation.",
@@ -213,6 +216,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       applyCardIdAliases(input);
       if (input.card_id_or_code !== undefined && input.cardId === undefined) input.cardId = input.card_id_or_code;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      normalizeCardLocationAliases(input);
       return input;
     },
     promptSnippet: "Fetch one Codecks card as structured data for agent reasoning.",
@@ -244,6 +248,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       if (input.shortCode !== undefined && input.cardId === undefined) input.cardId = input.shortCode;
       if (input.short_code !== undefined && input.cardId === undefined) input.cardId = input.short_code;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
+      normalizeCardLocationAliases(input);
       return input;
     },
     promptSnippet: "Fetch one Codecks card by cardId or by title/location and return a formatted summary.",
@@ -782,6 +787,16 @@ function normalizeOutputFormatAlias(input: Record<string, unknown>): Record<stri
     input.format = "text";
   }
   return input;
+}
+
+function normalizeCardLocationAliases(input: Record<string, unknown>): void {
+  if (typeof input.location !== "string") return;
+  const location = input.location.trim();
+  if (!location) return;
+  if ((LOCATION_VALUES as readonly string[]).includes(location)) return;
+  if (input.deck !== undefined || input.milestone !== undefined) return;
+  input.deck = location;
+  delete input.location;
 }
 
 function applyCardIdAliases(input: Record<string, unknown>): void {
