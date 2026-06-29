@@ -174,6 +174,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       "For Codecks retrieval, prefer codecks_card_get when the agent needs structured card data, codecks_card_get_formatted when presenting details to a user, and codecks_card_search when you need disambiguation.",
       "When deck or milestone is supplied without location, the tool infers the matching scope instead of running a broad search.",
+      "Deck and milestone filters may be combined for intersection searches, for example Alpha-milestone cards in the Dev deck.",
       "Search results use compact output by default to protect session context; use outputMode='counts' for bulk/aggregate analysis and outputMode='detailed' only when every returned card row is required.",
       "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns them.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",

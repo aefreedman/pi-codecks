@@ -142,6 +142,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Bare numeric identifiers like `387` should be passed as `cardId: "387"` or `cardId: 387` and treated as short codes.
 - `codecks_card_search` excludes archived/deleted cards by default; set `includeArchived=true` only when explicitly needed.
 - `codecks_card_search` infers `location=deck` or `location=milestone` when `deck` or `milestone` is supplied without an explicit location.
+- `codecks_card_search` may combine `deck` and `milestone` to find the intersection, for example Alpha-milestone cards in the Dev deck.
 - `codecks_card_search.title` supports partial and glob-style `*`/`?` matching; use `text` + `searchIn: "title_or_content"` or `"content"` when searching card bodies.
 - `codecks_card_search` uses compact output by default to avoid context blowups on broad searches. For bulk scope/data analysis, prefer `outputMode: "counts"`; use `outputMode: "detailed"` only when every returned card row is required.
 - No-match `codecks_card_search` results are successful empty searches; inspect returned tips/criteria instead of treating them as tool failures.

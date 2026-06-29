@@ -310,10 +310,11 @@ const cards: MockCard[] = [
 
 {
   installFetchMock(cards);
-  const conflictText = String(await core.card_search.execute({ deck: "Dev", milestone: "Alpha", format: "json" }));
-  const conflict = parseStructuredJson(conflictText);
-  assert.equal(conflict.ok, false);
-  assert.equal(conflict.error.category, "validation_error");
+  const intersectionText = String(await core.card_search.execute({ location: "milestone", deck: "Dev", milestone: "Alpha", format: "json" }));
+  const intersection = parseStructuredJson(intersectionText);
+  assert.equal(intersection.ok, true);
+  assert.equal(intersection.data.matches, 1);
+  assert.equal(intersection.data.cards[0].title, "Eligible card");
 
   const ignoredText = String(await core.card_list_missing_effort.execute({ location: "hand", deck: "Dev", format: "json" }));
   const ignored = parseStructuredJson(ignoredText);

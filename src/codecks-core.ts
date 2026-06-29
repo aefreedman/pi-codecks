@@ -4162,7 +4162,7 @@ const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unk
     {
         if (hasDeck && hasMilestone)
         {
-            return { error: "Provide either deck or milestone for card search scope, not both." };
+            return "any";
         }
 
         if (hasDeck)
@@ -4174,16 +4174,6 @@ const inferCardLocationScope = (args: { location?: CardLocationScope; deck?: unk
         {
             return "milestone";
         }
-    }
-
-    if (requestedLocation === "deck" && hasMilestone)
-    {
-        return { error: "location=deck cannot be combined with milestone. Use location=milestone or remove milestone." };
-    }
-
-    if (requestedLocation === "milestone" && hasDeck)
-    {
-        return { error: "location=milestone cannot be combined with deck. Use location=deck or remove deck." };
     }
 
     if (["hand", "bookmarks"].includes(requestedLocation) && (hasDeck || hasMilestone))
@@ -4241,15 +4231,8 @@ const relationMatchesLookupId = (value: unknown, lookupId: string | number): boo
 };
 
 
-const cardMatchesClientScope = (card: CodecksEntity, scope: ClientCardScopeFilter | undefined): boolean =>
-{
-    if (!scope)
-    {
-        return true;
-    }
-
-    return relationMatchesLookupId(card[scope.type], scope.id);
-};
+const cardMatchesClientScopes = (card: CodecksEntity, scopes: ClientCardScopeFilter[]): boolean =>
+    scopes.every((scope) => relationMatchesLookupId(card[scope.type], scope.id));
 
 type TextSearchMatcher = {
     raw: string;
@@ -4501,7 +4484,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         .filter((card) => cardMatchesText(card, titleMatcher, "title"))
         .filter((card) => cardMatchesText(card, textMatcher, searchIn));
     const filters: Record<string, unknown> = {};
-    let clientScopeFilter: ClientCardScopeFilter | undefined;
+    const clientScopeFilters: ClientCardScopeFilter[] = [];
     const inferredLocation = inferCardLocationScope(args);
     if (typeof inferredLocation !== "string")
     {
@@ -4539,32 +4522,34 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
         filters.title = { op: "contains", value: titleMatcher.backendContains };
     }
 
-    if (location === "deck")
+    if (location === "deck" && args.deck === undefined)
     {
-        if (args.deck === undefined)
-        {
-            return { error: "Provide a deck name or ID for location=deck." };
-        }
+        return { error: "Provide a deck name or ID for location=deck." };
+    }
+
+    if (location === "milestone" && args.milestone === undefined)
+    {
+        return { error: "Provide a milestone name or ID for location=milestone." };
+    }
+
+    if (args.deck !== undefined)
+    {
         const deckResult = await resolveDeck(args.deck);
         if (deckResult.kind !== "resolved")
         {
             return { error: renderLookupMessage(deckResult, String(args.deck ?? "")) };
         }
-        clientScopeFilter = { type: "deck", id: deckResult.id };
+        clientScopeFilters.push({ type: "deck", id: deckResult.id });
     }
 
-    if (location === "milestone")
+    if (args.milestone !== undefined)
     {
-        if (args.milestone === undefined)
-        {
-            return { error: "Provide a milestone name or ID for location=milestone." };
-        }
         const milestoneResult = await resolveMilestone(args.milestone);
         if (milestoneResult.kind !== "resolved")
         {
             return { error: renderLookupMessage(milestoneResult, String(args.milestone ?? "")) };
         }
-        clientScopeFilter = { type: "milestone", id: milestoneResult.id };
+        clientScopeFilters.push({ type: "milestone", id: milestoneResult.id });
     }
 
     if (location === "hand")
@@ -4674,7 +4659,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
     }
 
     const limit = args.limit ?? 20;
-    const fullScanNeeded = Boolean(clientScopeFilter || titleMatcher || textMatcher || needsContent);
+    const fullScanNeeded = Boolean(clientScopeFilters.length > 0 || titleMatcher || textMatcher || needsContent);
     const queryLimit = fullScanNeeded ? 3000 : limit;
     filters.$order = "-lastUpdatedAt";
     filters.$limit = queryLimit;
@@ -4693,7 +4678,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<{ error?: strin
 
     const payload = await runQuery(query);
     const scopedCards = extractCardsFromPayload(payload, "cards")
-        .filter((card) => cardMatchesClientScope(card, clientScopeFilter));
+        .filter((card) => cardMatchesClientScopes(card, clientScopeFilters));
     const cards = filterCards(scopedCards);
     return { cards: cards.slice(0, limit), rawCount: cards.length, renderContext };
 };
@@ -4828,7 +4813,7 @@ export const card_search = tool({
                 searchTips: [
                     "For title/content searches, prefer bare partial text over shell-style globs unless you need an exact wildcard pattern.",
                     "For deck or milestone filters, pass an exact visible name, account sequence, or ID.",
-                    "Do not combine location=milestone with deck, or location=deck with milestone.",
+                    "Deck and milestone filters may be combined for intersection searches; hand/bookmark scopes cannot be combined with deck or milestone filters.",
                 ],
             });
         }

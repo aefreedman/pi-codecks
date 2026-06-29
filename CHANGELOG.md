@@ -7,6 +7,12 @@ and this project follows semantic versioning for public package releases.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-06-29
+
+### Changed
+
+- Allow `codecks_card_search` deck and milestone filters to be combined for intersection searches such as Alpha-milestone cards in the Dev deck.
+
 ## [0.5.3] - 2026-06-28
 
 ### Changed
