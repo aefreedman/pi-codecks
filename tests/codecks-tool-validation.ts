@@ -2201,8 +2201,10 @@ const run = async (): Promise<number> => {
 };
 
 run()
-  .then((code) => process.exit(code))
+  .then((code) => {
+    process.exitCode = code;
+  })
   .catch((error) => {
     fail(`unexpected error: ${(error as Error).message}`);
-    process.exit(1);
+    process.exitCode = 1;
   });

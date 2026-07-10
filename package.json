@@ -1,7 +1,7 @@
 {
   "name": "@aefree/pi-codecks",
   "private": true,
-  "version": "0.5.4",
+  "version": "0.5.5",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -23,8 +23,7 @@
     "test:integration": "npx --yes tsx tests/codecks-tool-validation.ts"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "description": "Pi tools, skills, and prompts for Codecks workflows.",
