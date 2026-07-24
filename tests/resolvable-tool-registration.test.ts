@@ -48,6 +48,7 @@ assertProperties("codecks_run_list", ["title", "includeDeleted", "includeComplet
 assertProperties("codecks_run_get", ["runId", "title", "format"]);
 assertProperties("codecks_run_delivered_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "includeCurrentStats", "format"]);
 assertProperties("codecks_run_average_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "minDeliveredEffort", "excludeBelowEffort", "includeFilteredRuns", "format"]);
+assertProperties("codecks_velocity_report", ["sprintConfig", "user", "userId", "rosterPath", "fromDate", "toDate", "completedRuns", "excludeLabels", "csvPath", "summaryMarkdownPath", "format"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
 assertProperties("codecks_milestone_list", ["search", "includeDeleted", "limit", "format"]);
@@ -168,6 +169,13 @@ assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive",
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).completedRuns, 8);
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).minDeliveredEffort, 2);
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).includeFilteredRuns, false);
+assert.equal(prepare("codecks_velocity_report", { sprint_config: "dive", roster_path: "roster.json", from_date: "2026-02-02", to_date: "2026-07-19", exclude_labels: ["vacation"], csv_path: "out.csv", summary_markdown_path: "out.md" }).sprintConfig, "dive");
+assert.equal(prepare("codecks_velocity_report", { roster_path: "roster.json" }).rosterPath, "roster.json");
+assert.equal(prepare("codecks_velocity_report", { from_date: "2026-02-02" }).fromDate, "2026-02-02");
+assert.equal(prepare("codecks_velocity_report", { to_date: "2026-07-19" }).toDate, "2026-07-19");
+assert.equal(prepare("codecks_velocity_report", { exclude_labels: ["vacation"] }).excludeLabels[0], "vacation");
+assert.equal(prepare("codecks_velocity_report", { csv_path: "out.csv" }).csvPath, "out.csv");
+assert.equal(prepare("codecks_velocity_report", { summary_markdown_path: "out.md" }).summaryMarkdownPath, "out.md");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
@@ -241,7 +249,11 @@ assert.ok(decisionFixture.includes("codecks_card_add_comment only when explicitl
 
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../skills/using-codecks/SKILL.md", import.meta.url), "utf8");
-const docs = `${readme}\n${skill}`;
+const velocitySkill = readFileSync(new URL("../skills/codecks-velocity-reporting/SKILL.md", import.meta.url), "utf8");
+assert.doesNotMatch(skill, /codecks_velocity_report/);
+assert.match(velocitySkill, /name: codecks-velocity-reporting/);
+assert.match(velocitySkill, /codecks_velocity_report/);
+const docs = `${readme}\n${skill}\n${velocitySkill}`;
 for (const phrase of [
   "resolvableId",
   "cardId",

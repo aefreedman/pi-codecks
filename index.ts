@@ -100,6 +100,7 @@ const DEFAULT_CODECKS_EXPORTS = [
   "run_get",
   "run_delivered_effort",
   "run_average_effort",
+  "velocity_report",
   "run_update",
   "card_update_run",
   "card_add_attachment",
@@ -518,6 +519,39 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       "Use Run-facing language for users; Codecks API fields use sprint/sprints internally.",
       "This tool uses cached Run finishStats and does not query every card for effort math.",
       "minDeliveredEffort defaults to 1, which filters out zero-effort vacation/break Runs by default.",
+    ],
+  },
+  velocity_report: {
+    parameters: Type.Object({
+      sprintConfig: Type.Optional(Type.String({ description: "Optional Run/Sprint config name/id filter, for example 'dive'." })),
+      user: Type.Optional(Type.String({ description: "Optional single user name. Ignored when rosterPath is supplied." })),
+      userId: Type.Optional(Type.String({ description: "Optional exact single user id." })),
+      rosterPath: Type.Optional(Type.String({ description: "Optional JSON or simple-YAML roster file path." })),
+      fromDate: Type.Optional(Type.String({ description: "Include completed Runs starting on or after this ISO date." })),
+      toDate: Type.Optional(Type.String({ description: "Include completed Runs starting on or before this ISO date." })),
+      completedRuns: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
+      excludeLabels: Type.Optional(Type.Array(Type.String({ description: "Case-insensitive Run-label substring to exclude." }))),
+      csvPath: Type.Optional(Type.String({ description: "Optional normalized CSV output path." })),
+      summaryMarkdownPath: Type.Optional(Type.String({ description: "Optional Markdown summary output path." })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyRunStatsAliases(input);
+      if (input.roster_path !== undefined && input.rosterPath === undefined) input.rosterPath = input.roster_path;
+      if (input.from_date !== undefined && input.fromDate === undefined) input.fromDate = input.from_date;
+      if (input.to_date !== undefined && input.toDate === undefined) input.toDate = input.to_date;
+      if (input.exclude_labels !== undefined && input.excludeLabels === undefined) input.excludeLabels = input.exclude_labels;
+      if (input.csv_path !== undefined && input.csvPath === undefined) input.csvPath = input.csv_path;
+      if (input.summary_markdown_path !== undefined && input.summaryMarkdownPath === undefined) input.summaryMarkdownPath = input.summary_markdown_path;
+      return input;
+    },
+    promptSnippet: "Build a statistically grounded Codecks velocity report with independent CSV and Markdown summary output options.",
+    promptGuidelines: [
+      "Keep separate Run configurations separate unless the user explicitly asks to combine them.",
+      "Exclude the current Run by default and name leave/break label exclusions in the report.",
+      "Use rosterPath for an explicit project roster instead of inferring all team members from recent assignees.",
+      "csvPath and summaryMarkdownPath are independent; request only the output artifacts the user wants.",
     ],
   },
   run_update: {

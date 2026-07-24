@@ -27,6 +27,7 @@ Default tools:
 - `codecks_run_get`
 - `codecks_run_delivered_effort`
 - `codecks_run_average_effort`
+- `codecks_velocity_report`
 - `codecks_run_update`
 - `codecks_card_update_run`
 - `codecks_card_add_attachment`
@@ -120,6 +121,7 @@ Codecks user-facing “Runs” use the underlying Sprint API model. Pi exposes R
 - `codecks_run_get` fetches one run by run id, sprint id, account sequence, or label search.
 - `codecks_run_delivered_effort` reports cached delivered effort from Run `stats.finishStats`, optionally scoped by sprint config and user, without querying every card.
 - `codecks_run_average_effort` averages cached delivered effort across completed Runs and supports low-effort filtering; `minDeliveredEffort` defaults to `1` to skip zero-effort vacation/break Runs.
+- `codecks_velocity_report` builds per-person or roster-based historical velocity reports from cached `stats.finishStats`. It calculates mean, P25, P50, P75, sample standard deviation, variance, and fixed biweekly totals. Its `csvPath` and `summaryMarkdownPath` outputs are independent. Use `rosterPath` with JSON or simple YAML containing `{ "name", "userId", "fromDate"?, "toDate"? }` entries (or a `members` list) to avoid inferring team membership from recent assignees. Multi-week Runs are evenly allocated across their calendar weeks, and label exclusions default to `vacation`, `holiday`, `break`, and `leave`.
 - `codecks_run_update` edits a run custom label via `sprints/updateSprint.name` and a run description via `sprints/updateSprint.description`.
 - `codecks_card_update_run` assigns a card to a run with `cards/update` `sprintId`, or removes it with `sprintId: null`.
 
@@ -158,7 +160,8 @@ Example:
 ## Included prompt and skill
 
 - prompt: `/codecks-inbox` - summarize the logged-in user's attention-worthy resolvables
-- skill: `using-codecks` - Codecks workflow guidance for Pi agents
+- skill: `using-codecks` - General Codecks workflow guidance for Pi agents.
+- skill: `codecks-velocity-reporting` - Dedicated historical velocity-report methodology and roster/output guidance.
 
 ## Resolvable replies and review follow-ups
 

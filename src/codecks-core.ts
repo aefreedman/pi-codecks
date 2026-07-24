@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
-import { basename, extname, isAbsolute, resolve } from "path";
+import { basename, dirname, extname, isAbsolute, resolve } from "path";
+import { buildBiweeklyPeriods, buildWeeklyPeriods, escapeCsv, summarizeVelocityPeriods, type VelocityPeriod, type VelocityRun } from "./velocity-report";
 
 type CodecksConfig = {
     account: string;
@@ -792,7 +793,7 @@ const truncateStructuredValue = (
         }
 
         return {
-            value: `${sanitized.slice(0, limits.maxStringLength)}…[truncated ${sanitized.length - limits.maxStringLength} chars]`,
+            value: `${sanitized.slice(0, limits.maxStringLength)}â€¦[truncated ${sanitized.length - limits.maxStringLength} chars]`,
             truncated: true,
         };
     }
@@ -2285,7 +2286,7 @@ const getRunDateRange = (run: CodecksEntity): string =>
     const end = String(run.endDate ?? "").trim();
     if (start && end)
     {
-        return `${start} – ${end}`;
+        return `${start} â€“ ${end}`;
     }
     return start || end || "";
 };
@@ -2299,7 +2300,7 @@ const getRunLabel = (run: CodecksEntity): string =>
     }
     const accountSeq = getRunAccountSeq(run);
     const dateRange = getRunDateRange(run);
-    return [accountSeq !== undefined ? `Run ${accountSeq}` : "Run", dateRange].filter(Boolean).join(" • ");
+    return [accountSeq !== undefined ? `Run ${accountSeq}` : "Run", dateRange].filter(Boolean).join(" â€¢ ");
 };
 
 const normalizeRunSummary = (run: CodecksEntity): Record<string, unknown> =>
@@ -3802,9 +3803,9 @@ const formatCardLine = (card: CodecksEntity): string =>
     const accountSeq = card.accountSeq as number | undefined;
     const shortCode = formatShortCode(accountSeq);
     const id = shortCode || (card.cardId as string | number | undefined) || accountSeq || "";
-    const tagsPart = tags.length > 0 ? ` • Tags: ${tags.join(", ")}` : "";
+    const tagsPart = tags.length > 0 ? ` â€¢ Tags: ${tags.join(", ")}` : "";
     const statePart = cardType === "documentation" ? "Type: Documentation" : `Status: ${status}`;
-    return `${title} — ${statePart} • Deck: ${deck} • Milestone: ${milestone} • Assignee: ${assignee}${tagsPart} • Updated: ${updated} • ID: ${id}`;
+    return `${title} â€” ${statePart} â€¢ Deck: ${deck} â€¢ Milestone: ${milestone} â€¢ Assignee: ${assignee}${tagsPart} â€¢ Updated: ${updated} â€¢ ID: ${id}`;
 };
 
 const extractEntitiesFromPayload = (
@@ -5047,7 +5048,7 @@ export const card_list_missing_effort = tool({
             lines.push("", "Excluded:", ...excluded.map((entry) => {
                 const shortCode = String(entry.summary.shortCode ?? entry.summary.cardId ?? "n/a");
                 const title = String(entry.summary.title ?? "(untitled)");
-                return `- ${shortCode} ${title} — ${entry.exclusionReasons.join(", ")}`;
+                return `- ${shortCode} ${title} â€” ${entry.exclusionReasons.join(", ")}`;
             }));
         }
 
@@ -5216,7 +5217,7 @@ export const card_list_done_within_timeframe = tool({
                     .filter((value) => Boolean(value))
                     .join("/");
                 const visibility = entry.currentVisibility ? `, visibility=${entry.currentVisibility}` : "";
-                return `${index + 1}. ${formatDateTime(entry.doneAt)} • ${code} • ${entry.title} • ${entry.fromStatus} -> ${entry.toStatus} • by ${actor}${currentState ? ` • current=${currentState}${visibility}` : ""}`;
+                return `${index + 1}. ${formatDateTime(entry.doneAt)} â€¢ ${code} â€¢ ${entry.title} â€¢ ${entry.fromStatus} -> ${entry.toStatus} â€¢ by ${actor}${currentState ? ` â€¢ current=${currentState}${visibility}` : ""}`;
             }),
         ];
 
@@ -5943,10 +5944,10 @@ export const card_get_formatted = tool({
                 const selfTag = code === resolvedCode ? ", self" : "";
                 if (isDocumentationEntity)
                 {
-                    return `- $${code} — ${ref.title ?? "(untitled)"}${selfTag ? ` (${selfTag.slice(2)})` : ""}`;
+                    return `- $${code} â€” ${ref.title ?? "(untitled)"}${selfTag ? ` (${selfTag.slice(2)})` : ""}`;
                 }
 
-                return `- $${code} — ${ref.title ?? "(untitled)"} (status: ${refStatus}${selfTag})`;
+                return `- $${code} â€” ${ref.title ?? "(untitled)"} (status: ${refStatus}${selfTag})`;
             });
 
             lines.push("", "References", "----------", ...refLines);
@@ -6873,7 +6874,7 @@ const renderMilestoneListText = (milestones: CodecksEntity[], heading: string): 
         "",
         ...milestones.map((milestone) => {
             const accountSeq = getMilestoneAccountSeq(milestone);
-            const url = accountSeq !== undefined ? ` — ${formatMilestoneUrl(accountSeq)}` : "";
+            const url = accountSeq !== undefined ? ` â€” ${formatMilestoneUrl(accountSeq)}` : "";
             const deleted = milestone.isDeleted === true ? " [deleted]" : "";
             return `- #${accountSeq ?? "?"} ${getMilestoneLabel(milestone)}${deleted}${url}`;
         }),
@@ -7192,6 +7193,291 @@ const fetchDeliveredEffortEntries = async (args: {
 const summarizeDeliveredEntries = (entries: RunDeliveredEffortEntry[]): RunDoneStats =>
     entries.reduce((total, entry) => addDoneStats(total, entry.delivered), zeroDoneStats());
 
+type VelocityRosterMember = {
+    name: string;
+    userId: string;
+    fromDate?: string;
+    toDate?: string;
+};
+
+type VelocityReportSubject = {
+    name: string;
+    userId?: string;
+    rawRuns: Array<RunDeliveredEffortEntry & { includedInBaseline: boolean; exclusionReason?: string }>;
+    weekly: VelocityPeriod[];
+    biweekly: VelocityPeriod[];
+    summary: ReturnType<typeof summarizeVelocityPeriods>;
+};
+
+const DEFAULT_VELOCITY_EXCLUSION_LABELS = ["vacation", "holiday", "break", "leave"];
+
+const parseSimpleYamlVelocityRoster = (raw: string): unknown =>
+{
+    const members: Array<Record<string, string>> = [];
+    let current: Record<string, string> | undefined;
+    for (const sourceLine of raw.split(/\r?\n/))
+    {
+        const line = sourceLine.replace(/\s+#.*$/, "").trim();
+        if (!line || line === "members:") continue;
+        const item = line.match(/^-\s+([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
+        const property = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
+        if (item)
+        {
+            current = { [item[1]]: item[2].replace(/^['"]|['"]$/g, "") };
+            members.push(current);
+            continue;
+        }
+        if (property && current)
+        {
+            current[property[1]] = property[2].replace(/^['"]|['"]$/g, "");
+            continue;
+        }
+        throw new Error("The YAML velocity roster supports only a members list with name, userId, fromDate, and toDate fields.");
+    }
+    return { members };
+};
+
+const parseVelocityRoster = async (rosterPath: unknown): Promise<VelocityRosterMember[]> =>
+{
+    if (typeof rosterPath !== "string" || !rosterPath.trim()) return [];
+    const resolvedPath = resolveFilePath(rosterPath);
+    const raw = await fs.readFile(resolvedPath, "utf8");
+    let parsed: unknown;
+    try
+    {
+        parsed = JSON.parse(raw);
+    }
+    catch
+    {
+        try
+        {
+            parsed = parseSimpleYamlVelocityRoster(raw);
+        }
+        catch
+        {
+            throw new Error("The velocity roster must be JSON or simple YAML: an array of members or an object with a members list.");
+        }
+    }
+
+    const members = Array.isArray(parsed) ? parsed : isRecord(parsed) && Array.isArray(parsed.members) ? parsed.members : null;
+    if (!members)
+    {
+        throw new Error("The velocity roster must be a JSON array or an object with a members array.");
+    }
+
+    return members.map((member, index) =>
+    {
+        if (!isRecord(member) || typeof member.name !== "string" || typeof member.userId !== "string" || !member.name.trim() || !member.userId.trim())
+        {
+            throw new Error(`Velocity roster member ${index + 1} requires non-empty name and userId values.`);
+        }
+        return {
+            name: member.name.trim(),
+            userId: member.userId.trim(),
+            ...(typeof member.fromDate === "string" ? { fromDate: member.fromDate } : {}),
+            ...(typeof member.toDate === "string" ? { toDate: member.toDate } : {}),
+        };
+    });
+};
+
+const isVelocityRunIncluded = (entry: RunDeliveredEffortEntry, fromDate: string | undefined, toDate: string | undefined, exclusions: string[]): { included: boolean; reason?: string } =>
+{
+    const startDate = typeof entry.startDate === "string" ? entry.startDate : "";
+    if (!startDate || (fromDate && startDate < fromDate) || (toDate && startDate > toDate)) return { included: false, reason: "outside date range" };
+    const label = entry.label.toLowerCase();
+    const matched = exclusions.find((pattern) => label.includes(pattern.toLowerCase()));
+    return matched ? { included: false, reason: `label matches '${matched}'` } : { included: true };
+};
+
+const createVelocitySubject = (
+    name: string,
+    userId: string | undefined,
+    entries: RunDeliveredEffortEntry[],
+    fromDate: string | undefined,
+    toDate: string | undefined,
+    exclusions: string[],
+): VelocityReportSubject =>
+{
+    const rawRuns = entries.map((entry) =>
+    {
+        const inclusion = isVelocityRunIncluded(entry, fromDate, toDate, exclusions);
+        return { ...entry, includedInBaseline: inclusion.included, ...(inclusion.reason ? { exclusionReason: inclusion.reason } : {}) };
+    }).filter((entry) => entry.exclusionReason !== "outside date range");
+    const weekly = buildWeeklyPeriods(rawRuns.filter((entry) => entry.includedInBaseline).map((entry): VelocityRun => ({
+        accountSeq: entry.accountSeq,
+        label: entry.label,
+        startDate: typeof entry.startDate === "string" ? entry.startDate : null,
+        endDate: typeof entry.endDate === "string" ? entry.endDate : null,
+        effort: entry.delivered.effort,
+    })));
+    return { name, userId, rawRuns, weekly, biweekly: buildBiweeklyPeriods(weekly), summary: summarizeVelocityPeriods(weekly) };
+};
+
+const buildVelocityCsv = (subjects: VelocityReportSubject[], sprintConfig: string, fromDate: string | undefined, toDate: string | undefined): string =>
+{
+    const rows: Array<Array<unknown>> = [["record_type", "configuration", "subject", "user_id", "period_start", "period_end", "period_label", "effort", "included_in_baseline", "exclusion_reason"]];
+    for (const subject of subjects)
+    {
+        for (const run of subject.rawRuns)
+        {
+            rows.push(["run", sprintConfig, subject.name, subject.userId ?? "", run.startDate ?? "", run.endDate ?? "", `#${run.accountSeq ?? "?"} ${run.label}`, run.delivered.effort, run.includedInBaseline ? "yes" : "no", run.exclusionReason ?? ""]);
+        }
+        for (const period of subject.weekly)
+        {
+            rows.push(["weekly", sprintConfig, subject.name, subject.userId ?? "", period.startDate, period.endDate, period.label, period.effort, "yes", ""]);
+        }
+        for (const period of subject.biweekly)
+        {
+            rows.push(["biweekly", sprintConfig, subject.name, subject.userId ?? "", period.startDate, period.endDate, period.label, period.effort, "yes", ""]);
+        }
+        const summary = subject.summary;
+        rows.push(["summary", sprintConfig, subject.name, subject.userId ?? "", fromDate ?? "", toDate ?? "", `sample weeks=${summary.sampleWeeks}; mean=${summary.mean}; p25=${summary.p25}; p50=${summary.p50}; p75=${summary.p75}; standard_deviation=${summary.sampleStandardDeviation}; variance=${summary.sampleVariance}`, summary.totalEffort, "yes", ""]);
+    }
+    return `${rows.map((row) => row.map(escapeCsv).join(",")).join("\n")}\n`;
+};
+
+const buildVelocityMarkdown = (subjects: VelocityReportSubject[], sprintConfig: string, fromDate: string | undefined, toDate: string | undefined, exclusions: string[]): string =>
+{
+    const lines = [
+        "# Codecks Velocity Report",
+        "",
+        `- Configuration: ${sprintConfig || "any"}`,
+        `- Run start-date range: ${fromDate ?? "all available"} to ${toDate ?? "last completed Run"}`,
+        `- Excluded label patterns: ${exclusions.join(", ") || "none"}`,
+        "- Weekly values are calendar-week normalized; multi-week Runs are allocated evenly by calendar day.",
+        "",
+    ];
+    for (const subject of subjects)
+    {
+        const summary = subject.summary;
+        lines.push(
+            `## ${subject.name}`,
+            "",
+            `- Excluded Runs: ${subject.rawRuns.filter((run) => !run.includedInBaseline).length}`,
+            "",
+            "| Sample weeks | Total effort | Mean | P25 | P50 | P75 | Standard deviation | Variance |",
+            "|---:|---:|---:|---:|---:|---:|---:|---:|",
+            `| ${summary.sampleWeeks} | ${summary.totalEffort} | ${summary.mean} | ${summary.p25} | ${summary.p50} | ${summary.p75} | ${summary.sampleStandardDeviation} | ${summary.sampleVariance} |`,
+            "",
+            "### Biweekly velocity",
+            "",
+            "| Period | Effort |",
+            "|---|---:|",
+            ...subject.biweekly.map((period) => `| ${period.label} | ${period.effort} |`),
+            "",
+        );
+    }
+    return `${lines.join("\n")}\n`;
+};
+
+export const velocity_report = tool({
+    description: "Build a statistically grounded Run velocity report with optional independent CSV and Markdown summary files.",
+    args: {
+        sprintConfig: tool.schema.string().optional().describe("Optional Run/Sprint config name/id filter, for example 'dive'."),
+        user: tool.schema.string().optional().describe("Optional single user name. Ignored when rosterPath is supplied."),
+        userId: tool.schema.string().optional().describe("Optional exact single user id. Preferred over user name."),
+        rosterPath: tool.schema.string().optional().describe("Optional JSON or simple-YAML roster path. Use members with name, userId, and optional fromDate/toDate."),
+        fromDate: tool.schema.string().optional().describe("Include completed Runs starting on or after this ISO date (YYYY-MM-DD)."),
+        toDate: tool.schema.string().optional().describe("Include completed Runs starting on or before this ISO date (YYYY-MM-DD)."),
+        completedRuns: tool.schema.number().optional().describe("Completed Runs to inspect before date filtering. Defaults to 500."),
+        excludeLabels: tool.schema.array(tool.schema.string()).optional().describe("Case-insensitive Run-label substrings to exclude. Defaults to vacation, holiday, break, leave."),
+        csvPath: tool.schema.string().optional().describe("Optional path for normalized CSV output. Independent from summaryMarkdownPath."),
+        summaryMarkdownPath: tool.schema.string().optional().describe("Optional path for Markdown summary output. Independent from csvPath."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const sprintConfig = String(args.sprintConfig ?? "").trim();
+        const fromDate = typeof args.fromDate === "string" && args.fromDate.trim() ? args.fromDate.trim() : undefined;
+        const toDate = typeof args.toDate === "string" && args.toDate.trim() ? args.toDate.trim() : undefined;
+        if ((fromDate && !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) || (toDate && !/^\d{4}-\d{2}-\d{2}$/.test(toDate)))
+        {
+            return toStructuredErrorResult(format, "velocity-report", "validation_error", "fromDate and toDate must use YYYY-MM-DD.");
+        }
+        const exclusions = Array.isArray(args.excludeLabels) && args.excludeLabels.length > 0
+            ? args.excludeLabels.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim())
+            : DEFAULT_VELOCITY_EXCLUSION_LABELS;
+        const completedRuns = getCompletedRunLimit(args.completedRuns, 500);
+
+        let roster: VelocityRosterMember[];
+        try
+        {
+            roster = await parseVelocityRoster(args.rosterPath);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "velocity-report", "validation_error", toErrorMessage(error));
+        }
+
+        const latestStart = (left: string | undefined, right: string | undefined): string | undefined => !left ? right : !right ? left : left > right ? left : right;
+        const earliestEnd = (left: string | undefined, right: string | undefined): string | undefined => !left ? right : !right ? left : left < right ? left : right;
+        const requests = roster.length > 0
+            ? roster.map((member) => ({ name: member.name, userId: member.userId, fromDate: latestStart(member.fromDate, fromDate), toDate: earliestEnd(member.toDate, toDate) }))
+            : [{ name: typeof args.user === "string" && args.user.trim() ? args.user.trim() : typeof args.userId === "string" && args.userId.trim() ? args.userId.trim() : "Team", user: args.user, userId: args.userId, fromDate, toDate }];
+        const subjects: VelocityReportSubject[] = [];
+        const warnings: string[] = [];
+        for (const request of requests)
+        {
+            let result: Awaited<ReturnType<typeof fetchDeliveredEffortEntries>>;
+            try
+            {
+                result = await fetchDeliveredEffortEntries({ sprintConfig, user: request.user, userId: request.userId, completedRuns });
+            }
+            catch (error)
+            {
+                return toStructuredErrorResult(format, "velocity-report", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            }
+            if ("error" in result)
+            {
+                return toStructuredErrorResult(format, "velocity-report", result.candidates ? "ambiguous_match" : "not_found", result.error, { candidates: result.candidates });
+            }
+            warnings.push(...result.warnings);
+            subjects.push(createVelocitySubject(result.userLabel ?? request.name, result.userId ?? request.userId, result.entries, request.fromDate, request.toDate, exclusions));
+        }
+
+        const csv = buildVelocityCsv(subjects, sprintConfig, fromDate, toDate);
+        const markdown = buildVelocityMarkdown(subjects, sprintConfig, fromDate, toDate, exclusions);
+        const outputs: Record<string, string> = {};
+        try
+        {
+            if (typeof args.csvPath === "string" && args.csvPath.trim())
+            {
+                const path = resolveFilePath(args.csvPath);
+                await fs.mkdir(dirname(path), { recursive: true });
+                await fs.writeFile(path, csv, "utf8");
+                outputs.csvPath = path;
+            }
+            if (typeof args.summaryMarkdownPath === "string" && args.summaryMarkdownPath.trim())
+            {
+                const path = resolveFilePath(args.summaryMarkdownPath);
+                await fs.mkdir(dirname(path), { recursive: true });
+                await fs.writeFile(path, markdown, "utf8");
+                outputs.summaryMarkdownPath = path;
+            }
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "velocity-report", "file_error", toErrorMessage(error));
+        }
+
+        const lines = [
+            "## Codecks Velocity Report",
+            "",
+            `- Configuration: ${sprintConfig || "any"}`,
+            `- Subjects: ${subjects.map((subject) => subject.name).join(", ")}`,
+            `- Run start-date range: ${fromDate ?? "all available"} to ${toDate ?? "last completed Run"}`,
+            `- CSV: ${outputs.csvPath ?? "not requested"}`,
+            `- Markdown summary: ${outputs.summaryMarkdownPath ?? "not requested"}`,
+            "",
+            "| Subject | Sample weeks | Mean | P25 | P50 | P75 | Standard deviation | Variance |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+            ...subjects.map((subject) => `| ${subject.name} | ${subject.summary.sampleWeeks} | ${subject.summary.mean} | ${subject.summary.p25} | ${subject.summary.p50} | ${subject.summary.p75} | ${subject.summary.sampleStandardDeviation} | ${subject.summary.sampleVariance} |`),
+        ];
+        return toStructuredResult(format, "velocity-report", lines.join("\n"), { sprintConfig: sprintConfig || "any", fromDate: fromDate ?? null, toDate: toDate ?? null, exclusions, outputs, subjects }, warnings);
+    },
+});
+
 export const run_list = tool({
     description: "List Codecks Runs (Sprint API model) for the account.",
     args: {
@@ -7240,7 +7526,7 @@ export const run_list = tool({
             `- Returned: ${selected.length}`,
             ...(truncated ? [`- Truncated: Yes (limit ${limit})`] : []),
             "",
-            ...summaries.map((run) => `- #${run.accountSeq ?? "?"} ${run.label} (${run.startDate ?? "?"} → ${run.endDate ?? "?"})`),
+            ...summaries.map((run) => `- #${run.accountSeq ?? "?"} ${run.label} (${run.startDate ?? "?"} â†’ ${run.endDate ?? "?"})`),
         ];
 
         return toStructuredResult(
@@ -9266,10 +9552,10 @@ export const card_list_resolvables = tool({
                 const timestampValue = latestEntry?.createdAt ?? resolvable.createdAt;
                 const timestamp = formatDateTime(timestampValue);
                 const state = resolvable.isClosed ? "closed" : "open";
-                const closedTag = resolvable.isClosed ? " • Closed" : " • Open";
+                const closedTag = resolvable.isClosed ? " â€¢ Closed" : " â€¢ Open";
                 const entryCount = entryList.length;
                 const contextLabel = formatResolvableContextLabel(context);
-                lines.push(`- ${state.toUpperCase()} ${resolvableId} • ${contextLabel} • ${timestamp} • ${author}${closedTag} • ${preview}`);
+                lines.push(`- ${state.toUpperCase()} ${resolvableId} â€¢ ${contextLabel} â€¢ ${timestamp} â€¢ ${author}${closedTag} â€¢ ${preview}`);
 
                 threadItems.push({
                     id: resolvableId,
@@ -9528,7 +9814,7 @@ export const list_open_resolvable_cards = tool({
                 const contextCount = Number(card.contextCount ?? 0);
                 const status = String(card.status ?? "unknown");
                 const derivedStatus = String(card.derivedStatus ?? "unknown");
-                lines.push(`- ${shortCode || "(n/a)"} • ${title} • ${contextCount} open ${group.contextLabel}${contextCount === 1 ? "" : "s"} • ${status} / ${derivedStatus}`);
+                lines.push(`- ${shortCode || "(n/a)"} â€¢ ${title} â€¢ ${contextCount} open ${group.contextLabel}${contextCount === 1 ? "" : "s"} â€¢ ${status} / ${derivedStatus}`);
             }
         }
 
@@ -9974,12 +10260,12 @@ export const list_logged_in_user_actionable_resolvables = tool({
                 const buckets = Array.isArray(card.buckets) ? (card.buckets as unknown[]).map((value) => String(value)).join(", ") : "unknown";
                 const reasons = Array.isArray(card.reasons) ? (card.reasons as unknown[]).map((value) => String(value)).join(", ") : "unknown";
                 const bubbleHeuristics = Array.isArray(card.bubbleHeuristics) ? (card.bubbleHeuristics as unknown[]).map((value) => String(value)).join(", ") : "unknown";
-                lines.push(`- ${shortCodeLabel} • ${ownerName} • ${title} • ${actionableCount} actionable • bubble=${bubbleHeuristics} • ${buckets} • ${reasons}`);
+                lines.push(`- ${shortCodeLabel} â€¢ ${ownerName} â€¢ ${title} â€¢ ${actionableCount} actionable â€¢ bubble=${bubbleHeuristics} â€¢ ${buckets} â€¢ ${reasons}`);
                 const latestEntryAuthors = Array.isArray(card.latestEntryAuthors) ? (card.latestEntryAuthors as unknown[]).map((value) => String(value)) : [];
                 const participantNames = Array.isArray(card.participantNames) ? (card.participantNames as unknown[]).map((value) => String(value)) : [];
-                const highlightedParticipants = participantNames.map((name) => latestEntryAuthors.includes(name) ? `→ ${name}` : name).join(", ");
+                const highlightedParticipants = participantNames.map((name) => latestEntryAuthors.includes(name) ? `â†’ ${name}` : name).join(", ");
                 lines.push(`  participants: ${highlightedParticipants || "(unknown)"}`);
-                lines.push(`  latest ${String(card.latestActivityAtFormatted ?? "") || "(unknown time)"} • ${String(card.preview ?? "(no preview)")}`);
+                lines.push(`  latest ${String(card.latestActivityAtFormatted ?? "") || "(unknown time)"} â€¢ ${String(card.preview ?? "(no preview)")}`);
             }
         }
 
@@ -10359,8 +10645,8 @@ export const debug_logged_in_user_resolvable_participation = tool({
 
         for (const item of sampleItems)
         {
-            lines.push(`- ${String(item.shortCode ?? "(n/a)")} • ${String(item.contextLabel ?? "unknown")} • ${String(item.title ?? "(untitled)")} • ${String(item.bucket ?? "unknown")} • bubble=${String(item.bubbleHeuristic ?? "unknown")}`);
-            lines.push(`  latest ${String(item.latestActivityAtFormatted ?? "") || "(unknown time)"} • ${String(item.latestEntryAuthor ?? "Unknown")} • ${String(item.reason ?? "unknown")}`);
+            lines.push(`- ${String(item.shortCode ?? "(n/a)")} â€¢ ${String(item.contextLabel ?? "unknown")} â€¢ ${String(item.title ?? "(untitled)")} â€¢ ${String(item.bucket ?? "unknown")} â€¢ bubble=${String(item.bubbleHeuristic ?? "unknown")}`);
+            lines.push(`  latest ${String(item.latestActivityAtFormatted ?? "") || "(unknown time)"} â€¢ ${String(item.latestEntryAuthor ?? "Unknown")} â€¢ ${String(item.reason ?? "unknown")}`);
             lines.push(`  ${String(item.latestEntryPreview ?? "(no preview)")}`);
         }
 
@@ -10371,11 +10657,11 @@ export const debug_logged_in_user_resolvable_participation = tool({
             {
                 if (probe.ok)
                 {
-                    lines.push(`- SUCCESS ${String(probe.relation ?? "(unknown)")} • count=${String(probe.itemCount ?? 0)} • sample=${JSON.stringify(probe.sampleValues ?? [])}`);
+                    lines.push(`- SUCCESS ${String(probe.relation ?? "(unknown)")} â€¢ count=${String(probe.itemCount ?? 0)} â€¢ sample=${JSON.stringify(probe.sampleValues ?? [])}`);
                 }
                 else
                 {
-                    lines.push(`- FAIL ${String(probe.relation ?? "(unknown)")} • ${String(probe.error ?? "Unknown error")}`);
+                    lines.push(`- FAIL ${String(probe.relation ?? "(unknown)")} â€¢ ${String(probe.error ?? "Unknown error")}`);
                 }
             }
         }
@@ -10387,11 +10673,11 @@ export const debug_logged_in_user_resolvable_participation = tool({
             {
                 if (probe.ok)
                 {
-                    lines.push(`- SUCCESS ${String(probe.field ?? "(unknown)")} • hasValue=${probe.hasValue ? "yes" : "no"} • value=${JSON.stringify(probe.value ?? null)}`);
+                    lines.push(`- SUCCESS ${String(probe.field ?? "(unknown)")} â€¢ hasValue=${probe.hasValue ? "yes" : "no"} â€¢ value=${JSON.stringify(probe.value ?? null)}`);
                 }
                 else
                 {
-                    lines.push(`- FAIL ${String(probe.field ?? "(unknown)")} • ${String(probe.error ?? "Unknown error")}`);
+                    lines.push(`- FAIL ${String(probe.field ?? "(unknown)")} â€¢ ${String(probe.error ?? "Unknown error")}`);
                 }
             }
         }
@@ -10844,9 +11130,9 @@ export const debug_logged_in_user_resolvables = tool({
             for (const item of sampleItems)
             {
                 lines.push(
-                    `- ${String(item.shortCode ?? "(n/a)")} • ${String(item.contextLabel ?? "unknown")} • ${String(item.title ?? "(untitled)")} • latest: ${String(item.latestEntryAuthor ?? "Unknown")} • mention-user: ${item.latestEntryMentionsLoggedInUser ? "yes" : "no"} • assignee-is-user: ${item.cardAssigneeIsLoggedInUser ? "yes" : "no"} • creator-is-user: ${item.cardCreatorIsLoggedInUser ? "yes" : "no"} • heuristic: ${String(item.heuristic ?? "unknown")}`,
+                    `- ${String(item.shortCode ?? "(n/a)")} â€¢ ${String(item.contextLabel ?? "unknown")} â€¢ ${String(item.title ?? "(untitled)")} â€¢ latest: ${String(item.latestEntryAuthor ?? "Unknown")} â€¢ mention-user: ${item.latestEntryMentionsLoggedInUser ? "yes" : "no"} â€¢ assignee-is-user: ${item.cardAssigneeIsLoggedInUser ? "yes" : "no"} â€¢ creator-is-user: ${item.cardCreatorIsLoggedInUser ? "yes" : "no"} â€¢ heuristic: ${String(item.heuristic ?? "unknown")}`,
                 );
-                lines.push(`  latest at ${String(item.latestActivityAtFormatted ?? "") || "(unknown time)"} • ${String(item.latestEntryPreview ?? "(no preview)")}`);
+                lines.push(`  latest at ${String(item.latestActivityAtFormatted ?? "") || "(unknown time)"} â€¢ ${String(item.latestEntryPreview ?? "(no preview)")}`);
             }
         }
 
@@ -10860,11 +11146,11 @@ export const debug_logged_in_user_resolvables = tool({
                     const sampleIds = Array.isArray(probe.sampleIds) && probe.sampleIds.length > 0
                         ? String((probe.sampleIds as unknown[]).join(", "))
                         : "(none)";
-                    lines.push(`- SUCCESS ${String(probe.relation ?? "(unknown)")} • count=${String(probe.itemCount ?? 0)} • sample=${sampleIds}`);
+                    lines.push(`- SUCCESS ${String(probe.relation ?? "(unknown)")} â€¢ count=${String(probe.itemCount ?? 0)} â€¢ sample=${sampleIds}`);
                 }
                 else
                 {
-                    lines.push(`- FAIL ${String(probe.relation ?? "(unknown)")} • ${String(probe.error ?? "Unknown error")}`);
+                    lines.push(`- FAIL ${String(probe.relation ?? "(unknown)")} â€¢ ${String(probe.error ?? "Unknown error")}`);
                 }
             }
         }
@@ -10876,11 +11162,11 @@ export const debug_logged_in_user_resolvables = tool({
             {
                 if (probe.ok)
                 {
-                    lines.push(`- SUCCESS ${String(probe.field ?? "(unknown)")} • hasValue=${probe.hasValue ? "yes" : "no"} • value=${JSON.stringify(probe.value ?? null)}`);
+                    lines.push(`- SUCCESS ${String(probe.field ?? "(unknown)")} â€¢ hasValue=${probe.hasValue ? "yes" : "no"} â€¢ value=${JSON.stringify(probe.value ?? null)}`);
                 }
                 else
                 {
-                    lines.push(`- FAIL ${String(probe.field ?? "(unknown)")} • ${String(probe.error ?? "Unknown error")}`);
+                    lines.push(`- FAIL ${String(probe.field ?? "(unknown)")} â€¢ ${String(probe.error ?? "Unknown error")}`);
                 }
             }
         }

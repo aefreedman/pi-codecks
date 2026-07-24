@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
 
+## [0.6.0] - 2026-07-24
+
+### Added
+
+- Added `codecks_velocity_report` for reproducible completed-Run velocity reporting with mean, P25/P50/P75, sample standard deviation, sample variance, weekly-normalized multi-week Runs, and fixed biweekly totals.
+- Added independent `csvPath` and `summaryMarkdownPath` output options, configurable label exclusions, date filtering, and JSON/simple-YAML roster support for explicit team membership.
+- Added the separately loadable `codecks-velocity-reporting` skill so report methodology can be evaluated independently from general Codecks operations.
+- Added unit coverage for weekly normalization, biweekly aggregation, and report statistics.
+
 ## [0.5.6] - 2026-07-24
 
 ### Changed
