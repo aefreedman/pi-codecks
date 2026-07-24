@@ -1,7 +1,7 @@
 {
   "name": "@aefree/pi-codecks",
   "private": true,
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -18,7 +18,7 @@
     ]
   },
   "scripts": {
-    "test": "npm run test:unit && npm run test:integration",
+    "test": "node tests/run-tests.mjs",
     "test:unit": "npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts && npx --yes tsx tests/card-get-tool.test.ts && npx --yes tsx tests/card-search-preview.test.ts && npx --yes tsx tests/resolvable-tool-registration.test.ts && npx --yes tsx tests/cdx-tool-updates.test.ts && npx --yes tsx tests/tool-rendering.test.ts",
     "test:integration": "npx --yes tsx tests/codecks-tool-validation.ts"
   },
@@ -36,7 +36,12 @@
     "url": "https://github.com/aefreedman/pi-codecks/issues"
   },
   "homepage": "https://github.com/aefreedman/pi-codecks#readme",
-  "devDependencies": {
-    "typebox": "^1.1.34"
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   }
 }
