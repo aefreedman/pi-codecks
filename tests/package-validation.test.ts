@@ -46,21 +46,38 @@ assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 const publicCi = read(".github/workflows/ci.yml");
 const integrationWorkflow = read(".github/workflows/integration.yml");
 const publishWorkflow = read(".github/workflows/publish.yml");
+const workflows = [publicCi, integrationWorkflow, publishWorkflow];
 assert.match(publicCi, /pull_request:/);
 assert.match(publicCi, /npm test/);
 assert.match(publicCi, /pack:validate/);
 assert.match(publicCi, /pack:smoke/);
 assert.doesNotMatch(publicCi, /CODECKS_|test:integration|secrets\./);
+assert.match(publicCi, /timeout-minutes:/);
+for (const workflow of workflows) {
+  assert.doesNotMatch(workflow, /uses:\s+[^\s#]+@v\d+\b/, "third-party Actions must use reviewed full commit SHAs");
+  for (const match of workflow.matchAll(/uses:\s+[^\s#]+@([^\s#]+)/g)) {
+    assert.match(match[1], /^[a-f0-9]{40}$/, `Action pin must be a full commit SHA: ${match[0]}`);
+  }
+}
 assert.match(integrationWorkflow, /workflow_dispatch:/);
 assert.match(integrationWorkflow, /environment: codecks-integration/);
 assert.match(integrationWorkflow, /concurrency:/);
+assert.match(integrationWorkflow, /if:\s+github\.ref == 'refs\/heads\/main'/);
+assert.match(integrationWorkflow, /ref:\s+refs\/heads\/main/);
+assert.match(integrationWorkflow, /timeout-minutes:/);
 assert.match(integrationWorkflow, /npm run test:integration/);
 assert.doesNotMatch(integrationWorkflow, /pull_request:|\bpush:/);
 assert.match(publishWorkflow, /release:/);
 assert.match(publishWorkflow, /environment: npm/);
 assert.match(publishWorkflow, /id-token: write/);
+assert.match(publishWorkflow, /concurrency:/);
+assert.match(publishWorkflow, /timeout-minutes:/);
 assert.match(publishWorkflow, /npm publish --access public --provenance/);
 assert.doesNotMatch(publishWorkflow, /NPM_TOKEN|CODECKS_/);
+assert.ok(existsSync(path.join(root, ".github/dependabot.yml")), "missing Dependabot configuration");
+assert.ok(existsSync(path.join(root, ".github/pull_request_template.md")), "missing pull-request template");
+assert.match(read(".gitignore"), /^\.env$/m);
+assert.match(read("SECURITY.md"), /security\/advisories\/new/);
 
 for (const requiredDoc of ["README.md", "CONTRIBUTING.md", "SECURITY.md", "docs/testing.md", "docs/release.md"]) {
   assert.ok(existsSync(path.join(root, requiredDoc)), `missing public documentation: ${requiredDoc}`);

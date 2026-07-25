@@ -2,6 +2,19 @@
 
 `pi-codecks` uses npm trusted publishing with provenance. The GitHub `npm` environment should require maintainer approval, and the npm package must trust this repository's `.github/workflows/publish.yml` workflow. No long-lived `NPM_TOKEN` is used by the workflow.
 
+## Repository controls
+
+Before relying on the workflows for release or live validation, verify the GitHub-hosted settings that cannot be enforced by repository files alone:
+
+- `main` changes go through pull requests and required Public CI checks; force-pushes and deletion remain blocked.
+- Actions use read-only default permissions and reviewed commit-SHA pins; Dependabot proposes dependency and action-pin updates.
+- The `codecks-integration` environment requires approval and allows deployments only from `main`.
+- The `npm` environment requires approval and allows only the intended release-tag policy.
+- npm trusted publishing is bound to this repository, package, and `.github/workflows/publish.yml`.
+- Dependency alerts/security updates, private vulnerability reporting, secret scanning, and push protection are enabled when available.
+
+Review these controls periodically and before granting access to additional collaborators.
+
 ## Prepare
 
 1. Confirm the intended SemVer change and update `package.json` and `package-lock.json` once for the complete release.
