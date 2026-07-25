@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "piVersionPrefix": "0.82.",
+  "timeoutMs": 90000,
+  "maxOutputChars": 2097152,
+  "conditions": ["all-active", "balanced", "loader-only"],
+  "mutationTools": [
+    "codecks_dispatch",
+    "codecks_card_create",
+    "codecks_card_set_parent",
+    "codecks_card_add_attachment",
+    "codecks_card_update",
+    "codecks_card_bulk_create",
+    "codecks_card_bulk_update",
+    "codecks_card_update_effort",
+    "codecks_card_update_status",
+    "codecks_card_update_priority",
+    "codecks_milestone_update",
+    "codecks_run_update",
+    "codecks_card_update_run",
+    "codecks_card_add_comment",
+    "codecks_card_add_review",
+    "codecks_card_add_blocker",
+    "codecks_card_add_block",
+    "codecks_card_reply_resolvable",
+    "codecks_card_edit_resolvable_entry",
+    "codecks_card_close_resolvable",
+    "codecks_card_reopen_resolvable"
+  ]
+}
