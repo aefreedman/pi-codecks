@@ -1114,7 +1114,7 @@ export default function codecksTools(pi: ExtensionAPI) {
     const toolName = toToolName(exportName);
     const legacyPromptMetadata = mode === "all-active" || (mode === "balanced" && BALANCED_ACTIVE_CODECKS_TOOL_NAMES.includes(toolName as typeof BALANCED_ACTIVE_CODECKS_TOOL_NAMES[number]));
     const coreDescription = coreTool.description ?? toolName;
-    const activeSafety = mode === "all-active" ? undefined : getActiveSafetyDescription(toolName);
+    const activeSafety = getActiveSafetyDescription(toolName);
     const description = activeSafety ? `${coreDescription} Safety: ${activeSafety}` : coreDescription;
     coreDescriptions.set(toolName, coreDescription);
     pi.registerTool({

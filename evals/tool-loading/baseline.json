@@ -12,13 +12,14 @@
   },
   "implementedConditions": {
     "all-active": {
+      "note": "Legacy 39-tool composition with safety-hardened active descriptions; the untouched comparison remains legacyBaseline above.",
       "toolCount": 39,
       "schemaChars": 14500,
-      "descriptionChars": 2749,
+      "descriptionChars": 8429,
       "promptSnippetChars": 1972,
       "promptGuidelineChars": 13651,
-      "completeSerializedMetadataChars": 38478,
-      "reductionPercent": 0
+      "completeSerializedMetadataChars": 44158,
+      "reductionFromUntouchedPercent": -14.76
     },
     "balanced": {
       "toolCount": 3,

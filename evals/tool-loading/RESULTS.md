@@ -2,7 +2,7 @@
 
 ## Decision
 
-The balanced condition is the supported production candidate. The final fresh-process GPT-5.6 run passed all 42 condition/case trials, preserved the required safety and selection behavior, and reduced the initial provider tool serialization by 85.23% relative to all-active.
+The balanced condition is the supported production candidate. The final fresh-process GPT-5.6 run passed all 42 condition/case trials, preserved the required safety and selection behavior, and reduced the initial provider tool serialization by 85.23% relative to the untouched legacy provider baseline (and 88.35% relative to the safety-hardened all-active condition).
 
 This evidence authorizes the package default, not any Codecks mutation. All live account checks were read-only and every package-exposed mutation was blocked before execution by the eval guard.
 
@@ -33,7 +33,7 @@ Every loader count and exact activation-set check passed. Balanced kept `codecks
 - No mutation tool was called in any final trial.
 - The guard covered all registered card, milestone, Run, bulk, effort, status, priority, attachment, parent, raw-dispatch, and conversation writers.
 - Unit coverage separately passed missing/foreign provenance, foreign loader/tool collisions, authenticated loader-result restoration, additive activation, compaction-safe mutation descriptions, and startup/reload/resume/fork restoration.
-- All-active reproduced the untouched 39-tool metadata measurement exactly.
+- All-active reproduced the legacy 39 active tool names and prompt metadata while safety-hardening active descriptions; the untouched measurement remains the independent comparison baseline.
 - Balanced deferred definitions omitted prompt snippets/guidelines while the loader retained universal policy and active definitions retained direct-use safety.
 
 ## Efficiency evidence
@@ -42,19 +42,21 @@ Every loader count and exact activation-set check passed. Balanced kept `codecks
 
 | Condition | Initial package tools | Complete serialized metadata chars | Reduction from untouched |
 |---|---:|---:|---:|
-| all-active | 39 | 38,478 | 0% |
+| untouched legacy baseline | 39 | 38,478 | 0% |
+| all-active (safety-hardened descriptions) | 39 | 44,158 | -14.76% |
 | balanced | 3 | 6,095 | 84.16% |
 | loader-only | 1 | 1,999 | 94.80% |
 
 ### Final provider traces
 
-| Condition | Initial provider tools | Initial serialized tool chars | Reduction vs all-active | Provider requests (14 cases) | Mean wall time | Input | Output | Cache read | Cache write |
+| Condition | Initial provider tools | Initial serialized tool chars | Reduction from untouched | Provider requests (14 cases) | Mean wall time | Input | Output | Cache read | Cache write |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| all-active | 39 | 21,144 | 0% | 23 | 8,833 ms | 51,193 | 1,503 | 95,744 | 0 |
-| balanced | 3 | 3,124 | 85.23% | 33 | 9,243 ms | 52,714 | 1,969 | 7,680 | 0 |
-| loader-only | 1 | 817 | 96.14% | 35 | 9,328 ms | 40,364 | 1,890 | 0 | 0 |
+| untouched legacy baseline | 39 | 21,144 | 0% | — | — | — | — | — | — |
+| all-active (safety-hardened descriptions) | 39 | 26,824 | -26.86% | 23 | 9,279 ms | 63,329 | 1,584 | 99,840 | 0 |
+| balanced | 3 | 3,124 | 85.23% | 33 | 9,536 ms | 52,840 | 2,012 | 7,680 | 0 |
+| loader-only | 1 | 817 | 96.14% | 35 | 9,425 ms | 40,356 | 1,931 | 0 | 0 |
 
-Balanced added 10 provider requests across the 14-case matrix (0.71 per case) and 409 ms mean wall time relative to all-active. Loader-only saved more initial context but added another two requests and 85 ms mean wall time over balanced while imposing loader turns on immediate structured retrieval/search. This supports balanced rather than loader-only as the default.
+Balanced added 10 provider requests across the 14-case matrix (0.71 per case) and 257 ms mean wall time relative to the safety-hardened all-active condition. Loader-only saved more initial context and happened to average 111 ms faster than balanced in this single-trial matrix, but added another two requests while imposing loader turns on immediate structured retrieval/search. The small wall-time difference is not statistically meaningful; the workflow tradeoff still supports balanced rather than loader-only as the default.
 
 Token/cache fields are reported independently because provider cache accounting is not interchangeable with uncached input. The single-trial matrix is strong deterministic/behavioral pilot evidence, not a latency benchmark or statistical performance claim.
 

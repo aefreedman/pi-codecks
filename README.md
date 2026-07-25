@@ -73,7 +73,7 @@ Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
 
 - `balanced` (default) — loader plus structured get and card search
 - `loader-only` — only the package loader initially
-- `all-active` — legacy 39-tool initial surface without the loader
+- `all-active` — legacy 39-tool initial composition without the loader, with the same safety-hardened active descriptions used after deferred activation
 
 Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
 
