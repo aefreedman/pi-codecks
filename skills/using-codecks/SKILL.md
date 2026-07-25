@@ -78,7 +78,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not open new Comment threads for follow-up work, progress updates, or completion reports.
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
-- Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons; apply effort separately only after explicit user approval.
+- Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons. If `complete` is false, increase `scanLimit` or narrow the scope before asking for approval; apply effort separately only after explicit user approval.
 - For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the per-card preview and duplicate candidates, then apply only after approval.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 

@@ -98,11 +98,11 @@ Use `codecks_card_get` when an agent needs structured card data for reasoning, p
 
 Use `codecks_card_get_formatted` when the agent needs to present human-readable card details to a user.
 
-Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Deck and milestone filters can be combined for intersection searches such as cards in the Alpha milestone and Dev deck. If an agent accidentally passes a visible deck name such as `Design Docs` or `Vertical Slice` as `location`, the registration layer treats it as `deck` when no explicit deck/milestone was supplied. Title searches support `*` / `?` glob wildcards and accent/punctuation-insensitive matching. Use `text` with `searchIn: "title_or_content"` (or `content`) for body searches, and `includeDone: false` for open/undone-only searches. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, matched fields, and update dates when Codecks returns those fields. Search output defaults to compact mode and caps returned card rows to protect session context; use `outputMode: "counts"` for bulk scope/effort analysis and `outputMode: "detailed"` only when every returned card row is truly needed. No-match searches return successful empty results with search tips instead of tool errors.
+Use `codecks_card_search` when title/location criteria may match multiple cards and the agent needs disambiguation. Supplying `deck` or `milestone` without `location` infers the corresponding scope instead of running a broad search. Deck and milestone filters can be combined for intersection searches such as cards in the Alpha milestone and Dev deck. If an agent accidentally passes a visible deck name such as `Design Docs` or `Vertical Slice` as `location`, the registration layer treats it as `deck` when no explicit deck/milestone was supplied. Title searches support `*` / `?` glob wildcards and accent/punctuation-insensitive matching. Use `text` with `searchIn: "title_or_content"` (or `content`) for body searches, and `includeDone: false` for open/undone-only searches. Structured search results include planning metadata such as effort, card type, child count, deck/milestone identity, matched fields, and update dates when Codecks returns those fields. Bounded scans report `scannedCards`, `complete`, and `scanLimitReached`; use independent `scanLimit` and `pageSize` values when the default traversal bound is insufficient. Search output defaults to compact mode and caps returned card rows to protect session context; use `outputMode: "counts"` for bulk scope/effort analysis and `outputMode: "detailed"` only when every returned card row is truly needed. No-match searches return successful empty results with search tips instead of tool errors.
 
 Use `codecks_card_bulk_create` and `codecks_card_bulk_update` for CSV/import-style tracker work after mapping source rows into card objects. Both tools default to dry-run mode, report per-card status, and should be reviewed before rerunning with `dryRun: false`.
 
-Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls.
+Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls. Do not treat a preview as authoritative or request approval when `complete` is false; increase `scanLimit` or narrow the scope first.
 
 ## Milestone Tools
 
@@ -179,11 +179,13 @@ Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolva
 npm test
 ```
 
-The default test command runs unit tests and then the integration validation script. Integration validation skips safely when Codecks credentials are absent. Any change that adds or changes Codecks query/dispatch shapes must be verified with live integration validation against a real Codecks account before release.
+The default test command runs deterministic, credential-free unit, fixture, registration, schema-lifecycle, rendering, and transport tests. From a clean checkout, use `npm ci && npm test`; this command does not contact Codecks.
+
+Run `npm run test:integration` explicitly for account-backed maintainer validation against a user-controlled Codecks account. The script reports whether it was skipped, completed read-only with mutations disabled, or completed with mutations enabled. Any change that adds or changes Codecks query/dispatch shapes must be verified with this live workflow before release.
 
 Optional integration settings:
 
-- `CODECKS_TEST_DECK` - enables create/update/delete-style mutation validation against a safe deck
+- `CODECKS_TEST_DECK` - explicitly selects the safe fixture deck and enables create/update/delete-style mutation validation; when unset, integration remains read-only
 - `CODECKS_TEST_VISION_BOARD_CARD` - enables live vision-board reference checks for a known card
 - `CODECKS_TEST_ATTACHMENT_PATH` - enables attachment validation
 - `CODECKS_TEST_PROFILE` - selects a test profile

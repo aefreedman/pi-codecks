@@ -521,6 +521,26 @@ const testCardRunClearDispatchesNullSprintId = async (tools: ToolModule): Promis
   });
 };
 
+const testConcreteMutationRejectsRootErrors = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    if (path === "cards/update") {
+      return jsonResponse({ errors: [{ message: "token=mutation-secret rejected" }] });
+    }
+
+    assert.equal(path, "query");
+    const key = directCardKey(query!);
+    assert.ok(key, `expected direct card query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildCardPayload());
+  }, async () => {
+    const result = String(await tools.card_update_effort.execute({ cardId: CARD_ID, effort: 3, format: "json" }));
+    const error = getError(result);
+    assert.equal(error.category, "api_error");
+    assert.match(String(error.message), /semantic error/i);
+    assert.doesNotMatch(result, /mutation-secret/);
+    assert.match(result, /\[REDACTED\]/);
+  });
+};
+
 const tools = await loadTools();
 await testStatusUpdateBlocksOpenReview(tools);
 await testPrivateCardCreationDefaultsOwner(tools);
@@ -538,5 +558,6 @@ await testMilestoneUpdateRequiresDescription(tools);
 await testMilestoneUpdateRejectsNullDescription(tools);
 await testCardRunAssignmentDispatchesSprintId(tools);
 await testCardRunClearDispatchesNullSprintId(tools);
+await testConcreteMutationRejectsRootErrors(tools);
 
 console.log("CDX tool update tests passed");

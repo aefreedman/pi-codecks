@@ -21,11 +21,18 @@ const parseStructuredJson = (text: string): Record<string, any> => {
   return JSON.parse(match[1]);
 };
 
-const makeCardsPayload = (cards: MockCard[]) => ({
+const getCardsRelationKey = (query: any): string | undefined => {
+  const root = query?._root?.[0];
+  const accountEntries = root?.account;
+  if (!Array.isArray(accountEntries)) return undefined;
+  return accountEntries.flatMap((entry: any) => Object.keys(entry ?? {})).find((key: string) => key.startsWith("cards("));
+};
+
+const makeCardsPayload = (relationKey: string, cards: MockCard[]) => ({
   data: {
     _root: {
       account: {
-        'cards({"$order":"-lastUpdatedAt","$limit":3000})': cards.map((card) => card.cardId),
+        [relationKey]: cards.map((card) => card.cardId),
       },
     },
     card: Object.fromEntries(cards.map((card) => [String(card.cardId), card])),
@@ -63,7 +70,13 @@ const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => 
       throw new Error("mock Codecks outage");
     }
 
-    return new Response(JSON.stringify(makeCardsPayload(cards)), {
+    const relationKey = getCardsRelationKey(body.query);
+    assert.ok(relationKey, `expected cards relation in ${queryText}`);
+    const filters = JSON.parse(relationKey.slice("cards(".length, -1));
+    const offset = Number(filters.$offset ?? 0);
+    const limit = Number(filters.$limit ?? cards.length);
+    const page = cards.slice(offset, offset + limit);
+    return new Response(JSON.stringify(makeCardsPayload(relationKey, page)), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -369,13 +382,117 @@ const cards: MockCard[] = [
   assert.equal(compact.data.facets.status.done, 15);
   assert.match(compact.warnings[0], /truncated/);
 
-  const countsText = String(await core.card_search.execute({ deck: "Dev", limit: 100, outputMode: "counts", format: "json" }));
+  const countsText = String(await core.card_search.execute({ deck: "Dev", outputMode: "counts", format: "json" }));
   const counts = parseStructuredJson(countsText);
   assert.equal(counts.data.matches, 30);
   assert.equal(counts.data.returnedCards, 0);
   assert.equal(counts.data.cards, undefined);
   assert.equal(counts.data.sampleCards.length, 10);
   assert.equal(counts.data.facets.derivedStatus.done, 15);
+}
+
+{
+  const pagedCards = [
+    { ...cards[5], cardId: "other-1", accountSeq: 301 },
+    { ...cards[5], cardId: "other-2", accountSeq: 302 },
+    { ...cards[0], cardId: "target-after-page-one", accountSeq: 303, title: "Late scoped match" },
+  ];
+  const requests = installFetchMock(pagedCards);
+  const text = String(await core.card_search.execute({ deck: "Dev", pageSize: 2, scanLimit: 10, format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.matches, 1);
+  assert.equal(payload.data.cards[0].title, "Late scoped match");
+  assert.equal(payload.data.scannedCards, 3);
+  assert.equal(payload.data.complete, true);
+  assert.equal(payload.data.scanLimitReached, false);
+  const cardRequests = requests.map((request) => getCardsRelationKey(request.query)).filter(Boolean) as string[];
+  assert.equal(cardRequests.length, 2);
+  assert.match(cardRequests[1], /"\$offset":2/);
+}
+
+{
+  const exactBoundCards = Array.from({ length: 4 }, (_, index) => ({
+    ...cards[0],
+    cardId: `bound-${index}`,
+    accountSeq: 320 + index,
+  }));
+  installFetchMock(exactBoundCards);
+  const text = String(await core.card_search.execute({ pageSize: 2, scanLimit: 4, limit: 4, format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.data.scannedCards, 4);
+  assert.equal(payload.data.complete, false);
+  assert.equal(payload.data.scanLimitReached, true);
+  assert.match(payload.warnings[0], /may be incomplete/i);
+}
+
+{
+  const duplicateCards = [
+    { ...cards[0], cardId: "duplicate", accountSeq: 340 },
+    { ...cards[0], cardId: "duplicate", accountSeq: 340 },
+    { ...cards[0], cardId: "unique", accountSeq: 341 },
+  ];
+  installFetchMock(duplicateCards);
+  const text = String(await core.card_search.execute({ pageSize: 2, scanLimit: 10, format: "json" }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.data.scannedCards, 3);
+  assert.equal(payload.data.matches, 2);
+  assert.equal(payload.data.complete, true);
+}
+
+{
+  const exactBoundCards = Array.from({ length: 2 }, (_, index) => ({
+    ...cards[0],
+    cardId: `preview-bound-${index}`,
+    accountSeq: 350 + index,
+  }));
+  installFetchMock(exactBoundCards);
+  const text = String(await core.card_list_missing_effort.execute({
+    pageSize: 2,
+    scanLimit: 2,
+    limit: 1,
+    format: "json",
+  }));
+  const payload = parseStructuredJson(text);
+
+  assert.equal(payload.data.complete, false);
+  assert.equal(payload.data.scanLimitReached, true);
+  assert.equal(payload.data.scannedCards, 2);
+  assert.equal(payload.data.eligibleCount, 2);
+  assert.equal(payload.data.returnedEligibleCards, 1);
+  assert.match(payload.warnings[0], /not authoritative/i);
+  assert.match(payload.nextSuggestedAction, /Increase scanLimit/i);
+}
+
+{
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    errors: [{
+      message: "Authorization: Bearer bearer-secret\nCookie=session-secret\ntoken=token-secret credential=credential-secret",
+      authorization: "header-secret",
+      password: "password-secret",
+    }],
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+  try {
+    for (const result of [
+      await core.card_search.execute({ format: "json" }),
+      await core.card_list_missing_effort.execute({ format: "json" }),
+      await core.query.execute({ query: { _root: ["account"], password: "query-secret" } }),
+      await core.dispatch.execute({ path: "cards/create", payload: {}, format: "json" }),
+    ]) {
+      const text = String(result);
+      const payload = parseStructuredJson(text);
+      assert.equal(payload.ok, false);
+      assert.equal(payload.error.category, "api_error");
+      assert.doesNotMatch(text, /bearer-secret|session-secret|token-secret|credential-secret|header-secret|password-secret|query-secret/);
+      assert.match(text, /\[REDACTED\]/);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 console.log("Codecks card search preview tests passed");

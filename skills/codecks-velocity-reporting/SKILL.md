@@ -31,10 +31,10 @@ Use `rosterPath` for an explicit team roster rather than inferring membership fr
 
 ```yaml
 members:
-  - name: Aaron
+  - name: Alex
     userId: <Codecks user UUID>
     fromDate: 2026-02-02
-  - name: Angela
+  - name: Sam
     userId: <Codecks user UUID>
 ```
 

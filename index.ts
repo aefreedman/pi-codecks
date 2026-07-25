@@ -156,6 +156,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       deck: Type.Optional(cardRefSchema),
       milestone: Type.Optional(cardRefSchema),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 3000 })),
+      scanLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10000 })),
+      pageSize: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
       includeArchived: Type.Optional(Type.Boolean()),
       includeDone: Type.Optional(Type.Boolean()),
       outputMode: Type.Optional(cardSearchOutputModeEnum),
@@ -167,6 +169,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       if (input.search_in !== undefined && input.searchIn === undefined) input.searchIn = input.search_in;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
       if (input.include_done !== undefined && input.includeDone === undefined) input.includeDone = input.include_done;
+      if (input.scan_limit !== undefined && input.scanLimit === undefined) input.scanLimit = input.scan_limit;
+      if (input.page_size !== undefined && input.pageSize === undefined) input.pageSize = input.page_size;
       if (input.output_mode !== undefined && input.outputMode === undefined) input.outputMode = input.output_mode;
       normalizeCardLocationAliases(input);
       return input;
@@ -177,7 +181,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       "When deck or milestone is supplied without location, the tool infers the matching scope instead of running a broad search.",
       "Deck and milestone filters may be combined for intersection searches, for example Alpha-milestone cards in the Dev deck.",
       "Search results use compact output by default to protect session context; use outputMode='counts' for bulk/aggregate analysis and outputMode='detailed' only when every returned card row is required.",
-      "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, and update dates when Codecks returns them.",
+      "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, update dates, and bounded-scan completeness when Codecks returns them.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
     ],
   },
@@ -191,6 +195,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       includeDone: Type.Optional(Type.Boolean()),
       includeExcluded: Type.Optional(Type.Boolean()),
       limit: Type.Optional(Type.Number({ minimum: 1, maximum: 3000 })),
+      scanLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10000 })),
+      pageSize: Type.Optional(Type.Number({ minimum: 1, maximum: 500 })),
       includeArchived: Type.Optional(Type.Boolean()),
       format: Type.Optional(outputFormatEnum),
     }),
@@ -199,6 +205,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       if (input.skip_codes !== undefined && input.skipCodes === undefined) input.skipCodes = input.skip_codes;
       if (input.include_done !== undefined && input.includeDone === undefined) input.includeDone = input.include_done;
       if (input.include_excluded !== undefined && input.includeExcluded === undefined) input.includeExcluded = input.include_excluded;
+      if (input.scan_limit !== undefined && input.scanLimit === undefined) input.scanLimit = input.scan_limit;
+      if (input.page_size !== undefined && input.pageSize === undefined) input.pageSize = input.page_size;
       if (input.include_archived !== undefined && input.includeArchived === undefined) input.includeArchived = input.include_archived;
       normalizeCardLocationAliases(input);
       return input;
@@ -207,6 +215,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       "Use this before bulk effort updates so the agent can show candidates and exclusions without mutating cards.",
       "Deck or milestone values infer the corresponding scope when location is omitted.",
+      "If complete=false, increase scanLimit or narrow the scope before presenting candidates for approval.",
       "Present eligibleCards to the user and ask for explicit approval plus target effort values before calling codecks_card_update_effort; this tool does not apply effort values.",
       "Use skipCodes to exclude cards the user explicitly wants skipped.",
     ],

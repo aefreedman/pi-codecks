@@ -43,7 +43,8 @@ const prepare = (toolName: string, args: AnyRecord): AnyRecord => {
 };
 
 assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "includeArchived", "format"]);
-assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "includeArchived", "format"]);
+assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "scanLimit", "pageSize", "includeArchived", "format"]);
+assertProperties("codecks_card_search", ["title", "text", "searchIn", "cardCode", "location", "deck", "milestone", "limit", "scanLimit", "pageSize", "includeArchived", "includeDone", "outputMode", "format"]);
 assertProperties("codecks_run_list", ["title", "includeDeleted", "includeCompleted", "limit", "format"]);
 assertProperties("codecks_run_get", ["runId", "title", "format"]);
 assertProperties("codecks_run_delivered_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "includeCurrentStats", "format"]);
@@ -156,6 +157,10 @@ assert.deepEqual(
   { location: "milestone", milestone: "Alpha", format: "json" },
   "valid card_search locations should be preserved",
 );
+assert.equal(prepare("codecks_card_search", { scan_limit: 900, page_size: 100 }).scanLimit, 900);
+assert.equal(prepare("codecks_card_search", { scan_limit: 900, page_size: 100 }).pageSize, 100);
+assert.equal(prepare("codecks_card_list_missing_effort", { scan_limit: 700, page_size: 70 }).scanLimit, 700);
+assert.equal(prepare("codecks_card_list_missing_effort", { scan_limit: 700, page_size: 70 }).pageSize, 70);
 assert.equal(prepare("codecks_card_get", { title: "Spec", location: "Production" }).deck, "Production");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).cardId, "$3cv");
 assert.equal(prepare("codecks_card_add_comment", { card_id: "$3cv", message: "new thread" }).content, "new thread");
