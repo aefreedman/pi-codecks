@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
 
+## [0.7.0] - 2026-07-25
+
+### Added
+
+- Added bounded, offset-based card pagination with independent `scanLimit`, `pageSize`, and output limits plus explicit completeness metadata for search and missing-effort previews.
+- Added Pi-compatible prepare/convert/validate/execute lifecycle coverage for registered TypeBox schemas.
+
+### Changed
+
+- Made `npm test` deterministic and credential-free with declared, locked test dependencies; live account validation now runs only through `npm run test:integration`.
+- Made live integration fixture scope explicit through `CODECKS_TEST_DECK` and report skipped, read-only, mutation-disabled, and mutation-enabled outcomes.
+
+### Fixed
+
+- Centralized rejection of HTTP-2xx responses containing a nonempty root `errors` array so queries, searches, previews, dispatches, and concrete mutations cannot misreport semantic failures as success or empty data.
+- Recursively sanitized structured semantic-error messages and metadata to redact token-, header-, cookie-, credential-, password-, and secret-like values.
+
 ## [0.6.0] - 2026-07-24
 
 ### Added

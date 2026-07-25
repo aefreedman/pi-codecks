@@ -1,7 +1,7 @@
 {
   "name": "@aefree/pi-codecks",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "keywords": [
     "pi-package"
@@ -18,9 +18,9 @@
     ]
   },
   "scripts": {
-    "test": "node tests/run-tests.mjs",
-    "test:unit": "npx --yes tsx tests/velocity-report.test.ts && npx --yes tsx tests/vision-board-tool.test.ts && npx --yes tsx tests/card-reference-normalization.test.ts && npx --yes tsx tests/done-timeframe-validation.test.ts && npx --yes tsx tests/card-get-tool.test.ts && npx --yes tsx tests/card-search-preview.test.ts && npx --yes tsx tests/resolvable-tool-registration.test.ts && npx --yes tsx tests/cdx-tool-updates.test.ts && npx --yes tsx tests/tool-rendering.test.ts",
-    "test:integration": "npx --yes tsx tests/codecks-tool-validation.ts"
+    "test": "npm run test:unit",
+    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts",
+    "test:integration": "tsx tests/codecks-tool-validation.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -43,5 +43,9 @@
     "typebox": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "tsx": "4.23.1",
+    "typebox": "1.3.8"
   }
 }

@@ -315,6 +315,24 @@ const parseResponse = async (response: Response): Promise<unknown> => {
   }
 };
 
+const sanitizeDiagnostic = (value: unknown): string => {
+  const redactText = (text: string): string => text
+    .replace(/(Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\r\n]+/gi, "$1: [REDACTED]")
+    .replace(/(X-Auth-Token|X-Api-Key|Api-Key)\s*[:=]\s*[^\s;]+/gi, "$1: [REDACTED]")
+    .replace(/\b(token|access_token|refresh_token|credential|credentials|password|secret|client_secret)\b\s*[:=]\s*['\"]?[^'\"\s,;}]+/gi, "$1: [REDACTED]");
+  if (typeof value === "string") return redactText(value);
+  try {
+    return JSON.stringify(value, (key, entry) => {
+      if (/^(x-auth-token|x-api-key|api-key|apikey|authorization|cookie|set-cookie|token|access_token|refresh_token|credential|credentials|password|secret|client_secret)$/i.test(key)) {
+        return "[REDACTED]";
+      }
+      return typeof entry === "string" ? redactText(entry) : entry;
+    });
+  } catch {
+    return "[REDACTED]";
+  }
+};
+
 const requestJson = async (path: string, body: unknown): Promise<unknown> => {
   for (let attempt = 0; ; attempt += 1) {
     await enforceRateLimit();
@@ -370,7 +388,7 @@ const requestJson = async (path: string, body: unknown): Promise<unknown> => {
       continue;
     }
 
-    throw new Error(`HTTP ${response.status} ${response.statusText}: ${JSON.stringify(payload)}`);
+    throw new Error(`HTTP ${response.status} ${response.statusText}: ${sanitizeDiagnostic(payload)}`);
   }
 };
 
@@ -732,10 +750,14 @@ const run = async (): Promise<number> => {
 
   if (!TOKEN || !ACCOUNT) {
     skip("Codecks credentials missing; set CODECKS_TOKEN/CODECKS_ACCOUNT or CODECKS_TEST_PROFILE profile variables.");
+    info("integration outcome: skipped (credentials unavailable)");
     return 0;
   }
 
   pass("credentials present");
+  info(CREATE_DECK_ENV.trim()
+    ? `integration mode: mutation enabled in explicitly configured CODECKS_TEST_DECK '${CREATE_DECK_ENV}'`
+    : "integration mode: read-only; mutation disabled because CODECKS_TEST_DECK is unset");
 
   let preflightFailures = 0;
 
@@ -830,6 +852,7 @@ const run = async (): Promise<number> => {
 
   if (!CREATE_DECK_ENV.trim()) {
     skip("CODECKS_TEST_DECK missing; skipping create-dependent validations.");
+    info(`integration outcome: ${preflightFailures > 0 ? "read-only failed" : "read-only passed; mutation disabled"}`);
     return preflightFailures > 0 ? 1 : 0;
   }
 
@@ -1557,9 +1580,9 @@ const run = async (): Promise<number> => {
 
 
     try {
-      const bugsDeckId = await resolveDeckId("Bugs");
-      if (bugsDeckId === undefined) {
-        skip("archived search filtering check skipped (unable to resolve Bugs deck)");
+      const archivedFixtureDeckId = await resolveDeckId(CREATE_DECK_ENV);
+      if (archivedFixtureDeckId === undefined) {
+        skip("archived search filtering check skipped (unable to resolve configured test deck)");
       } else {
         const archivedPayload = await runQuery({
           _root: [
@@ -1567,7 +1590,7 @@ const run = async (): Promise<number> => {
               account: [
                 {
                   [`cards(${JSON.stringify({
-                    deckId: bugsDeckId,
+                    deckId: archivedFixtureDeckId,
                     visibility: "archived",
                     $order: "-lastUpdatedAt",
                     $limit: 20,
@@ -1588,12 +1611,12 @@ const run = async (): Promise<number> => {
         const target = archivedCards[0];
 
         if (!target?.cardId || !target.title) {
-          skip("archived search filtering check skipped (no archived Bugs card available)");
+          skip("archived search filtering check skipped (no archived card available in configured test deck)");
         } else {
           const defaultSearch = await invokeTool("card_search", {
             title: target.title,
             location: "deck",
-            deck: "Bugs",
+            deck: CREATE_DECK_ENV,
             limit: 50,
             format: "json",
           });
@@ -1604,7 +1627,7 @@ const run = async (): Promise<number> => {
           const includeArchivedSearch = await invokeTool("card_search", {
             title: target.title,
             location: "deck",
-            deck: "Bugs",
+            deck: CREATE_DECK_ENV,
             includeArchived: true,
             limit: 50,
             format: "json",
@@ -2191,12 +2214,15 @@ const run = async (): Promise<number> => {
     fail("cleanup skipped due to missing cardId or unsafe title prefix");
   }
 
-  if (hardFailures > 0) {
-    fail(`validation completed with ${hardFailures} hard failure(s)`);
+  const totalFailures = preflightFailures + hardFailures;
+  if (totalFailures > 0) {
+    fail(`validation completed with ${totalFailures} failure(s) (${preflightFailures} read-only/preflight, ${hardFailures} mutation)`);
+    info("integration outcome: mutation-enabled failed");
     return 1;
   }
 
   pass("validation completed");
+  info("integration outcome: mutation-enabled passed");
   return 0;
 };
 
