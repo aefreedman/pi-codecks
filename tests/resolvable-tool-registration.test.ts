@@ -5,6 +5,8 @@ import { loadRegisteredTools, type RegisteredTool } from "./pi-tool-harness.ts";
 
 type AnyRecord = Record<string, any>;
 
+// Preserve the legacy prompt-metadata assertions in the explicit all-active compatibility condition.
+process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 const tools = await loadRegisteredTools();
 
 const getTool = (name: string): RegisteredTool => {
@@ -271,7 +273,7 @@ assert.ok(decisionFixture.includes("codecks_card_add_comment only when explicitl
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../skills/using-codecks/SKILL.md", import.meta.url), "utf8");
 const velocitySkill = readFileSync(new URL("../skills/codecks-velocity-reporting/SKILL.md", import.meta.url), "utf8");
-assert.doesNotMatch(skill, /codecks_velocity_report/);
+assert.match(skill, /^allowed-tools: .*codecks_tool_search .*codecks_velocity_report/m, "Pi 0.82 allowed-tools should be one space-delimited scalar containing the loader and velocity report");
 assert.match(velocitySkill, /name: codecks-velocity-reporting/);
 assert.match(velocitySkill, /codecks_velocity_report/);
 const docs = `${readme}\n${skill}\n${velocitySkill}`;

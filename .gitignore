@@ -1,2 +1,12 @@
 node_modules/
+.worktrees
+
+.env
+.env.*
+!.env.example
+
+coverage/
+*.log
 *.tgz
+.DS_Store
+Thumbs.db

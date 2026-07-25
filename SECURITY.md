@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report suspected vulnerabilities through GitHub's private security-advisory feature for this repository. Do not open a public issue containing exploit details, credentials, private Codecks data, or raw API responses.
+Please report suspected vulnerabilities through [GitHub's private security-advisory form](https://github.com/aefreedman/pi-codecks/security/advisories/new). Do not open a public issue containing exploit details, credentials, private Codecks data, or raw API responses. If private advisories are temporarily unavailable, open a public issue containing only a request for a private contact channel and no sensitive details.
 
 Include only the minimum reproduction information needed. Redact tokens, authorization headers, cookies, account-specific identifiers, user data, and local filesystem paths. Maintainers will acknowledge the report, assess affected versions, and coordinate a fix and disclosure when appropriate.
 

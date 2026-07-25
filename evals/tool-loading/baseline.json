@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "measurement": "Untouched 39-default-tool baseline recorded before dynamic-loader production edits. schemaChars is public parameter-schema serialization; completeSerializedMetadataChars is the complete public initial-tool metadata serialization and is intentionally not a sum of the named character buckets.",
+  "legacyBaseline": {
+    "label": "untouched legacy Codecks default public tools",
+    "toolCount": 39,
+    "schemaChars": 14500,
+    "descriptionChars": 2749,
+    "promptSnippetChars": 1972,
+    "promptGuidelineChars": 13651,
+    "completeSerializedMetadataChars": 38478
+  },
+  "implementedConditions": {
+    "all-active": {
+      "note": "Legacy 39-tool composition with safety-hardened active descriptions; the untouched comparison remains legacyBaseline above.",
+      "toolCount": 39,
+      "schemaChars": 14500,
+      "descriptionChars": 8429,
+      "promptSnippetChars": 1972,
+      "promptGuidelineChars": 13651,
+      "completeSerializedMetadataChars": 44158,
+      "reductionFromUntouchedPercent": -14.76
+    },
+    "balanced": {
+      "toolCount": 3,
+      "schemaChars": 2293,
+      "descriptionChars": 551,
+      "promptSnippetChars": 218,
+      "promptGuidelineChars": 2585,
+      "completeSerializedMetadataChars": 6095,
+      "reductionPercent": 84.16
+    },
+    "loader-only": {
+      "toolCount": 1,
+      "schemaChars": 527,
+      "descriptionChars": 195,
+      "promptSnippetChars": 84,
+      "promptGuidelineChars": 1039,
+      "completeSerializedMetadataChars": 1999,
+      "reductionPercent": 94.8
+    }
+  }
+}

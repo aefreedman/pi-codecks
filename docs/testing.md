@@ -50,6 +50,6 @@ The integration script applies conservative request-rate and timeout bounds. A q
 
 ## Manual GitHub workflow
 
-The separate integration workflow is available only through manual dispatch and a protected `codecks-integration` environment. It requires protected secrets for the account, token, and disposable fixture deck. Missing configuration fails before the test starts. Concurrency prevents two mutation runs from using the shared fixture at once.
+The separate integration workflow is available only through manual dispatch from `main` and a protected `codecks-integration` environment. It checks out `main` explicitly, requires protected secrets for the account, token, and disposable fixture deck, and rejects non-default-branch dispatches before the secret-bearing job starts. Configure the environment with required reviewers and a deployment-branch policy limited to `main`; repository YAML is not a substitute for that external protection. Missing configuration fails before the test starts. Concurrency prevents two mutation runs from using the shared fixture at once.
 
 Public CI and the publish workflow do not run this live workflow automatically.

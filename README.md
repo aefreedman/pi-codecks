@@ -4,9 +4,11 @@ Pi tools, skills, and prompts for Codecks workflows.
 
 This package provides a Pi-native registration layer around Codecks card, comment, review, blocker, resolvable, priority, effort, attachment, and inbox-style workflows. It is intended for users who already have a Codecks account and want Pi agents to interact with Codecks through explicit tools rather than ad hoc shell scripts.
 
+Dynamic tool loading requires Pi 0.82.0 or newer so package ownership and active-session restoration can be verified from canonical tool provenance.
+
 ## Features
 
-Default tools:
+Registered default tools:
 
 - `codecks_query`
 - `codecks_dispatch`
@@ -54,6 +56,26 @@ Optional debug tools are not registered by default:
 - `codecks_debug_logged_in_user_resolvables`
 
 Set `CODECKS_ENABLE_DEBUG_TOOLS=1` or `PI_CODECKS_ENABLE_DEBUG_TOOLS=1` before launching Pi to register the debug tools.
+
+## Dynamic tool loading
+
+By default, the package initially exposes only:
+
+- `codecks_tool_search`
+- `codecks_card_get`
+- `codecks_card_search`
+
+Use `codecks_tool_search` when another registered Codecks capability is needed. Search is deterministic, enables at most four tools, defaults to the smallest sufficient capability, and may return only reviewed discovery/action pairs for effort application or existing-thread follow-up. Activation is additive, so built-in and foreign-extension tools remain active. Successfully enabled tools remain available on the following request and are restored from authenticated loader results on the active session branch after startup, reload, resume, and fork flows. A normal new session intentionally resets to the configured initial mode.
+
+Deferred tools carry operation-critical safety in their descriptions while detailed sequencing is returned by the loader. The loader keeps universal authorization, dry-run, thread-routing, untrusted-content, card-reference, and out-of-scope deletion guidance visible. Raw `codecks_query` / `codecks_dispatch`, the deprecated `codecks_card_add_block`, and opt-in debug tools require exact or explicit fallback/diagnostic intent rather than broad ordinary searches.
+
+Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
+
+- `balanced` (default) — loader plus structured get and card search
+- `loader-only` — only the package loader initially
+- `all-active` — legacy 39-tool initial composition without the loader, with the same safety-hardened active descriptions used after deferred activation
+
+Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
 
 ## Install
 
@@ -196,6 +218,8 @@ npm run pack:validate
 npm run pack:smoke
 npm run pack:dry-run
 ```
+
+The package-local dynamic-loading matrix and GPT-5.6 fresh-process runner live in `evals/tool-loading/` in the source repository. Validate the committed cases without a model run using `npx tsx evals/tool-loading/run-eval.ts --dry-run`. Live evals are read-only and install a guard that blocks every Codecks mutation before execution.
 
 `pack:smoke` creates the tarball outside the repository, installs it into a neutral temporary project without Codecks environment variables, and verifies the Pi entrypoint and registered assets.
 
