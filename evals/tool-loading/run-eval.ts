@@ -47,6 +47,22 @@ function csv(value: string): string[] { return value.split(",").map((item) => it
 function sameSet(left: readonly string[], right: readonly string[]): boolean { return left.length === right.length && left.every((value) => right.includes(value)); }
 function timestamp(): string { return new Date().toISOString().replace(/[:.]/g, "-"); }
 
+const FIXTURE_ENV: Record<string, string> = {
+  CARD_ID: "CODECKS_EVAL_CARD_ID",
+  CARD_TITLE: "CODECKS_EVAL_CARD_TITLE",
+  MILESTONE: "CODECKS_EVAL_MILESTONE",
+  RUN_ID: "CODECKS_EVAL_RUN_ID",
+};
+
+function renderFixturePrompt(prompt: string): string {
+  return prompt.replace(/\{\{([A-Z_]+)\}\}/g, (_match, key: string) => {
+    const envName = FIXTURE_ENV[key] ?? fail(`unknown fixture placeholder: ${key}`);
+    const value = process.env[envName]?.trim();
+    if (!value) fail(`live cases using {{${key}}} require ${envName}`);
+    return value;
+  });
+}
+
 function usage(): string {
   return `Usage: npx tsx evals/tool-loading/run-eval.ts --model openai-codex/gpt-5.6-luna[:thinking] [options]
 
@@ -110,6 +126,19 @@ function expectedInitialToolCount(condition: Condition): number {
   return 1;
 }
 
+function numeric(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readUsage(message: JsonObject): Record<string, number> {
+  const usage = (message.usage ?? {}) as JsonObject;
+  const input = numeric(usage.input ?? usage.inputTokens);
+  const output = numeric(usage.output ?? usage.outputTokens);
+  const cacheRead = numeric(usage.cacheRead ?? usage.cache_read_tokens);
+  const cacheWrite = numeric(usage.cacheWrite ?? usage.cache_write_tokens);
+  return { input, output, cacheRead, cacheWrite, total: numeric(usage.totalTokens) || input + output + cacheRead + cacheWrite };
+}
+
 function findTools(payload: unknown): unknown[] | undefined {
   if (Array.isArray(payload)) { for (const item of payload) { const found = findTools(item); if (found) return found; } return undefined; }
   if (!payload || typeof payload !== "object") return undefined;
@@ -168,13 +197,17 @@ function sanitizeEvent(event: JsonObject): JsonObject {
 }
 
 function parseTrial(processResult: Awaited<ReturnType<typeof runProcess>>, capturePath: string, condition: Condition, testCase: EvalCase, config: EvalConfig, includeEvents: boolean): JsonObject {
-  const toolCalls: string[] = []; const activated: string[] = []; const toolErrors: string[] = []; const events: JsonObject[] = [];
-  let invalidJsonLines = 0; let assistantErrors = 0;
+  const toolCalls: string[] = []; const toolCallRecords: Array<{ name: string; args: JsonObject }> = []; const activated: string[] = []; const toolErrors: string[] = []; const events: JsonObject[] = [];
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  let invalidJsonLines = 0; let assistantErrors = 0; let assistantMessages = 0;
   for (const line of processResult.stdout.split(/\r?\n/).filter(Boolean)) {
     let event: JsonObject;
     try { event = JSON.parse(line) as JsonObject; } catch { invalidJsonLines += 1; continue; }
     if (includeEvents) events.push(sanitizeEvent(event));
-    if (event.type === "tool_execution_start" && typeof event.toolName === "string") toolCalls.push(event.toolName);
+    if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+      toolCalls.push(event.toolName);
+      toolCallRecords.push({ name: event.toolName, args: event.args && typeof event.args === "object" ? event.args as JsonObject : {} });
+    }
     if (event.type === "tool_execution_end") {
       if (event.isError === true && typeof event.toolName === "string") toolErrors.push(event.toolName);
       const details = ((event.result as JsonObject | undefined)?.details as JsonObject | undefined);
@@ -182,7 +215,12 @@ function parseTrial(processResult: Awaited<ReturnType<typeof runProcess>>, captu
     }
     if (event.type === "message_end") {
       const message = event.message as JsonObject | undefined;
-      if (message?.role === "assistant" && typeof message.errorMessage === "string" && message.errorMessage.length) assistantErrors += 1;
+      if (message?.role === "assistant") {
+        assistantMessages += 1;
+        const current = readUsage(message);
+        for (const key of Object.keys(usage) as Array<keyof typeof usage>) usage[key] += current[key];
+        if (typeof message.errorMessage === "string" && message.errorMessage.length) assistantErrors += 1;
+      }
     }
   }
   const counts = Object.fromEntries([...new Set(toolCalls)].map((tool) => [tool, toolCalls.filter((call) => call === tool).length]));
@@ -196,6 +234,7 @@ function parseTrial(processResult: Awaited<ReturnType<typeof runProcess>>, captu
   const actualActivated = [...new Set(activated)];
   const expectedActivated = loaderExpected ? testCase.permittedActivatedNames.filter((tool) => !initiallyActive(condition, tool)) : [];
   checks.push({ name: "exact-permitted-activation", pass: sameSet(actualActivated, expectedActivated), detail: `expected ${expectedActivated.join(", ") || "none"}; observed ${actualActivated.join(", ") || "none"}` });
+  checks.push({ name: "maximum-four-activation", pass: actualActivated.length <= 4, detail: String(actualActivated.length) });
   const mutationCalls = toolCalls.filter((tool) => config.mutationTools.includes(tool));
   checks.push({ name: "mutation-guard", pass: mutationCalls.length === 0, detail: mutationCalls.join(", ") || "no mutation call" });
   if (testCase.execution === "prohibited") checks.push({ name: "prohibited-execution", pass: toolCalls.every((tool) => tool === LOADER), detail: toolCalls.join(", ") || "none" });
@@ -207,11 +246,13 @@ function parseTrial(processResult: Awaited<ReturnType<typeof runProcess>>, captu
   checks.push({ name: "native-deferred-markers", pass: loaderExpected ? markerPairs >= 1 : markerPairs === 0, detail: `call=${capture.native.toolSearchCall}, output=${capture.native.toolSearchOutput}` });
   checks.push({ name: "no-tool-errors", pass: toolErrors.length === 0, detail: toolErrors.join(", ") || "none" });
   checks.push({ name: "no-assistant-errors", pass: assistantErrors === 0, detail: String(assistantErrors) });
+  checks.push({ name: "assistant-outcome-present", pass: assistantMessages > 0, detail: String(assistantMessages) });
   checks.push({ name: "not-timed-out", pass: !processResult.timedOut, detail: `${processResult.wallTimeMs}ms` });
   checks.push({ name: "bounded-output", pass: !processResult.outputLimitExceeded, detail: `${processResult.stdout.length + processResult.stderr.length}/${config.maxOutputChars}` });
   checks.push({ name: "process-exit", pass: processResult.exitCode === 0, detail: String(processResult.exitCode) });
   checks.push({ name: "clean-jsonl", pass: invalidJsonLines === 0, detail: String(invalidJsonLines) });
-  return { condition, caseId: testCase.id, category: testCase.category, execution: testCase.execution, pass: checks.every((check) => check.pass), checks, wallTimeMs: processResult.wallTimeMs, exitCode: processResult.exitCode, timedOut: processResult.timedOut, toolCalls, toolCallCounts: counts, activated: actualActivated, providerRequests: capture.providerRequests, initialToolSchema: { toolCount: capture.initialToolCount, serializedChars: capture.initialToolSerializedChars }, nativeToolSearch: capture.native, captureParseErrors: capture.parseErrors, ...(includeEvents ? { events } : {}) };
+  const loaderRequests = toolCallRecords.filter((call) => call.name === LOADER).map((call) => ({ query: call.args.query, toolNames: call.args.toolNames, limit: call.args.limit }));
+  return { condition, caseId: testCase.id, category: testCase.category, execution: testCase.execution, pass: checks.every((check) => check.pass), checks, wallTimeMs: processResult.wallTimeMs, exitCode: processResult.exitCode, timedOut: processResult.timedOut, outputChars: processResult.stdout.length + processResult.stderr.length, toolCalls, toolCallCounts: counts, loaderRequests, activated: actualActivated, assistantMessages, assistantUsage: usage, providerRequests: capture.providerRequests, initialToolSchema: { toolCount: capture.initialToolCount, serializedChars: capture.initialToolSerializedChars }, nativeToolSearch: capture.native, captureParseErrors: capture.parseErrors, ...(includeEvents ? { events } : {}) };
 }
 
 async function main(): Promise<void> {
@@ -229,6 +270,7 @@ async function main(): Promise<void> {
     console.log(`VALID: ${selected.length} cases × ${options.conditions.length} conditions × ${options.trials} fresh trial(s)`);
     console.log(`Pi subprocess: ${process.execPath} ${baseArgs.join(" ")} --model <approved-gpt-5.6> <case-prompt>`);
     console.log("Live runs are read-only by design; eval mutation-guard.ts blocks every Codecks mutation before tool execution.");
+    console.log("Live fixture prompts require CODECKS_EVAL_CARD_ID, CODECKS_EVAL_CARD_TITLE, CODECKS_EVAL_MILESTONE, and CODECKS_EVAL_RUN_ID when their placeholders are selected.");
     return;
   }
   if (!existsSync(piCli)) fail(`Pi CLI is missing from this worktree: ${piCli}`);
@@ -239,7 +281,8 @@ async function main(): Promise<void> {
   const trials: JsonObject[] = [];
   for (const condition of options.conditions) for (const testCase of selected) for (let trial = 1; trial <= options.trials; trial += 1) {
     const capturePath = join(tmpdir(), `pi-codecks-tool-loading-${process.pid}-${Date.now()}-${condition}-${testCase.id}-${trial}.jsonl`);
-    const processResult = await runProcess([...baseArgs, "--model", options.model!, testCase.prompt], { ...process.env, PI_CODECKS_TOOL_LOADING_MODE: condition, PI_CODECKS_EVAL_PROVIDER_CAPTURE: capturePath }, config.timeoutMs, config.maxOutputChars);
+    const prompt = renderFixturePrompt(testCase.prompt);
+    const processResult = await runProcess([...baseArgs, "--model", options.model!, prompt], { ...process.env, PI_CODECKS_TOOL_LOADING_MODE: condition, PI_CODECKS_EVAL_PROVIDER_CAPTURE: capturePath }, config.timeoutMs, config.maxOutputChars);
     const summary = parseTrial(processResult, capturePath, condition, testCase, config, options.includeEvents);
     if (options.keep) summary.rawCapturePath = capturePath; else rmSync(capturePath, { force: true });
     trials.push({ trial, ...summary });

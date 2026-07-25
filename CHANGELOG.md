@@ -9,12 +9,16 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added provenance-safe dynamic Codecks tool loading with balanced, loader-only, and all-active modes, deterministic bounded search, additive activation, and active-branch restoration.
+- Added package-local Codecks tool-loading unit coverage and GPT-5.6 behavioral evaluation fixtures with a mutation-blocking guard.
 - Added credential-free public CI, protected manual integration validation, and provenance-enabled npm trusted publishing workflows.
 - Added executable package-manifest validation and neutral temporary-project smoke coverage for generated tarballs.
 - Added public contribution, security, testing, and release guidance.
 
 ### Changed
 
+- Require Pi 0.82.0 or newer and initially expose only `codecks_tool_search`, `codecks_card_get`, and `codecks_card_search` in balanced mode while retaining the legacy 39-tool all-active compatibility mode.
+- Normalized the `using-codecks` experimental `allowed-tools` field to Pi's space-delimited format and included the loader and velocity report.
 - Added evidence-scoped corrective Review follow-up guidance that records the earlier basis, new limiting evidence, and remaining validation gap without prematurely claiming a fix or root cause.
 - Prepared public npm metadata and an explicit package-content allow-list while keeping live Codecks tests outside shared validation.
 

@@ -1,45 +1,7 @@
 ---
 name: using-codecks
 description: Use for Codecks Free-plan core card workflows (search/get/create/update, comments/review/blocker, attachments, status/priority/effort) with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
-allowed-tools:
-  - codecks_query
-  - codecks_dispatch
-  - codecks_card_search
-  - codecks_card_list_missing_effort
-  - codecks_card_list_done_within_timeframe
-  - codecks_card_get
-  - codecks_card_get_formatted
-  - codecks_card_get_vision_board
-  - codecks_card_create
-  - codecks_card_bulk_create
-  - codecks_card_bulk_update
-  - codecks_card_set_parent
-  - codecks_milestone_list
-  - codecks_milestone_get
-  - codecks_milestone_update
-  - codecks_run_list
-  - codecks_run_get
-  - codecks_run_delivered_effort
-  - codecks_run_average_effort
-  - codecks_run_update
-  - codecks_card_update_run
-  - codecks_card_add_attachment
-  - codecks_card_update
-  - codecks_card_update_status
-  - codecks_card_add_comment
-  - codecks_card_add_review
-  - codecks_card_add_blocker
-  - codecks_card_add_block
-  - codecks_card_reply_resolvable
-  - codecks_card_edit_resolvable_entry
-  - codecks_card_close_resolvable
-  - codecks_card_reopen_resolvable
-  - codecks_card_list_resolvables
-  - codecks_list_open_resolvable_cards
-  - codecks_list_logged_in_user_actionable_resolvables
-  - codecks_card_update_effort
-  - codecks_card_update_priority
-  - codecks_user_lookup
+allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # using-codecks Skill
@@ -63,10 +25,13 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Card archive/delete/trash operations. Those are intentionally not exposed by the current Pi Codecks tooling.
 
 ## Tool order
-1. Use specialized card tools first.
-2. Use `codecks_query` for read-only gaps.
-3. Use `codecks_dispatch` only as a last resort for in-scope, non-destructive writes after validating endpoint and payload shape.
-4. For hero/sub-card linking, prefer `codecks_card_set_parent` over raw dispatch.
+1. Use an already-active specialized tool when available; otherwise use `codecks_tool_search` to activate the smallest sufficient capability or reviewed prerequisite pair.
+2. Use specialized card tools first.
+3. Use `codecks_query` for explicit read-only gaps.
+4. Use `codecks_dispatch` only as a last resort for in-scope, non-destructive writes after validating endpoint and payload shape.
+5. For hero/sub-card linking, prefer `codecks_card_set_parent` over raw dispatch.
+
+`allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not the authorization boundary; operation-specific user authorization and tool safety checks still apply.
 
 ## Card targeting and safety
 - Identify cards by location and title when possible.

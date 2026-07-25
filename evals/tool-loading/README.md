@@ -12,11 +12,11 @@ Read-only cases use the account configured in the caller's environment. Run them
 
 `cases.json` is the committed source of truth. Each case declares its expected outcome, exact permitted loader activation set, maximum loader/tool behavior, execution class, and category-specific pass criteria. It covers immediate card retrieval/search, formatted presentation, milestone and Run reads, velocity, resolvable discovery, reviewed reply-pair selection, bulk-effort preview, mutation selection without execution, ambiguous discovery, raw fallback, no-operation, and non-Codecks negative controls.
 
-The runner separately records outcome/tool checks, exact activation, mutation safety, initial provider tool serialization, provider request count, native deferred-tool markers when present, and wall time. `baseline.json` preserves the untouched 39-tool metadata measurement; no dynamic-condition measurements are claimed until a run is recorded.
+The runner separately records outcome/tool checks, exact activation, mutation safety, initial provider tool serialization, provider request count, native deferred-tool markers when present, and wall time. `baseline.json` preserves the untouched 39-tool metadata measurement and deterministic harness measurements for all three implemented conditions.
 
 ## Run
 
-Live runs require an explicit GPT-5.6 Codex family model. The runner rejects all other providers/models and creates a new Pi JSON subprocess for every condition/case/trial.
+Live runs require an explicit GPT-5.6 Codex family model. The runner rejects all other providers/models and creates a new Pi JSON subprocess for every condition/case/trial. Supply account-local read fixtures through `CODECKS_EVAL_CARD_ID`, `CODECKS_EVAL_CARD_TITLE`, `CODECKS_EVAL_MILESTONE`, and `CODECKS_EVAL_RUN_ID`; only selected cases require each value. Keep these values in the environment rather than committing account data.
 
 ```bash
 npx tsx evals/tool-loading/run-eval.ts --dry-run
