@@ -1,0 +1,65 @@
+name: Maintainer Codecks Integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-codecks-live-integration
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Protected live validation
+    runs-on: ubuntu-latest
+    environment: codecks-integration
+    env:
+      CODECKS_ACCOUNT: ${{ secrets.CODECKS_ACCOUNT }}
+      CODECKS_TOKEN: ${{ secrets.CODECKS_TOKEN }}
+      CODECKS_TEST_DECK: ${{ secrets.CODECKS_TEST_DECK }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Require protected live-test configuration
+        shell: bash
+        run: |
+          missing=0
+          for name in CODECKS_ACCOUNT CODECKS_TOKEN CODECKS_TEST_DECK; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Protected integration configuration is incomplete: ${name} is not set."
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            echo "### Live integration outcome: configuration failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Protected account credentials and disposable fixture scope are configured."
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run explicit live integration validation
+        shell: bash
+        run: |
+          set +e
+          npm run test:integration
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo "### Live integration outcome: mutation-enabled validation passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Live integration outcome: live validation failed" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"

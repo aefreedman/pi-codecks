@@ -57,10 +57,16 @@ Set `CODECKS_ENABLE_DEBUG_TOOLS=1` or `PI_CODECKS_ENABLE_DEBUG_TOOLS=1` before l
 
 ## Install
 
+From npm:
+
+```bash
+pi install npm:@aefree/pi-codecks
+```
+
 From GitHub:
 
 ```bash
-pi install git:git@github.com:aefreedman/pi-codecks.git
+pi install git:github.com/aefreedman/pi-codecks
 ```
 
 Local development install:
@@ -90,7 +96,7 @@ Alternative variable names are also supported:
 - `CODECKS_API_TOKEN`
 - `CODECKS_API_BASE`
 
-Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. `pi-codecks` does not execute generic 1Password helper commands directly; resolve secrets through [`pi-onepassword`](https://github.com/aefreedman/pi-onepassword) or another explicit secret integration first, then provide `CODECKS_TOKEN`, `CODECKS_API_TOKEN`, or `CODECKS_PROFILE_<PROFILE>_TOKEN`.
+Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. `pi-codecks` does not resolve secret-reference placeholders or execute generic 1Password helper commands directly. Resolve secrets through [`pi-onepassword`](https://github.com/aefreedman/pi-onepassword) or another explicit secret integration first, then provide `CODECKS_TOKEN`, `CODECKS_API_TOKEN`, or `CODECKS_PROFILE_<PROFILE>_TOKEN`.
 
 ## Card Retrieval Tools
 
@@ -173,15 +179,27 @@ Agents should not open new Comment threads for follow-up work, progress updates,
 
 Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolvables` with `includeClosed: true` if needed, then `codecks_card_reopen_resolvable` before replying.
 
-## Testing
+## Development and testing
+
+From a clean checkout:
 
 ```bash
-npm test
+npm ci && npm test
 ```
 
-The default test command runs deterministic, credential-free unit, fixture, registration, schema-lifecycle, rendering, and transport tests. From a clean checkout, use `npm ci && npm test`; this command does not contact Codecks.
+The default test command runs deterministic, credential-free unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. It never contacts Codecks. Public pull-request CI uses only this credential-free path plus package-manifest and packed-tarball checks.
 
-Run `npm run test:integration` explicitly for account-backed maintainer validation against a user-controlled Codecks account. The script reports whether it was skipped, completed read-only with mutations disabled, or completed with mutations enabled. Any change that adds or changes Codecks query/dispatch shapes must be verified with this live workflow before release.
+Additional public-safe package checks are available locally:
+
+```bash
+npm run pack:validate
+npm run pack:smoke
+npm run pack:dry-run
+```
+
+`pack:smoke` creates the tarball outside the repository, installs it into a neutral temporary project without Codecks environment variables, and verifies the Pi entrypoint and registered assets.
+
+Run `npm run test:integration` explicitly for account-backed maintainer validation against a user-controlled Codecks account. Missing credentials produce a clear local skip. Credentials without `CODECKS_TEST_DECK` run read-only checks; setting `CODECKS_TEST_DECK` opts into mutation coverage in that explicitly selected fixture deck. Never use a production deck. `npm run test:all` runs unit checks followed by this explicit integration command.
 
 Optional integration settings:
 
@@ -191,7 +209,7 @@ Optional integration settings:
 - `CODECKS_TEST_PROFILE` - selects a test profile
 - `CODECKS_PROFILE_<PROFILE>_TOKEN` - direct token value for the selected test profile
 
-The validation script enforces a conservative shared request budget so combined direct API calls and tool calls stay below Codecks API rate limits.
+The validation script enforces a conservative shared request budget so combined direct API calls and tool calls stay below Codecks API rate limits. See [Testing](docs/testing.md) for the complete safety model and [Contributing](CONTRIBUTING.md) for pull-request guidance.
 
 ## Implementation notes
 

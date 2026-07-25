@@ -1,0 +1,76 @@
+name: Publish npm Package
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Trusted npm publication
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Node.js for trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run credential-free tests
+        run: npm test
+
+      - name: Validate and smoke-test package
+        run: |
+          npm run pack:validate
+          npm run pack:smoke
+          npm run pack:dry-run
+          npm publish --dry-run --access public --ignore-scripts
+
+      - name: Verify release tag and unpublished version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          package_name=$(node -p "require('./package.json').name")
+          package_version=$(node -p "require('./package.json').version")
+          expected_tag="v${package_version}"
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error::Release tag must be ${expected_tag}; received ${RELEASE_TAG}."
+            exit 1
+          fi
+
+          error_file=$(mktemp)
+          if npm view "${package_name}@${package_version}" version --json > /dev/null 2>"$error_file"; then
+            echo "::error::${package_name}@${package_version} already exists on npm."
+            rm -f "$error_file"
+            exit 1
+          fi
+          if ! grep -q "E404" "$error_file"; then
+            echo "::error::Unable to verify whether ${package_name}@${package_version} exists on npm."
+            cat "$error_file"
+            rm -f "$error_file"
+            exit 1
+          fi
+          rm -f "$error_file"
+          echo "Release tag matches the package version and the version is not published."
+
+      - name: Publish with provenance through npm trusted publishing
+        run: npm publish --access public --provenance

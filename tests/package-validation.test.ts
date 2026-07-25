@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (relativePath: string): string => readFileSync(path.join(root, relativePath), "utf8");
+const packageJson = JSON.parse(read("package.json"));
+
+assert.notEqual(packageJson.private, true, "publish-ready package must not be marked private");
+assert.equal(packageJson.name, "@aefree/pi-codecks");
+assert.equal(packageJson.license, "MIT");
+assert.equal(packageJson.publishConfig?.access, "public");
+assert.equal(packageJson.publishConfig?.provenance, true);
+assert.equal(packageJson.publishConfig?.registry, "https://registry.npmjs.org/");
+assert.match(packageJson.engines?.node ?? "", /^>=\d+/);
+assert.match(packageJson.repository?.url ?? "", /^git\+https:\/\/github\.com\/aefreedman\/pi-codecks\.git$/);
+assert.equal(packageJson.bugs?.url, "https://github.com/aefreedman/pi-codecks/issues");
+assert.equal(packageJson.homepage, "https://github.com/aefreedman/pi-codecks#readme");
+for (const keyword of ["pi-package", "codecks", "project-management"]) {
+  assert.ok(packageJson.keywords?.includes(keyword), `expected package keyword: ${keyword}`);
+}
+
+assert.deepEqual(packageJson.pi?.extensions, ["./index.ts"]);
+assert.deepEqual(packageJson.pi?.skills, ["./skills"]);
+assert.deepEqual(packageJson.pi?.prompts, ["./prompts"]);
+for (const registration of ["index.ts", "skills", "prompts"]) {
+  assert.ok(existsSync(path.join(root, registration)), `missing Pi registration target: ${registration}`);
+}
+
+const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "README.md", "CHANGELOG.md", "LICENSE"];
+assert.deepEqual(packageJson.files, expectedFiles);
+for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
+  assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
+}
+
+assert.equal(packageJson.scripts?.test, "npm run test:unit");
+assert.match(packageJson.scripts?.["test:integration"] ?? "", /codecks-tool-validation\.ts/);
+assert.equal(packageJson.scripts?.["test:all"], "npm run test:unit && npm run test:integration");
+assert.doesNotMatch(packageJson.scripts?.test ?? "", /integration|CODECKS_/i);
+assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-tool-validation|CODECKS_/i);
+assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manifest/);
+assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
+assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
+
+const publicCi = read(".github/workflows/ci.yml");
+const integrationWorkflow = read(".github/workflows/integration.yml");
+const publishWorkflow = read(".github/workflows/publish.yml");
+assert.match(publicCi, /pull_request:/);
+assert.match(publicCi, /npm test/);
+assert.match(publicCi, /pack:validate/);
+assert.match(publicCi, /pack:smoke/);
+assert.doesNotMatch(publicCi, /CODECKS_|test:integration|secrets\./);
+assert.match(integrationWorkflow, /workflow_dispatch:/);
+assert.match(integrationWorkflow, /environment: codecks-integration/);
+assert.match(integrationWorkflow, /concurrency:/);
+assert.match(integrationWorkflow, /npm run test:integration/);
+assert.doesNotMatch(integrationWorkflow, /pull_request:|\bpush:/);
+assert.match(publishWorkflow, /release:/);
+assert.match(publishWorkflow, /environment: npm/);
+assert.match(publishWorkflow, /id-token: write/);
+assert.match(publishWorkflow, /npm publish --access public --provenance/);
+assert.doesNotMatch(publishWorkflow, /NPM_TOKEN|CODECKS_/);
+
+for (const requiredDoc of ["README.md", "CONTRIBUTING.md", "SECURITY.md", "docs/testing.md", "docs/release.md"]) {
+  assert.ok(existsSync(path.join(root, requiredDoc)), `missing public documentation: ${requiredDoc}`);
+}
+
+const readme = read("README.md");
+const contributing = read("CONTRIBUTING.md");
+const testing = read("docs/testing.md");
+const release = read("docs/release.md");
+const packageFacingDocs = [
+  readme,
+  contributing,
+  read("SECURITY.md"),
+  testing,
+  release,
+  read("skills/using-codecks/SKILL.md"),
+  read("skills/codecks-velocity-reporting/SKILL.md"),
+].join("\n");
+
+assert.match(readme, /pi install npm:@aefree\/pi-codecks/);
+assert.match(readme, /npm ci && npm test/);
+assert.match(testing, /credential-free/i);
+assert.match(testing, /npm run test:integration/);
+assert.match(testing, /CODECKS_TEST_DECK/);
+assert.match(contributing, /fork|pull request/i);
+assert.match(release, /trusted publishing/i);
+assert.match(release, /npm publish --dry-run --access public/);
+assert.doesNotMatch(packageFacingDocs, /TOKEN_OP_REF|TOKEN_REF/);
+assert.doesNotMatch(packageFacingDocs, /[A-Za-z]:[\\/]Users[\\/][^\\/\s]+/);
+assert.doesNotMatch(packageFacingDocs, /\/(?:Users|home)\/[^/\s]+/);
+assert.doesNotMatch(packageFacingDocs, /docs[\\/]plans|todos[\\/]/i);
+
+console.log("package validation test passed");

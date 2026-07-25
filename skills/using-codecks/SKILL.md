@@ -160,5 +160,5 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 ## Multi-workspace profile switching
 - Prefer `CODECKS_PROFILE` with profile-scoped variables over rewriting global vars per call.
 - Profile env pattern: `CODECKS_PROFILE_<KEY>_ACCOUNT`, `CODECKS_PROFILE_<KEY>_API_BASE` (optional), `CODECKS_PROFILE_<KEY>_TOKEN` or `CODECKS_PROFILE_<KEY>_API_TOKEN`.
-- `TOKEN_OP_REF` / `TOKEN_REF` values are not resolved by `pi-codecks`; resolve secrets through `pi-onepassword` or another explicit integration before launching Pi.
+- Secret-reference placeholders are not resolved by `pi-codecks`; resolve secrets through `pi-onepassword` or another explicit integration before launching Pi, then provide a direct token environment variable.
 - Keep API tokens in a secret manager; never store raw tokens in repo files.

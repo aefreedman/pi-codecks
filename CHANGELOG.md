@@ -7,9 +7,16 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+### Added
+
+- Added credential-free public CI, protected manual integration validation, and provenance-enabled npm trusted publishing workflows.
+- Added executable package-manifest validation and neutral temporary-project smoke coverage for generated tarballs.
+- Added public contribution, security, testing, and release guidance.
+
 ### Changed
 
 - Added evidence-scoped corrective Review follow-up guidance that records the earlier basis, new limiting evidence, and remaining validation gap without prematurely claiming a fix or root cause.
+- Prepared public npm metadata and an explicit package-content allow-list while keeping live Codecks tests outside shared validation.
 
 ## [0.7.0] - 2026-07-25
 

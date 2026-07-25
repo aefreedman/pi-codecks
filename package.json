@@ -1,10 +1,42 @@
 {
   "name": "@aefree/pi-codecks",
-  "private": true,
   "version": "0.7.1",
+  "description": "Pi tools, skills, and prompts for safe Codecks project-management workflows.",
   "type": "module",
+  "license": "MIT",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "codecks",
+    "project-management",
+    "productivity",
+    "ai-agent"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aefreedman/pi-codecks.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aefreedman/pi-codecks/issues"
+  },
+  "homepage": "https://github.com/aefreedman/pi-codecks#readme",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "index.ts",
+    "src/",
+    "skills/",
+    "prompts/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
@@ -19,23 +51,17 @@
   },
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts",
-    "test:integration": "tsx tests/codecks-tool-validation.ts"
+    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts && tsx tests/package-validation.test.ts",
+    "test:integration": "tsx tests/codecks-tool-validation.ts",
+    "test:all": "npm run test:unit && npm run test:integration",
+    "pack:dry-run": "npm pack --dry-run --json",
+    "pack:validate": "node scripts/validate-pack-manifest.mjs",
+    "pack:smoke": "node scripts/packed-tarball-smoke.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
-  "description": "Pi tools, skills, and prompts for Codecks workflows.",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/aefreedman/pi-codecks.git"
-  },
-  "bugs": {
-    "url": "https://github.com/aefreedman/pi-codecks/issues"
-  },
-  "homepage": "https://github.com/aefreedman/pi-codecks#readme",
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
       "optional": true

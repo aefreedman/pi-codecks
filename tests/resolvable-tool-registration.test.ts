@@ -298,7 +298,8 @@ for (const phrase of [
   assert.ok(docs.includes(phrase), `expected docs/skill quick-path coverage for ${phrase}`);
 }
 assert.match(docs, /untrusted external Codecks data/i);
-assert.match(docs, /TOKEN_OP_REF.*not resolved|not resolved.*TOKEN_OP_REF/i);
+assert.match(docs, /does not resolve secret-reference placeholders|secret-reference placeholders are not resolved/i);
+assert.doesNotMatch(docs, /TOKEN_OP_REF|TOKEN_REF/);
 assert.match(docs, /Do not open new Comment threads|should not open new Comment threads/i);
 assert.match(docs, /Do not use `codecks_card_add_comment` to reply to an existing thread/i);
 assert.match(skill, /earlier evidence or assumption/i);
