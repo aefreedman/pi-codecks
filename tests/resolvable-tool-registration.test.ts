@@ -236,6 +236,22 @@ assert.match(replyGuidance, /cardId \+ context \+ content/i);
 assert.match(replyGuidance, /codecks_card_list_resolvables/i);
 assert.match(replyGuidance, /codecks_card_add_comment/i);
 
+const reviewTool = getTool("codecks_card_add_review");
+const reviewGuidance = [reviewTool.promptSnippet, ...(reviewTool.promptGuidelines ?? [])].join("\n");
+for (const phrase of [
+  /earlier evidence or assumption/i,
+  /new contradictory or limiting evidence/i,
+  /remaining validation gap/i,
+  /avoid calling the issue fixed/i,
+  /root cause until evidence supports/i,
+]) {
+  assert.match(reviewGuidance, phrase, "review guidance should keep corrective claims within the available evidence");
+  assert.match(replyGuidance, phrase, "reply guidance should keep corrective claims within the available evidence");
+}
+assert.match(reviewGuidance, /only one open review thread/i);
+assert.match(reviewGuidance, /reply to the existing review thread/i);
+assert.match(reviewGuidance, /chat only/i);
+
 const listTool = getTool("codecks_card_list_resolvables");
 const listGuidance = [listTool.promptSnippet, ...(listTool.promptGuidelines ?? [])].join("\n");
 assert.match(listGuidance, /comments, reviews, blockers/i);
@@ -285,5 +301,11 @@ assert.match(docs, /untrusted external Codecks data/i);
 assert.match(docs, /TOKEN_OP_REF.*not resolved|not resolved.*TOKEN_OP_REF/i);
 assert.match(docs, /Do not open new Comment threads|should not open new Comment threads/i);
 assert.match(docs, /Do not use `codecks_card_add_comment` to reply to an existing thread/i);
+assert.match(skill, /earlier evidence or assumption/i);
+assert.match(skill, /new contradictory or limiting evidence/i);
+assert.match(skill, /remaining validation gap/i);
+assert.match(skill, /do not call the issue "fixed" or name a "root cause" until evidence supports/i);
+assert.match(skill, /only one open Review/i);
+assert.match(skill, /report the update in chat/i);
 
 console.log("resolvable tool registration test passed");

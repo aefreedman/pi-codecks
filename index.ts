@@ -56,17 +56,22 @@ const COMMENT_THREAD_GUIDELINES = [
   "Follow-up updates belong only in an existing open review thread; otherwise, report the update in chat and do not write to Codecks unless explicitly instructed.",
 ];
 
+const CORRECTIVE_FOLLOWUP_GUIDELINE =
+  "When correcting an earlier review update, briefly state the earlier evidence or assumption, the new contradictory or limiting evidence, and the remaining validation gap; scope the conclusion to supported evidence and avoid calling the issue fixed or naming a root cause until evidence supports those claims.";
+
 const REVIEW_FOLLOWUP_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
   "Codecks allows only one open review thread on a card.",
   "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review or opening a comment thread.",
   "If there is no open review thread, report follow-up work in chat only unless the user explicitly asks you to add a Codecks comment/reply.",
   "Use codecks_card_list_resolvables when you need to inspect or identify the existing open review thread before replying.",
+  CORRECTIVE_FOLLOWUP_GUIDELINE,
 ];
 
 const RESOLVABLE_REPLY_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
   "Use codecks_card_reply_resolvable to reply to an existing comment, review, or blocker thread; use codecks_card_add_comment only when explicitly opening a new comment thread.",
+  CORRECTIVE_FOLLOWUP_GUIDELINE,
   "For a known thread, prefer resolvableId + content.",
   "For a known card with exactly one matching open thread, use cardId + context + content, for example context: \"comment\" or context: \"review\".",
   "If multiple open threads may match, call codecks_card_list_resolvables first and then reply by resolvableId.",

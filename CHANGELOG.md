@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+### Changed
+
+- Added evidence-scoped corrective Review follow-up guidance that records the earlier basis, new limiting evidence, and remaining validation gap without prematurely claiming a fix or root cause.
 
 ## [0.7.0] - 2026-07-25
 
