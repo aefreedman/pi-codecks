@@ -34,7 +34,7 @@ The local command has three configuration outcomes:
 
 1. **Credentials absent:** reports `skipped` and exits successfully. This is not live evidence.
 2. **Credentials present, `CODECKS_TEST_DECK` absent:** runs read-only validation and reports that mutation coverage is disabled.
-3. **Credentials and `CODECKS_TEST_DECK` present:** runs mutation coverage in the explicitly selected disposable fixture deck and attempts safe cleanup.
+3. **Credentials and `CODECKS_TEST_DECK` present:** runs mutation coverage in the explicitly selected disposable fixture deck, temporarily updates and restores that deck's description, and attempts safe cleanup.
 
 Provide credentials through `CODECKS_ACCOUNT` plus `CODECKS_TOKEN` (or their documented aliases). Profiles may be selected with `CODECKS_TEST_PROFILE`. Do not put values in repository files or shell history, and never target a production deck.
 

@@ -59,11 +59,11 @@ function serializedActiveMetadataCharacters(harness: PiToolHarness): number {
 }
 
 async function main(): Promise<void> {
-  assert.equal(publicToolNames.length, 39, "the legacy default surface must retain 39 tools");
+  assert.equal(publicToolNames.length, 40, "the default surface must include 40 tools");
 
   await withMode(undefined, async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.equal(harness.registry.size, 40, "39 default Codecks tools plus the loader should be registered");
+    assert.equal(harness.registry.size, 41, "40 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
   });
@@ -96,6 +96,8 @@ async function main(): Promise<void> {
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_card_update_status"] }).map((match) => match.name), ["codecks_card_update_status"]);
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_card_get"], query: "update milestone description" }).map((match) => match.name), ["codecks_card_get"], "exact toolNames are an allow-list even when a conflicting query is supplied");
   assert.deepEqual(searchCodecksTools({ query: "formatted card presentation" }).map((match) => match.name), ["codecks_card_get_formatted"]);
+  assert.deepEqual(searchCodecksTools({ query: "edit deck description" }).map((match) => match.name), ["codecks_deck_update"]);
+  assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_deck_update"] }).map((match) => match.name), ["codecks_deck_update"]);
   assert.deepEqual(searchCodecksTools({ query: "find milestone by visible name" }).map((match) => match.name), ["codecks_milestone_list"]);
   assert.deepEqual(searchCodecksTools({ query: "velocity report" }).map((match) => match.name), ["codecks_velocity_report"]);
   assert.deepEqual(searchCodecksTools({ query: "retrieve cached completed Run statistics and calculate velocity percentiles mean P25 P50 P75, read-only" }).map((match) => match.name), ["codecks_velocity_report"]);
