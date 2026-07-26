@@ -205,7 +205,7 @@ async function main(): Promise<void> {
     }
     assert(harness.registry.get(CODECKS_TOOL_SEARCH_NAME)?.promptGuidelines?.length, "loader retains universal safety policy");
     const balancedCharacters = serializedActiveMetadataCharacters(harness);
-    assert.equal(balancedCharacters, 6095, "balanced metadata measurement should remain reproducible");
+    assert.equal(balancedCharacters, 6408, "balanced metadata measurement should remain reproducible");
     assert(balancedCharacters <= 38478 * 0.25, "balanced initial metadata must be at least 75% smaller than the untouched baseline");
   });
 

@@ -181,7 +181,25 @@ const loadTools = async (): Promise<ToolModule> => {
   process.env.CODECKS_ACCOUNT = "test-account";
   process.env.CODECKS_TOKEN = "test-token";
   delete process.env.CODECKS_DEFAULT_ASSIGNEE_ID;
-  return import("../src/codecks-core.ts");
+  const core = await import("../src/codecks-core.ts");
+  const sessionManager = {};
+  return new Proxy(core, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver) as AnyRecord;
+      if (!value || typeof value !== "object" || typeof value.execute !== "function") return value;
+      return {
+        ...value,
+        execute(args: AnyRecord) {
+          return core.runWithAbortSignal(undefined, () => value.execute(args), {
+            sessionManager,
+            mode: "tui",
+            hasUI: true,
+            confirm: async () => true,
+          });
+        },
+      };
+    },
+  }) as ToolModule;
 };
 
 const testStatusUpdateBlocksOpenReview = async (tools: ToolModule): Promise<void> => {

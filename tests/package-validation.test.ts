@@ -28,7 +28,7 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
   assert.ok(existsSync(path.join(root, registration)), `missing Pi registration target: ${registration}`);
 }
 
-const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "README.md", "CHANGELOG.md", "LICENSE"];
+const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "references/", "compatibility/", "README.md", "CHANGELOG.md", "LICENSE"];
 assert.deepEqual(packageJson.files, expectedFiles);
 for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
   assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
@@ -42,6 +42,10 @@ assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-tool-vali
 assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manifest/);
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
+assert.equal(packageJson.dependencies?.["@aefree/pi-workflow"], "^0.1.0");
+assert.equal(packageJson.dependencies?.["@aefree/pi-capability-registry"], "^0.1.0");
+assert.equal(packageJson.bundledDependencies, undefined, "Decomposition packages must be co-installed instead of copied into pi-codecks tarballs.");
+assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
 
 const publicCi = read(".github/workflows/ci.yml");
 const integrationWorkflow = read(".github/workflows/integration.yml");

@@ -78,6 +78,18 @@ Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
 
 Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
 
+## Workflow-provider integration
+
+When `@aefree/pi-workflow` is installed, `pi-codecks` registers a session-scoped `tracker.codecks` WorkflowProviderV1. Account/profile configuration establishes applicability; credential availability is reported separately by preflight. Its bounded tracker/changelog guidance preserves the existing structured Codecks tools, dry-run flows, and the requirement for explicit user authorization before every tracker mutation.
+
+Every Codecks dispatch sink now enforces that authorization itself. Mutation tools accept an optional `authorizationToken`; they never echo it in rendered calls or results. The token must map to `tracker_mutation` and the final stable target ID `codecks:<encoded-account>:<dispatch.path>:<encoded-entity-or-payload-fingerprint>`. `workflow_execute` may inspect the token for readiness but does not consume it. One token or direct confirmation permits one remote mutation attempt; authorization is never cached or fanned out to a retry. Read-only queries retain bounded retries, but non-idempotent dispatches do not retry timeouts or retryable HTTP responses because their side effects are ambiguous. Without a token, TUI/RPC invokes `ctx.ui.confirm` for that exact target and issues/consumes internally; print/JSON blocks. Wrong-session, wrong-action, wrong-target, expired, replayed, and empty-target tokens fail before `fetch`. Unknown raw dispatch methods reject token-only execution and require direct TUI/RPC confirmation.
+
+Attachment sources are physically canonicalized relative to the invoking workspace and must remain inside it by default. Symlink/junction escapes are rejected. The attachment target binds an opaque fingerprint of canonical source identity, content SHA-256, and size while confirmation displays only canonical path and size. The source is re-resolved and re-hashed immediately before upload. A direct TUI/RPC confirmation that explicitly shows absolute path and size is additionally required for a deliberately outside-workspace source; token-only/non-UI external uploads block. Attachment is a compound upload-plus-card mutation, so it cannot use one `authorizationToken`; direct mode confirms each remote mutation attempt separately.
+
+This boundary covers registered Codecks tools and raw `codecks_dispatch`; it does not claim to police unrelated shell or third-party HTTP clients.
+
+For legacy changelog compatibility, the package provides only `references/cg-changelog/codecks-workflow.md`, served from a byte-exact pinned 0.6.4 legacy payload copy separate from canonical Codecks guidance. Reads are bounded and return package/version/resource provenance without installation paths; it does not install, migrate, or mutate legacy resources.
+
 ## Install
 
 From npm:

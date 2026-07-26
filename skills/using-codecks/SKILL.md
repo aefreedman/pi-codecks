@@ -34,6 +34,14 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 
 `allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not the authorization boundary; operation-specific user authorization and tool safety checks still apply.
 
+## Mutation authorization
+- Every specialized write and raw `codecks_dispatch` is guarded at the final remote dispatch sink.
+- In TUI/RPC, omitting `authorizationToken` causes direct `ctx.ui.confirm` for the exact `tracker_mutation` target. Print/JSON calls require a matching token and otherwise block.
+- If orchestration is used, call `workflow_authorize_mutation` with the final non-empty `codecks:<account>:<operation>:<entity>` target ID, pass the token to `workflow_execute` for non-consuming readiness inspection, then pass it unchanged to the Codecks mutation tool for one-time sink consumption.
+- Never reuse, retarget, log, quote, or place `authorizationToken` in user-visible text. One token or direct confirmation permits one remote mutation attempt; non-idempotent dispatches do not retry ambiguous failures. A supplied invalid token blocks; it does not fall back to another confirmation.
+- Attachment uploads default to physically canonical sources inside the invoking workspace. Outside-workspace sources require a separate direct TUI/RPC confirmation showing absolute path and size; token-only external uploads and symlink/junction escapes block. Attachment is compound and requires direct confirmation per remote mutation attempt.
+- Unknown raw dispatch methods cannot safely use token-only classification and require direct TUI/RPC confirmation.
+
 ## Card targeting and safety
 - Identify cards by location and title when possible.
 - If multiple cards match, ask the user to choose by short code.

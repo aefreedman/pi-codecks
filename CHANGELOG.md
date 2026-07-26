@@ -9,7 +9,16 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added session-scoped `tracker.codecks` WorkflowProviderV1 integration with configuration applicability, separate credential preflight, bounded authorization-preserving tracker/changelog guidance, and stale-safe cleanup.
+- Added the bounded legacy changelog reference service for the single mapped `references/cg-changelog/codecks-workflow.md` resource, backed by a byte-exact pinned 0.6.4 payload copy with public provenance and no install/migration path.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
+- Added exhaustive dispatch-sink authorization coverage with fetch spies, direct TUI/RPC confirmation, one matching token success, and fail-before-fetch mismatch/replay/expiry/session tests.
+
+### Changed
+
+- Co-install capability-registry and workflow tarballs in neutral consumers instead of recursively bundling decomposition repositories; package validation now rejects dependency-tree and sibling paths.
+- Codecks writes now consume `@aefree/pi-workflow` session/action/exact-target authorization at final remote dispatch sinks. Raw unclassified writes require direct TUI/RPC confirmation, attachment denial occurs before upload signing, and token values are omitted from rendered/results payloads.
+- Non-idempotent mutations no longer transparently retry ambiguous failures or reuse one authorization across attempts; read-only retries remain. Attachment sources are physically canonicalized, workspace-contained by default, bound by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.
 
 ## [0.8.0] - 2026-07-25
 

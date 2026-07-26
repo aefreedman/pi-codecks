@@ -34,6 +34,8 @@
     "skills/",
     "prompts/",
     "docs/",
+    "references/",
+    "compatibility/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
@@ -51,12 +53,16 @@
   },
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts && tsx tests/codecks-dynamic-tool-loading.test.ts && tsx tests/debug-tool-loading.test.ts && tsx tests/package-validation.test.ts",
+    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts && tsx tests/codecks-dynamic-tool-loading.test.ts && tsx tests/debug-tool-loading.test.ts && tsx tests/codecks-workflow-provider.test.ts && tsx tests/codecks-mutation-authorization.test.ts && tsx tests/package-validation.test.ts",
     "test:integration": "tsx tests/codecks-tool-validation.ts",
     "test:all": "npm run test:unit && npm run test:integration",
     "pack:dry-run": "npm pack --dry-run --json",
     "pack:validate": "node scripts/validate-pack-manifest.mjs",
     "pack:smoke": "node scripts/packed-tarball-smoke.mjs"
+  },
+  "dependencies": {
+    "@aefree/pi-capability-registry": "^0.1.0",
+    "@aefree/pi-workflow": "^0.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.82.0",

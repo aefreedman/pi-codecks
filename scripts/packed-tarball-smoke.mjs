@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 
-import { pack, runNpm } from "./package-archive.mjs";
+import { pack, packageRoot, parsePackResult, runNpm } from "./package-archive.mjs";
 
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-pack-smoke-"));
 const archiveDir = path.join(tempRoot, "archive");
@@ -20,6 +20,11 @@ try {
 
   const packed = pack({ destination: archiveDir });
   const archivePath = path.join(archiveDir, packed.filename);
+  const packSibling = (directory) => {
+    const result = parsePackResult(runNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", archiveDir], { cwd: path.resolve(packageRoot, "..", directory) }).stdout);
+    return path.join(archiveDir, result.filename);
+  };
+  const dependencyArchives = [packSibling("pi-capability-registry"), packSibling("pi-workflow")];
   assert.ok(existsSync(archivePath), "expected npm pack to create a tarball in the temporary directory");
 
   const cleanEnv = { ...process.env, npm_config_offline: "true" };
@@ -30,7 +35,7 @@ try {
   }
 
   runNpm(
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", archivePath],
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", ...dependencyArchives, archivePath],
     { cwd: consumerDir, env: cleanEnv },
   );
 
@@ -47,11 +52,19 @@ try {
     "skills/using-codecks/SKILL.md",
     "skills/codecks-velocity-reporting/SKILL.md",
     "prompts/codecks-inbox.md",
+    "references/cg-changelog/codecks-workflow.md",
     "README.md",
     "LICENSE",
   ]) {
     assert.ok(existsSync(path.join(installedRoot, relativePath)), `expected installed package asset: ${relativePath}`);
   }
+
+  const coinstalledWorkflow = JSON.parse(readFileSync(path.join(consumerDir, "node_modules", "@aefree", "pi-workflow", "package.json"), "utf8"));
+  assert.equal(coinstalledWorkflow.name, "@aefree/pi-workflow");
+  assert.equal(coinstalledWorkflow.version, "0.1.0");
+  assert.equal(existsSync(path.join(installedRoot, "node_modules", "@aefree")), false, "decomposition dependencies must not be copied inside pi-codecks");
+  const installedReference = readFileSync(path.join(installedRoot, "references", "cg-changelog", "codecks-workflow.md"), "utf8");
+  assert.match(installedReference, /codecks_card_list_done_within_timeframe/);
 
   for (const excludedPath of ["tests", "scripts", ".github", "docs/plans", "todos"]) {
     assert.equal(existsSync(path.join(installedRoot, excludedPath)), false, `did not expect installed package path: ${excludedPath}`);
