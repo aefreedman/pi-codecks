@@ -91,6 +91,13 @@ if (!process.env.CODECKS_RATE_WINDOW_MS) {
 
 type AnyRecord = Record<string, unknown>;
 
+type DeckRef = {
+  id?: string | number;
+  accountSeq?: number;
+  title?: string;
+  description: string;
+};
+
 type CardRef = {
   cardId?: string;
   accountSeq?: number;
@@ -658,6 +665,53 @@ const resolveDeckId = async (value: string): Promise<string | number | undefined
   return undefined;
 };
 
+const queryDeckByReference = async (value: string): Promise<DeckRef | undefined> => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const payload = await runQuery({
+    _root: [
+      {
+        account: [
+          {
+            decks: ["id", "accountSeq", "title", "description"],
+          },
+        ],
+      },
+    ],
+  });
+  const data = unwrapData(payload);
+  if (!isObject(data) || !isObject(data.deck)) {
+    return undefined;
+  }
+
+  const decks = Object.values(data.deck)
+    .filter(isObject)
+    .map((deck): DeckRef => ({
+      id: deck.id as string | number | undefined,
+      accountSeq: typeof deck.accountSeq === "number" ? deck.accountSeq : undefined,
+      title: typeof deck.title === "string" ? deck.title : undefined,
+      description: typeof deck.description === "string" ? deck.description : "",
+    }));
+
+  if (/^\d+$/.test(trimmed)) {
+    const accountSeq = Number(trimmed);
+    return decks.find((deck) => deck.accountSeq === accountSeq);
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(trimmed)) {
+    return decks.find((deck) => String(deck.id ?? "") === trimmed);
+  }
+
+  const exact = decks.filter((deck) => deck.title === trimmed);
+  if (exact.length === 1) return exact[0];
+  const exactInsensitive = decks.filter((deck) => deck.title?.toLowerCase() === trimmed.toLowerCase());
+  if (exactInsensitive.length === 1) return exactInsensitive[0];
+  const partial = decks.filter((deck) => deck.title?.toLowerCase().includes(trimmed.toLowerCase()));
+  return partial.length === 1 ? partial[0] : undefined;
+};
+
 const queryCardByTitle = async (title: string): Promise<CardRef | undefined> => {
   const relation = `cards(${JSON.stringify({
     title: { op: "contains", value: title },
@@ -878,6 +932,58 @@ const run = async (): Promise<number> => {
   }
 
   info(`using deck '${CREATE_DECK_ENV}' -> id '${String(deckId)}'`);
+
+  const originalDeck = await queryDeckByReference(CREATE_DECK_ENV);
+  if (!originalDeck) {
+    hardFailures += 1;
+    fail(`unable to read disposable deck description for CODECKS_TEST_DECK='${CREATE_DECK_ENV}'`);
+  } else {
+    const temporaryDescription = `pi-codecks integration validation ${runTag}`;
+    let updateAttempted = false;
+    try {
+      updateAttempted = true;
+      const updateResult = await invokeTool("deck_update", {
+        deckId: CREATE_DECK_ENV,
+        description: temporaryDescription,
+        format: "json",
+      });
+      if (!structuredOk(updateResult)) {
+        hardFailures += 1;
+        fail(`deck_update failed: ${updateResult}`);
+      } else {
+        const updatedDeck = await queryDeckByReference(String(originalDeck.id ?? CREATE_DECK_ENV));
+        if (updatedDeck?.description === temporaryDescription) {
+          pass("deck_update edits the disposable deck description");
+        } else {
+          hardFailures += 1;
+          fail("deck_update returned success but the disposable deck description did not match");
+        }
+      }
+    } catch (error) {
+      hardFailures += 1;
+      fail(`deck_update live validation failed: ${(error as Error).message}`);
+    } finally {
+      if (updateAttempted) {
+        try {
+          const restoreResult = await invokeTool("deck_update", {
+            deckId: originalDeck.id ?? CREATE_DECK_ENV,
+            description: originalDeck.description,
+            format: "json",
+          });
+          const restoredDeck = await queryDeckByReference(String(originalDeck.id ?? CREATE_DECK_ENV));
+          if (structuredOk(restoreResult) && restoredDeck?.description === originalDeck.description) {
+            pass("deck_update restored the disposable deck's original description");
+          } else {
+            hardFailures += 1;
+            fail(`deck_update could not verify restoration of the original deck description: ${restoreResult}`);
+          }
+        } catch (error) {
+          hardFailures += 1;
+          fail(`deck_update restoration failed: ${(error as Error).message}`);
+        }
+      }
+    }
+  }
 
   try {
     const createResponse = await runDispatch("cards/create", {

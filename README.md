@@ -22,6 +22,7 @@ Registered default tools:
 - `codecks_card_bulk_create`
 - `codecks_card_bulk_update`
 - `codecks_card_set_parent`
+- `codecks_deck_update`
 - `codecks_milestone_list`
 - `codecks_milestone_get`
 - `codecks_milestone_update`
@@ -73,7 +74,7 @@ Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
 
 - `balanced` (default) — loader plus structured get and card search
 - `loader-only` — only the package loader initially
-- `all-active` — legacy 39-tool initial composition without the loader, with the same safety-hardened active descriptions used after deferred activation
+- `all-active` — 40-tool initial composition without the loader, with the same safety-hardened active descriptions used after deferred activation
 
 Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
 
@@ -131,6 +132,10 @@ Use `codecks_card_search` when title/location criteria may match multiple cards 
 Use `codecks_card_bulk_create` and `codecks_card_bulk_update` for CSV/import-style tracker work after mapping source rows into card objects. Both tools default to dry-run mode, report per-card status, and should be reviewed before rerunning with `dryRun: false`.
 
 Use `codecks_card_list_missing_effort` before bulk effort updates. It previews eligible cards and exclusion reasons without mutating tracker state; present the preview to the user and apply effort separately with explicit approval and `codecks_card_update_effort` calls. Do not treat a preview as authoritative or request approval when `complete` is false; increase `scanLimit` or narrow the scope first.
+
+## Deck Tools
+
+Use `codecks_deck_update` to resolve a deck by UUID, account sequence, or unambiguous visible title and edit only its description through Codecks' `decks/update` dispatch endpoint. Numeric `deckId` values are deck account sequences, not card short codes. Pass `description: ""` or `clearDescription: true` to clear the description; `description: null` is not supported. Deck creation, deletion, archiving, renaming, recoloring, and bulk administration remain outside this tool's scope.
 
 ## Milestone Tools
 

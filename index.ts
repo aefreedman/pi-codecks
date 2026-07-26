@@ -115,6 +115,7 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_bulk_create",
   "card_bulk_update",
   "card_set_parent",
+  "deck_update",
   "milestone_list",
   "milestone_get",
   "milestone_update",
@@ -401,6 +402,27 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  deck_update: {
+    parameters: Type.Object({
+      deckId: cardRefSchema,
+      description: Type.Optional(Type.String({ description: "Deck description. Use an empty string to clear." })),
+      clearDescription: Type.Optional(Type.Boolean()),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyDeckIdAliases(input);
+      if (input.clear_description !== undefined && input.clearDescription === undefined) input.clearDescription = input.clear_description;
+      return input;
+    },
+    promptSnippet: "Update a Codecks deck description.",
+    promptGuidelines: [
+      "Use this tool to edit deck descriptions instead of raw dispatch.",
+      "Numeric deckId values are deck account sequences, not card short codes.",
+      "Deck descriptions map to decks/update description.",
+      "Set clearDescription=true, or pass description as an empty string, to clear a deck description.",
+    ],
   },
   milestone_list: {
     parameters: Type.Object({
@@ -907,6 +929,11 @@ function applyRunStatsAliases(input: Record<string, unknown>): void {
   if (input.completed_runs !== undefined && input.completedRuns === undefined) input.completedRuns = input.completed_runs;
   if (input.run_count !== undefined && input.completedRuns === undefined) input.completedRuns = input.run_count;
   if (input.include_current_stats !== undefined && input.includeCurrentStats === undefined) input.includeCurrentStats = input.include_current_stats;
+}
+
+function applyDeckIdAliases(input: Record<string, unknown>): void {
+  if (input.deck_id !== undefined && input.deckId === undefined) input.deckId = input.deck_id;
+  if (input.deck !== undefined && input.deckId === undefined) input.deckId = input.deck;
 }
 
 function applyMilestoneIdAliases(input: Record<string, unknown>): void {

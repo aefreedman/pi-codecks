@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+### Added
+
+- Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
+
 ## [0.8.0] - 2026-07-25
 
 ### Added

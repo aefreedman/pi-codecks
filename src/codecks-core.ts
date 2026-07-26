@@ -3049,6 +3049,13 @@ const cardDetailFields = [
     { childCards: ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"] },
 ];
 
+const deckDetailFields = [
+    "id",
+    "accountSeq",
+    "title",
+    "description",
+];
+
 const milestoneDetailFields = [
     "id",
     "accountSeq",
@@ -3160,6 +3167,16 @@ type LookupResult =
     | { kind: "resolved"; id: string | number; label: string }
     | { kind: "ambiguous"; label: string; candidates: Array<{ id?: string | number; title?: string; accountSeq?: number }> }
     | { kind: "missing"; label: string };
+
+type DeckLookupResult =
+    | {
+        kind: "resolved";
+        id: string | number;
+        label: string;
+        deck: CodecksEntity;
+        accountSeq?: number;
+    }
+    | Extract<LookupResult, { kind: "ambiguous" | "missing" }>;
 
 type MilestoneLookupResult =
     | {
@@ -3313,6 +3330,144 @@ const resolveDeck = async (value: string | number | undefined): Promise<LookupRe
         raw,
         "deck",
     );
+};
+
+const fetchAccountDecks = async (fields: Array<string | Record<string, unknown>> = deckDetailFields): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    {
+                        decks: fields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    const deckMap = getEntityMap(data, "deck");
+    return extractRelationEntities(account, "decks", deckMap);
+};
+
+const fetchDecksByAccountSeq = async (accountSeq: number): Promise<CodecksEntity[]> =>
+{
+    const payload = await runQuery({
+        _root: [
+            {
+                account: [
+                    {
+                        [relationQuery("decks", { accountSeq: [accountSeq] })]: deckDetailFields,
+                    },
+                ],
+            },
+        ],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const account = getAccount(payload);
+    const deckMap = getEntityMap(data, "deck");
+    return extractRelationEntities(account, "decks", deckMap);
+};
+
+const getDeckId = (deck: CodecksEntity | undefined): string => String(deck?.id ?? "").trim();
+
+const getDeckAccountSeq = (deck: CodecksEntity | undefined): number | undefined =>
+{
+    const value = deck?.accountSeq;
+    if (typeof value === "number")
+    {
+        return value;
+    }
+    if (typeof value === "string" && /^\d+$/.test(value))
+    {
+        return Number(value);
+    }
+    return undefined;
+};
+
+const getDeckLabel = (deck: CodecksEntity): string =>
+    String(deck.title ?? deck.name ?? "").trim()
+    || (getDeckAccountSeq(deck) !== undefined ? `Deck ${getDeckAccountSeq(deck)}` : "Deck");
+
+const parseDeckAccountSeq = (value: unknown): number | undefined =>
+{
+    if (typeof value === "number" && Number.isInteger(value) && value > 0)
+    {
+        return value;
+    }
+
+    if (typeof value !== "string")
+    {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    const explicit = trimmed.match(/^(?:deck|seq|accountseq)\s*:?\s*(\d+)$/i);
+    if (explicit)
+    {
+        return Number(explicit[1]);
+    }
+
+    if (/^\d+$/.test(trimmed))
+    {
+        return Number(trimmed);
+    }
+
+    return undefined;
+};
+
+const resolveDeckForUpdate = async (value: string | number): Promise<DeckLookupResult> =>
+{
+    const accountSeq = parseDeckAccountSeq(value);
+    const raw = String(value).trim();
+    let matches: CodecksEntity[] = [];
+
+    if (accountSeq !== undefined)
+    {
+        matches = await fetchDecksByAccountSeq(accountSeq);
+    }
+    else
+    {
+        const decks = await fetchAccountDecks();
+        if (isUuidLike(raw))
+        {
+            matches = decks.filter((deck) => getDeckId(deck) === raw);
+        }
+        else
+        {
+            const lookup = resolveByNameWithCaseFallback(
+                decks.map((deck) => ({
+                    id: deck.id as string | number | undefined,
+                    accountSeq: getDeckAccountSeq(deck),
+                    title: deck.title as string | undefined,
+                    name: deck.name as string | undefined,
+                })),
+                raw,
+                "deck",
+            );
+            if (lookup.kind !== "resolved")
+            {
+                return lookup;
+            }
+            matches = decks.filter((deck) => String(deck.id ?? "") === String(lookup.id));
+        }
+    }
+
+    const deck = matches[0];
+    const deckId = getDeckId(deck);
+    if (!deck || !deckId)
+    {
+        return { kind: "missing", label: "deck" };
+    }
+
+    return {
+        kind: "resolved",
+        id: deckId,
+        label: getDeckLabel(deck),
+        deck,
+        accountSeq: getDeckAccountSeq(deck),
+    };
 };
 
 const resolveMilestone = async (value: string | number | undefined): Promise<LookupResult> =>
@@ -6996,6 +7151,86 @@ export const card_set_parent = tool({
                         title: parentResolved.title || "(untitled)",
                     }
                     : null,
+            },
+        );
+    },
+});
+
+export const deck_update = tool({
+    description: "Update a Codecks deck description using decks/update.",
+    args: {
+        deckId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Deck ID, account sequence, or visible title."),
+        description: tool.schema.string().optional().describe("Deck description. Use an empty string to clear."),
+        clearDescription: tool.schema.boolean().optional().describe("Clear the deck description by setting description to an empty string."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        const hasDescription = args.description !== undefined;
+        const shouldClearDescription = args.clearDescription === true;
+        if (!hasDescription && !shouldClearDescription)
+        {
+            return toStructuredErrorResult(format, "deck-update", "validation_error", "Provide description or set clearDescription=true.");
+        }
+        if (hasDescription && !shouldClearDescription && typeof args.description !== "string")
+        {
+            return toStructuredErrorResult(format, "deck-update", "validation_error", "description must be a string. Use clearDescription=true or description: \"\" to clear.");
+        }
+
+        let deck: DeckLookupResult;
+        try
+        {
+            deck = await resolveDeckForUpdate(args.deckId);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "deck-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+
+        if (deck.kind !== "resolved")
+        {
+            return toStructuredErrorResult(
+                format,
+                "deck-update",
+                deck.kind === "ambiguous" ? "ambiguous_match" : "not_found",
+                renderLookupMessage(deck, String(args.deckId ?? "")),
+            );
+        }
+
+        const description = shouldClearDescription ? "" : String(args.description ?? "");
+        try
+        {
+            await runDispatch("decks/update", {
+                id: deck.id,
+                description,
+            });
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "deck-update", "api_error", toErrorMessage(error));
+        }
+
+        const lines = [
+            "## Deck Updated",
+            "",
+            `- Deck: #${deck.accountSeq ?? "?"} ${deck.label}`,
+            `- ID: ${deck.id}`,
+            `- Updated Fields: description`,
+            `- Description Cleared: ${description.length === 0 ? "Yes" : "No"}`,
+        ];
+
+        return toStructuredResult(
+            format,
+            "deck-update",
+            lines.join("\n"),
+            {
+                deckId: deck.id,
+                accountSeq: deck.accountSeq ?? null,
+                title: deck.label,
+                updatedFields: ["description"],
+                description,
+                descriptionCleared: description.length === 0,
             },
         );
     },

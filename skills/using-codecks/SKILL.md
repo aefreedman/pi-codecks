@@ -1,7 +1,7 @@
 ---
 name: using-codecks
-description: Use for Codecks Free-plan core card workflows (search/get/create/update, comments/review/blocker, attachments, status/priority/effort) with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
-allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
+description: Use for Codecks Free-plan core card workflows and deck-description, milestone, and Run operations, with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
+allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # using-codecks Skill
@@ -11,6 +11,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 ## When to use this skill
 - Card search/retrieval, creation, updates, status/priority/effort changes.
 - Run/Sprint listing, lookup, cached delivered-effort reports, average effort summaries, custom-label/description updates, and card Run assignment.
+- Deck description updates.
 - Milestone context lookup and description updates.
 - Card comments, review/blocker conversation actions, and attachments.
 - Resolvable thread lifecycle actions (reply, close/reopen, edit your own entries).
@@ -66,6 +67,13 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Hero cards cannot be started directly. Start or update the relevant sub-card instead.
 - Card lifecycle writes exposed here cover status changes (`not_started`, `started`, `done`) but not archive/delete.
 - Do not transition a card to `done` / "Done" unless the user explicitly instructs that status change. Finishing local work, committing code, or reporting completion is not implicit permission to mark a card done.
+
+## Deck description updates
+- Use `codecks_deck_update` instead of raw dispatch when explicitly asked to edit or clear a deck description.
+- Resolve decks by UUID, account sequence, or unambiguous visible title; numeric `deckId` values are deck account sequences, not card short codes.
+- Deck descriptions map to `decks/update.description`.
+- Use `clearDescription=true` or `description: ""` to clear a deck description; do not send `description: null`.
+- This tool edits descriptions only. Deck creation, deletion, archiving, renaming, recoloring, and bulk administration remain out of scope.
 
 ## Milestone lookup and updates
 - Use `codecks_milestone_list` or `codecks_milestone_get` for milestone context instead of raw `codecks_query` milestone probes.

@@ -6,6 +6,7 @@ type ToolModule = typeof import("../src/codecks-core.ts");
 const ACCOUNT_ID = "account-test";
 const CARD_ID = "11111111-1111-4111-8111-111111111111";
 const RUN_ID = "22222222-2222-4222-8222-222222222222";
+const DECK_ID = "55555555-5555-4555-8555-555555555555";
 const MILESTONE_ID = "44444444-4444-4444-8444-444444444444";
 const USER_ID = "33333333-3333-4333-8333-333333333333";
 
@@ -99,6 +100,27 @@ const buildRunPayload = (relationKey: string, run: AnyRecord = buildRun(), cards
       },
     },
     card: Object.fromEntries(cards.map((card) => [String(card.cardId), card])),
+  },
+});
+
+const buildDeck = (overrides: AnyRecord = {}): AnyRecord => ({
+  id: DECK_ID,
+  accountSeq: 12,
+  title: "Development",
+  description: "Existing deck description",
+  ...overrides,
+});
+
+const buildDeckPayload = (relationKey: string, decks: AnyRecord[] = [buildDeck()]): AnyRecord => ({
+  data: {
+    _root: { account: ACCOUNT_ID },
+    account: {
+      [ACCOUNT_ID]: {
+        id: ACCOUNT_ID,
+        [relationKey]: decks.map((deck) => String(deck.id)),
+      },
+    },
+    deck: Object.fromEntries(decks.map((deck) => [String(deck.id), deck])),
   },
 });
 
@@ -353,6 +375,117 @@ const testCardRunAssignmentDispatchesSprintId = async (tools: ToolModule): Promi
   });
 };
 
+const testDeckUpdateDispatchesDescription = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "decks/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+
+    assert.equal(path, "query");
+    const relationKey = getAccountRelationKey(query!, "decks");
+    assert.ok(relationKey, `expected decks query: ${JSON.stringify(query)}`);
+    assert.match(relationKey, /accountSeq/);
+    return jsonResponse(buildDeckPayload(relationKey));
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: 12, description: "New deck description", format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.deckId, DECK_ID);
+    assert.equal(data.accountSeq, 12);
+    assert.equal(data.title, "Development");
+    assert.equal(data.description, "New deck description");
+    assert.equal(data.descriptionCleared, false);
+    assert.deepEqual(data.updatedFields, ["description"]);
+    assert.ok(updatePayload, "expected deck update dispatch");
+    assert.deepEqual(updatePayload, { id: DECK_ID, description: "New deck description" });
+  });
+};
+
+const testDeckUpdateResolvesTitle = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "decks/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+    const relationKey = getAccountRelationKey(query!, "decks");
+    assert.ok(relationKey, `expected decks query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildDeckPayload(relationKey));
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: "Development", description: "By title", format: "json" });
+    assert.equal(getData(String(result)).deckId, DECK_ID);
+    assert.equal(updatePayload?.id, DECK_ID);
+  });
+};
+
+const testDeckUpdateRejectsAmbiguousTitle = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    assert.equal(path, "query", "ambiguous deck lookup must not dispatch");
+    const relationKey = getAccountRelationKey(query!, "decks");
+    assert.ok(relationKey, `expected decks query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildDeckPayload(relationKey, [
+      buildDeck({ id: DECK_ID, title: "Development" }),
+      buildDeck({ id: "66666666-6666-4666-8666-666666666666", accountSeq: 13, title: "Developer Relations" }),
+    ]));
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: "Develop", description: "Ambiguous", format: "json" });
+    const error = getError(String(result));
+    assert.equal(error.category, "ambiguous_match");
+  });
+};
+
+const testDeckUpdateClearsDescription = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "decks/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+    const relationKey = getAccountRelationKey(query!, "decks");
+    assert.ok(relationKey, `expected decks query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildDeckPayload(relationKey));
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: 12, clearDescription: true, format: "json" });
+    const data = getData(String(result));
+    assert.equal(data.description, "");
+    assert.equal(data.descriptionCleared, true);
+    assert.deepEqual(updatePayload, { id: DECK_ID, description: "" });
+  });
+};
+
+const testDeckUpdateRequiresDescription = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(() => {
+    assert.fail("deck update without description should not reach Codecks");
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: 12, format: "json" });
+    assert.equal(getError(String(result)).category, "validation_error");
+  });
+};
+
+const testDeckUpdateRejectsNullDescription = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(() => {
+    assert.fail("deck update with null description should not reach Codecks");
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: 12, description: null, format: "json" });
+    const error = getError(String(result));
+    assert.equal(error.category, "validation_error");
+    assert.match(String(error.message), /description must be a string/i);
+  });
+};
+
+const testDeckUpdateReportsDispatchFailure = async (tools: ToolModule): Promise<void> => {
+  await withMockedCodecks(({ path, query }) => {
+    if (path === "decks/update") return jsonResponse({ error: "rejected" }, 400);
+    const relationKey = getAccountRelationKey(query!, "decks");
+    assert.ok(relationKey, `expected decks query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildDeckPayload(relationKey));
+  }, async () => {
+    const result = await tools.deck_update.execute({ deckId: 12, description: "Rejected", format: "json" });
+    assert.equal(getError(String(result)).category, "api_error");
+  });
+};
+
 const testMilestoneListReturnsFilteredMilestones = async (tools: ToolModule): Promise<void> => {
   await withMockedCodecks(({ path, query }) => {
     assert.equal(path, "query");
@@ -550,6 +683,13 @@ await testCardSearchNoMatchesIsSuccessful(tools);
 await testBulkCreateDryRunReportsDuplicateCandidates(tools);
 await testRunUpdateDispatchesSprintUpdate(tools);
 await testRunUpdateClearsCustomLabel(tools);
+await testDeckUpdateDispatchesDescription(tools);
+await testDeckUpdateResolvesTitle(tools);
+await testDeckUpdateRejectsAmbiguousTitle(tools);
+await testDeckUpdateClearsDescription(tools);
+await testDeckUpdateRequiresDescription(tools);
+await testDeckUpdateRejectsNullDescription(tools);
+await testDeckUpdateReportsDispatchFailure(tools);
 await testMilestoneListReturnsFilteredMilestones(tools);
 await testMilestoneGetReturnsDescription(tools);
 await testMilestoneUpdateDispatchesDescription(tools);
