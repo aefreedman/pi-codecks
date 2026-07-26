@@ -32,15 +32,13 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 4. Use `codecks_dispatch` only as a last resort for in-scope, non-destructive writes after validating endpoint and payload shape.
 5. For hero/sub-card linking, prefer `codecks_card_set_parent` over raw dispatch.
 
-`allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not the authorization boundary; operation-specific user authorization and tool safety checks still apply.
+`allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not a safety boundary; operation-specific validation and tool safety checks still apply.
 
-## Mutation authorization
-- Every specialized write and raw `codecks_dispatch` is guarded at the final remote dispatch sink.
-- In TUI/RPC, omitting `authorizationToken` causes direct `ctx.ui.confirm` for the exact `tracker_mutation` target. Print/JSON calls require a matching token and otherwise block.
-- If orchestration is used, call `workflow_authorize_mutation` with the final non-empty `codecks:<account>:<operation>:<entity>` target ID, pass the token to `workflow_execute` for non-consuming readiness inspection, then pass it unchanged to the Codecks mutation tool for one-time sink consumption.
-- Never reuse, retarget, log, quote, or place `authorizationToken` in user-visible text. One token or direct confirmation permits one remote mutation attempt; non-idempotent dispatches do not retry ambiguous failures. A supplied invalid token blocks; it does not fall back to another confirmation.
-- Attachment uploads default to physically canonical sources inside the invoking workspace. Outside-workspace sources require a separate direct TUI/RPC confirmation showing absolute path and size; token-only external uploads and symlink/junction escapes block. Attachment is compound and requires direct confirmation per remote mutation attempt.
-- Unknown raw dispatch methods cannot safely use token-only classification and require direct TUI/RPC confirmation.
+## Mutation dispatch
+- A directly invoked specialized write or raw `codecks_dispatch` proceeds through its existing operation, target/entity, and payload validation without a separate approval token or UI confirmation prompt.
+- Non-idempotent dispatches make one remote attempt and do not retry ambiguous timeout or retryable-response failures. Read-only queries retain bounded retries.
+- Attachment sources are physically canonicalized relative to the invoking workspace. Outside-workspace sources and symlink/junction escapes are blocked before network access; canonical identity, content hash, and size are revalidated immediately before upload.
+- Prefer specialized tools because they resolve exact entities and enforce domain constraints. Raw dispatch remains limited to validated, in-scope, non-destructive operations.
 
 ## Card targeting and safety
 - Identify cards by location and title when possible.

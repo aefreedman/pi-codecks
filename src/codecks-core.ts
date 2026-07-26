@@ -4,12 +4,6 @@ import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "path";
 import { buildBiweeklyPeriods, buildWeeklyPeriods, escapeCsv, summarizeVelocityPeriods, type VelocityPeriod, type VelocityRun } from "./velocity-report";
-import {
-    authorizeCodecksMutationSinkV1,
-    classifyCodecksDispatchMutationV1,
-    codecksAttachmentMutationTargetV1,
-    type CodecksMutationAuthorizationContext,
-} from "./mutation-authorization";
 
 type CodecksConfig = {
     account: string;
@@ -110,16 +104,16 @@ const getDispatchPolicyMessage = (path: string): string | null =>
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
-const mutationAuthorizationStorage = new AsyncLocalStorage<CodecksMutationAuthorizationContext | undefined>();
+const workspaceRootStorage = new AsyncLocalStorage<string | undefined>();
 
 const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.getStore();
-const getActiveMutationAuthorization = (): CodecksMutationAuthorizationContext | undefined => mutationAuthorizationStorage.getStore();
+const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
     fn: () => Promise<T>,
-    mutationAuthorization?: CodecksMutationAuthorizationContext,
-): Promise<T> => abortSignalStorage.run(signal, () => mutationAuthorizationStorage.run(mutationAuthorization, fn));
+    workspaceRoot?: string,
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, fn));
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) =>
 {
@@ -1893,7 +1887,6 @@ type AttachmentSourceSnapshot = Readonly<{
     size: number;
     sha256: string;
     buffer: Buffer;
-    outsideWorkspace: boolean;
 }>;
 
 const isPathWithin = (parent: string, candidate: string): boolean =>
@@ -1921,6 +1914,10 @@ async function snapshotAttachmentSource(filePath: string, workspaceRoot: string)
     if (lexicalInside && !canonicalInside)
     {
         throw new Error(`Attachment source rejected (attachment_symlink_escape): '${requestedPath}' resolves outside workspace '${workspacePath}'.`);
+    }
+    if (!canonicalInside)
+    {
+        throw new Error(`Attachment source rejected (attachment_outside_workspace): '${canonicalPath}' is outside workspace '${workspacePath}'.`);
     }
 
     const handle = await fs.open(canonicalPath, "r");
@@ -1950,7 +1947,6 @@ async function snapshotAttachmentSource(filePath: string, workspaceRoot: string)
             size: after.size,
             sha256: createHash("sha256").update(buffer).digest("hex"),
             buffer,
-            outsideWorkspace: !canonicalInside,
         });
     }
     finally
@@ -1963,33 +1959,9 @@ function assertUnchangedAttachmentSource(before: AttachmentSourceSnapshot, after
 {
     if (before.canonicalPath !== after.canonicalPath || before.size !== after.size || before.sha256 !== after.sha256)
     {
-        throw new Error("Attachment source identity or content changed after authorization; no upload was attempted. Re-run to authorize the current file.");
+        throw new Error("Attachment source identity or content changed after inspection; no upload was attempted. Re-run with the current file.");
     }
 }
-
-const confirmExternalAttachmentSource = async (source: AttachmentSourceSnapshot): Promise<void> =>
-{
-    if (!source.outsideWorkspace)
-    {
-        return;
-    }
-    const context = getActiveMutationAuthorization();
-    const interactive = context?.hasUI
-        && (context.mode === "tui" || context.mode === "rpc")
-        && typeof context.confirm === "function";
-    if (!interactive)
-    {
-        throw new Error("External attachment blocked (external_attachment_direct_confirmation_required): token-only and non-UI uploads outside the workspace are not allowed.");
-    }
-    const confirmed = await context.confirm!(
-        "Allow upload from outside the workspace?",
-        `Absolute source: ${source.canonicalPath}\nSource size: ${source.size} bytes\nWorkspace: ${source.workspacePath}\n\nThis separate confirmation permits using this external local source for the pending attachment only.`,
-    );
-    if (!confirmed)
-    {
-        throw new Error("External attachment blocked (external_attachment_user_denied).");
-    }
-};
 
 const detectContentType = (filePath: string, override?: string): string =>
 {
@@ -2009,15 +1981,11 @@ const detectContentType = (filePath: string, override?: string): string =>
     return map[ext] ?? "application/octet-stream";
 };
 
-const requestSignedUpload = async (source: AttachmentSourceSnapshot, cardId: unknown): Promise<SignedUploadInfo> =>
+const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
     const config = getConfig();
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
-    await authorizeCodecksMutationSinkV1(
-        getActiveMutationAuthorization(),
-        codecksAttachmentMutationTargetV1(config.account, cardId, source),
-    );
     await enforceRateLimit();
 
     const response = await fetch(`${config.baseUrl}/s3/sign?objectName=${encodeURIComponent(fileName)}`, {
@@ -3134,14 +3102,9 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 const runDispatch = async (
     path: string,
     payload: Record<string, unknown>,
-    authorizationTarget?: ReturnType<typeof classifyCodecksDispatchMutationV1>,
 ): Promise<unknown> =>
 {
     const config = getConfig();
-    await authorizeCodecksMutationSinkV1(
-        getActiveMutationAuthorization(),
-        authorizationTarget ?? classifyCodecksDispatchMutationV1(config.account, path, payload),
-    );
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -8488,13 +8451,10 @@ export const card_add_attachment = tool({
             return toStructuredErrorResult(format, "card-add-attachment", "validation_error", "Card ID is required.");
         }
 
-        const authorizationContext = getActiveMutationAuthorization();
-        const workspaceRoot = authorizationContext?.workspaceRoot ?? process.cwd();
+        const workspaceRoot = getActiveWorkspaceRoot();
         const source = await snapshotAttachmentSource(args.filePath, workspaceRoot);
-        await confirmExternalAttachmentSource(source);
         const contentType = detectContentType(source.canonicalPath, args.contentType);
-        const attachmentTarget = codecksAttachmentMutationTargetV1(getConfig().account, cardId, source);
-        const signed = await requestSignedUpload(source, cardId);
+        const signed = await requestSignedUpload(source);
         // Re-resolve and re-hash immediately before the upload attempt. The bytes
         // uploaded are exactly the bytes from this second, validated snapshot.
         const uploadSource = await snapshotAttachmentSource(args.filePath, workspaceRoot);
@@ -8513,7 +8473,7 @@ export const card_add_attachment = tool({
                     size: uploaded.size,
                     type: uploaded.type,
                 },
-            } as Record<string, unknown>, attachmentTarget);
+            } as Record<string, unknown>);
         }
         catch (error)
         {

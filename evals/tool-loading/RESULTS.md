@@ -33,7 +33,7 @@ Every loader count and exact activation-set check passed. Balanced kept `codecks
 - No mutation tool was called in any final trial.
 - The guard covered all registered card, milestone, Run, bulk, effort, status, priority, attachment, parent, raw-dispatch, and conversation writers.
 - Unit coverage separately passed missing/foreign provenance, foreign loader/tool collisions, authenticated loader-result restoration, additive activation, compaction-safe mutation descriptions, and startup/reload/resume/fork restoration.
-- The untouched pre-loader baseline remains frozen at 39 tools. The current all-active condition has 40 tools after the unreleased deck updater and now includes sink-authorization schema/guidance; it is measured separately below.
+- The untouched pre-loader baseline remains frozen at 39 tools. The current all-active condition has 40 tools after the unreleased deck updater and uses operation-validation guidance without mutation approval-token schemas; it is measured separately below.
 - Balanced deferred definitions omitted prompt snippets/guidelines while the loader retained universal policy and active definitions retained direct-use safety.
 
 ## Efficiency evidence
@@ -43,13 +43,13 @@ Every loader count and exact activation-set check passed. Balanced kept `codecks
 | Condition | Initial package tools | Complete serialized metadata chars | Reduction from untouched |
 |---|---:|---:|---:|
 | untouched legacy baseline | 39 | 38,478 | 0% |
-| all-active (current sink-authorized schemas) | 40 | 53,369 | -38.70% |
-| balanced | 3 | 6,408 | 83.35% |
-| loader-only | 1 | 2,312 | 93.99% |
+| all-active (current operation-validation schemas) | 40 | 46,751 | -21.50% |
+| balanced | 3 | 6,265 | 83.72% |
+| loader-only | 1 | 2,169 | 94.36% |
 
 ### Final provider traces
 
-These recorded live traces predate the unreleased deck updater and sink-authorization schema additions and were not rerun; they remain historical loader evidence rather than measurements of the current 40-tool metadata.
+These recorded live traces predate the unreleased deck updater and current operation-validation guidance and were not rerun; they remain historical loader evidence rather than measurements of the current 40-tool metadata.
 
 | Condition | Initial provider tools | Initial serialized tool chars | Reduction from untouched | Provider requests (14 cases) | Mean wall time | Input | Output | Cache read | Cache write |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -66,5 +66,5 @@ Token/cache fields are reported independently because provider cache accounting 
 
 - Live retrieval used one authorized configured account and one fixture value per required domain.
 - No live card, milestone, Run, bulk, effort, status, priority, attachment, parent, or conversation mutation was authorized or attempted.
-- Current mutation behavior is supported by exhaustive mocked final-dispatch sink tests (including direct confirmation and mismatch/replay zero-fetch assertions), not by a production write account.
+- Current mutation behavior is supported by credential-free mocked dispatch tests covering direct no-prompt execution, validation-before-fetch failures, one-attempt mutations, read retries, and attachment path/content controls, not by a production write account.
 - One model/trial per case was used; repeat trials are appropriate before a release if broader variance evidence is desired.

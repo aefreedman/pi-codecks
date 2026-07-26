@@ -24,7 +24,7 @@ export const LEGACY_REFERENCE_SERVICE_REGISTRY_KEY_V1 = "@aefree/pi-game-dev/leg
 const MAX_GUIDANCE_CHARS = 12_000;
 const MAX_REFERENCE_BYTES = 50 * 1024;
 const MAX_REFERENCE_LINES = 2_000;
-const WORKFLOW_SAFETY_GUIDANCE = "Codecks tracker guidance is advisory and preserves the package's specialized tools: never create, update, comment on, review, close, reopen, or otherwise mutate tracker state without explicit user authorization for that operation. Planning, changelog collection, and local implementation completion do not authorize tracker writes. workflow_execute only inspects a matching token; pass it unchanged to the actual Codecks mutation tool, whose final dispatch sink consumes it once. Without a token, only direct TUI/RPC confirmation for the exact stable entity/operation target may authorize dispatch. Prefer the existing structured Codecks tools and their dry-run/preview flows.\n\n";
+const WORKFLOW_SAFETY_GUIDANCE = "Codecks tracker guidance is advisory and preserves the package's specialized tools: never create, update, comment on, review, close, reopen, or otherwise mutate tracker state without explicit user intent for that operation. Planning, changelog collection, and local implementation completion do not imply tracker-write intent. Direct mutation-tool calls proceed through their operation-specific target and payload validation without a separate token or UI confirmation. Prefer the existing structured Codecks tools and their dry-run/preview flows.\n\n";
 
 export interface CodecksWorkflowDependenciesV1 {
   readonly isConfigured: (context: WorkflowExecutionContextV1, request: DetectionRequestV1) => boolean;

@@ -182,7 +182,6 @@ const loadTools = async (): Promise<ToolModule> => {
   process.env.CODECKS_TOKEN = "test-token";
   delete process.env.CODECKS_DEFAULT_ASSIGNEE_ID;
   const core = await import("../src/codecks-core.ts");
-  const sessionManager = {};
   return new Proxy(core, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver) as AnyRecord;
@@ -190,12 +189,7 @@ const loadTools = async (): Promise<ToolModule> => {
       return {
         ...value,
         execute(args: AnyRecord) {
-          return core.runWithAbortSignal(undefined, () => value.execute(args), {
-            sessionManager,
-            mode: "tui",
-            hasUI: true,
-            confirm: async () => true,
-          });
+          return core.runWithAbortSignal(undefined, () => value.execute(args), process.cwd());
         },
       };
     },

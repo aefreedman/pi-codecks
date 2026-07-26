@@ -68,7 +68,7 @@ test("Codecks tracker provider distinguishes configuration applicability from cr
     signal: new AbortController().signal,
   });
   assert.equal(guidance.outcome, "available");
-  if (guidance.outcome === "available") assert.match(guidance.content, /explicit user authorization/i);
+  if (guidance.outcome === "available") assert.match(guidance.content, /explicit user intent/i);
 
   const unready = createCodecksWorkflowProviderV1(owner, { isConfigured: () => true, hasCredentials: () => false });
   const readiness = await unready.preflight!({ cwd: "/fixture", signal: new AbortController().signal }, {

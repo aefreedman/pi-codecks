@@ -42,10 +42,14 @@ assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-tool-vali
 assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manifest/);
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
+assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
+assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
 assert.equal(packageJson.dependencies?.["@aefree/pi-workflow"], "^0.1.0");
 assert.equal(packageJson.dependencies?.["@aefree/pi-capability-registry"], "^0.1.0");
 assert.equal(packageJson.bundledDependencies, undefined, "Decomposition packages must be co-installed instead of copied into pi-codecks tarballs.");
 assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
+assert.equal(existsSync(path.join(root, "src/mutation-authorization.ts")), false, "mutation authorization module must not be packaged");
+assert.equal(existsSync(path.join(root, "tests/codecks-mutation-authorization.test.ts")), false, "obsolete mutation authorization tests must stay removed");
 
 const publicCi = read(".github/workflows/ci.yml");
 const integrationWorkflow = read(".github/workflows/integration.yml");
@@ -100,6 +104,15 @@ const packageFacingDocs = [
   read("skills/using-codecks/SKILL.md"),
   read("skills/codecks-velocity-reporting/SKILL.md"),
 ].join("\n");
+const mutationRuntimeSurface = [
+  read("index.ts"),
+  read("src/codecks-core.ts"),
+  read("src/codecks-tool-loading.ts"),
+  read("src/codecks-workflow-provider.ts"),
+  readme,
+  read("skills/using-codecks/SKILL.md"),
+].join("\n");
+assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm/);
 
 assert.match(readme, /pi install npm:@aefree\/pi-codecks/);
 assert.match(readme, /npm ci && npm test/);
