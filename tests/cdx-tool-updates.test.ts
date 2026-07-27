@@ -625,6 +625,9 @@ const testCardSearchNoMatchesIsSuccessful = async (tools: ToolModule): Promise<v
 const testBulkCreateDryRunReportsDuplicateCandidates = async (tools: ToolModule): Promise<void> => {
   await withMockedCodecks(({ path, query }) => {
     assert.equal(path, "query");
+    if (JSON.stringify(query).includes("loggedInUser")) {
+      return jsonResponse({ data: { _root: { loggedInUser: USER_ID }, user: { [USER_ID]: { id: USER_ID, name: "Fixture User" } } } });
+    }
     const relationKey = getAccountRelationKey(query!, "cards");
     assert.ok(relationKey, `expected cards relation query: ${JSON.stringify(query)}`);
     const card = buildCard({ title: "Duplicate title", accountSeq: 77 });

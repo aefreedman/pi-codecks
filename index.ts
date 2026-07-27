@@ -40,6 +40,36 @@ const ANY_PARAMETERS = Type.Object({}, { additionalProperties: true });
 const outputFormatEnum = Type.Union([Type.Literal("text"), Type.Literal("json")]);
 const cardSearchOutputModeEnum = Type.Union([Type.Literal("compact"), Type.Literal("detailed"), Type.Literal("counts")]);
 const cardRefSchema = Type.Union([Type.String(), Type.Number()]);
+const bulkCreateRecordSchema = Type.Object({
+  title: Type.Optional(Type.String()),
+  content: Type.Optional(Type.String()),
+  cardType: Type.Optional(Type.String()),
+  deck: Type.Optional(cardRefSchema),
+  milestone: Type.Optional(cardRefSchema),
+  effort: Type.Optional(Type.Number()),
+  priority: Type.Optional(Type.String()),
+  assigneeId: Type.Optional(cardRefSchema),
+  putOnHand: Type.Optional(Type.Boolean()),
+  parentCardId: Type.Optional(cardRefSchema),
+  tags: Type.Optional(Type.Array(Type.String())),
+}, { additionalProperties: false });
+const bulkUpdateRecordSchema = Type.Object({
+  cardId: cardRefSchema,
+  title: Type.Optional(Type.String()),
+  content: Type.Optional(Type.String()),
+  cardType: Type.Optional(Type.String()),
+  deck: Type.Optional(cardRefSchema),
+  milestone: Type.Optional(cardRefSchema),
+  assigneeId: Type.Optional(cardRefSchema),
+  effort: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+  priority: Type.Optional(Type.String()),
+  tags: Type.Optional(Type.Array(Type.String())),
+  runId: Type.Optional(cardRefSchema),
+  clearRun: Type.Optional(Type.Boolean()),
+  parentCardId: Type.Optional(cardRefSchema),
+  clearParent: Type.Optional(Type.Boolean()),
+  mode: Type.Optional(Type.Union([Type.Literal("replace"), Type.Literal("append"), Type.Literal("prepend")])),
+}, { additionalProperties: false });
 const LOCATION_VALUES = ["any", "deck", "milestone", "hand", "bookmarks"] as const;
 const locationEnum = Type.Union([
   Type.Literal("any"),
@@ -209,7 +239,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       "When deck or milestone is supplied without location, the tool infers the matching scope instead of running a broad search.",
       "Deck and milestone filters may be combined for intersection searches, for example Alpha-milestone cards in the Dev deck.",
       "Search results use compact output by default to protect session context; use outputMode='counts' for bulk/aggregate analysis and outputMode='detailed' only when every returned card row is required.",
-      "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, update dates, and bounded-scan completeness when Codecks returns them.",
+      "Search results include planning metadata such as effort, card type, child count, deck/milestone identity, update dates, reusable cardRef/accountSeqRef identifiers, and bounded-scan completeness when Codecks returns them.",
+      "Do not launch parallel full-account or high-scanLimit searches. Account scans are concurrency-bounded; prefer one shared-scope bulk preview or narrow sequential searches.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
     ],
   },
@@ -360,12 +391,13 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_bulk_create: {
     parameters: Type.Object({
-      cards: Type.Array(Type.Any(), { minimum: 1, maximum: 100, description: "Cards to create. Use dryRun=true first for CSV/import workflows." }),
+      cards: Type.Array(bulkCreateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card-create records. Use assigneeId (from codecks_user_lookup), never assignee." }),
       deck: Type.Optional(cardRefSchema),
       milestone: Type.Optional(cardRefSchema),
       parentCardId: Type.Optional(cardRefSchema),
       dryRun: Type.Optional(Type.Boolean()),
       duplicateLimit: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
+      duplicateScanLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10000 })),
       continueOnError: Type.Optional(Type.Boolean()),
       format: Type.Optional(outputFormatEnum),
     }),
@@ -373,6 +405,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
       if (input.dry_run !== undefined && input.dryRun === undefined) input.dryRun = input.dry_run;
       if (input.duplicate_limit !== undefined && input.duplicateLimit === undefined) input.duplicateLimit = input.duplicate_limit;
+      if (input.duplicate_scan_limit !== undefined && input.duplicateScanLimit === undefined) input.duplicateScanLimit = input.duplicate_scan_limit;
       if (input.continue_on_error !== undefined && input.continueOnError === undefined) input.continueOnError = input.continue_on_error;
       if (input.parent_card_id !== undefined && input.parentCardId === undefined) input.parentCardId = input.parent_card_id;
       return input;
@@ -382,12 +415,13 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_bulk_create for CSV/import-style card creation after mapping rows into card objects.",
       "Run codecks_card_bulk_create with dryRun=true before applying creates, especially for imports or bulk deck/milestone work.",
-      "Review duplicateCandidates from codecks_card_bulk_create before rerunning with dryRun=false.",
+      "Review duplicateCandidates and scan.complete from codecks_card_bulk_create before rerunning with dryRun=false; an incomplete scan is not definitive no-match evidence.",
+      "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request.",
     ],
   },
   card_bulk_update: {
     parameters: Type.Object({
-      updates: Type.Array(Type.Any(), { minimum: 1, maximum: 100, description: "Card updates. Each item needs cardId and update fields." }),
+      updates: Type.Array(bulkUpdateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card updates. Each item needs cardId and at least one supported update field." }),
       dryRun: Type.Optional(Type.Boolean()),
       continueOnError: Type.Optional(Type.Boolean()),
       format: Type.Optional(outputFormatEnum),
@@ -403,6 +437,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_bulk_update for CSV/import-style card updates after mapping rows into card update objects.",
       "Run codecks_card_bulk_update with dryRun=true before applying broad tracker edits.",
+      "Use runId/clearRun and parentCardId/clearParent for bounded multi-card Run and parent changes; effort, priority, and tags are also supported.",
+      "A batch apply makes one non-retried mutation attempt per valid record and reports indexed applied/failed counts.",
     ],
   },
   card_update: {

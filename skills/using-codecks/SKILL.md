@@ -44,14 +44,17 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Identify cards by location and title when possible.
 - If multiple cards match, ask the user to choose by short code.
 - Treat bare numeric references as short codes (`342` means `$342`).
-- Use `seq:<number>` only when an account sequence lookup is explicitly intended.
+- Use `seq:<number>` only when an account sequence lookup is explicitly intended. Prefer reusable `cardRef` and `accountSeqRef` values returned by structured tools.
 - Confirm before destructive actions and before multi-card updates.
 - Do not add comments to cards unless the user explicitly instructs you to add a comment/reply.
 - Do not open new Comment threads for follow-up work, progress updates, or completion reports.
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
 - Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons. If `complete` is false, increase `scanLimit` or narrow the scope before asking for approval; apply effort separately only after explicit user approval.
-- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the per-card preview and duplicate candidates, then apply only after approval.
+- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the complete normalized per-card preview and duplicate/current-proposed evidence, then apply only after approval.
+- Bulk records are strict. Use `assigneeId` from `codecks_user_lookup`; never pass display-name fields such as `assignee` and assume they will be ignored.
+- Do not launch parallel full-account or high-`scanLimit` searches. Account scans are concurrency-bounded; prefer the bulk-create shared duplicate scan or narrow sequential searches.
+- Treat `complete=false`, cancellation, timeout, or queue rejection as incomplete evidence, never as a definitive empty result. Follow the structured recovery hint.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
 ## Workflow semantics
@@ -96,7 +99,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Use `codecks_run_delivered_effort` to report delivered effort from cached Run `stats.finishStats` without card-by-card recalculation.
 - Use `codecks_run_average_effort` to average cached delivered effort across completed Runs; `minDeliveredEffort` defaults to `1` to filter out zero-effort vacation/break Runs.
 - Use `codecks_run_update` to edit a Run custom label (`sprints/updateSprint.name`) or description (`sprints/updateSprint.description`).
-- Use `codecks_card_update_run` to assign a card to a Run (`cards/update` with `sprintId`) or remove it from a Run (`sprintId: null`).
+- Use `codecks_card_update_run` for one card. For a bounded multi-card assignment/removal, use `codecks_card_bulk_update` with `runId` or `clearRun` after reviewing one dry-run preview.
 - Numeric Run identifiers refer to Run/Sprint account sequences, not card short codes.
 
 ## Card updates
@@ -109,6 +112,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not surround `$123` card references with formatting wrappers such as `**`, `*`, `_`, `~~`, backticks, or code fences.
 - Markdown structure like `# $123` and `* $123` is valid because the `$123` token itself stays plain.
 - For card type metadata, use `cardType: regular|documentation` on create/update.
+- `codecks_card_bulk_update` also supports effort, priority, tags, Run assignment/removal, and parent assignment/removal. Each apply record makes one non-retried mutation attempt and reports indexed applied/failed outcomes.
 
 ## Tool-specific notes
 - Use `codecks_card_get` when the agent needs structured card data for inspection, planning, or follow-up work.
