@@ -28,7 +28,7 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
   assert.ok(existsSync(path.join(root, registration)), `missing Pi registration target: ${registration}`);
 }
 
-const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "references/", "compatibility/", "README.md", "CHANGELOG.md", "LICENSE"];
+const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "references/", "README.md", "CHANGELOG.md", "LICENSE"];
 assert.deepEqual(packageJson.files, expectedFiles);
 for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
   assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
@@ -44,9 +44,8 @@ assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.equal(packageJson.dependencies?.["@aefree/pi-workflow"], "^0.1.0");
-assert.equal(packageJson.dependencies?.["@aefree/pi-capability-registry"], "^0.1.0");
-assert.equal(packageJson.bundledDependencies, undefined, "Decomposition packages must be co-installed instead of copied into pi-codecks tarballs.");
+assert.equal(packageJson.dependencies, undefined, "Codecks tools and skills must not depend on the removed workflow-provider packages.");
+assert.equal(packageJson.bundledDependencies, undefined);
 assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
 assert.equal(existsSync(path.join(root, "src/mutation-authorization.ts")), false, "mutation authorization module must not be packaged");
 assert.equal(existsSync(path.join(root, "tests/codecks-mutation-authorization.test.ts")), false, "obsolete mutation authorization tests must stay removed");
@@ -108,7 +107,6 @@ const mutationRuntimeSurface = [
   read("index.ts"),
   read("src/codecks-core.ts"),
   read("src/codecks-tool-loading.ts"),
-  read("src/codecks-workflow-provider.ts"),
   readme,
   read("skills/using-codecks/SKILL.md"),
 ].join("\n");

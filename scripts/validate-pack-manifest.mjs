@@ -14,7 +14,6 @@ const requiredFiles = [
   "package.json",
   "prompts/codecks-inbox.md",
   "references/cg-changelog/codecks-workflow.md",
-  "compatibility/legacy-reference-v1/references/cg-changelog/codecks-workflow.md",
   "skills/codecks-velocity-reporting/SKILL.md",
   "skills/using-codecks/SKILL.md",
   "src/codecks-core.ts",
@@ -23,7 +22,7 @@ const requiredFiles = [
 ];
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);
-const allowedPrefixes = ["docs/", "prompts/", "references/", "compatibility/", "skills/", "src/"];
+const allowedPrefixes = ["docs/", "prompts/", "references/", "skills/", "src/"];
 const forbiddenPathPatterns = [
   { label: "test source", pattern: /^tests\// },
   { label: "packaging script", pattern: /^scripts\// },

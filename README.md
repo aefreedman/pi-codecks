@@ -78,17 +78,13 @@ Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
 
 Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
 
-## Workflow-provider integration
-
-When `@aefree/pi-workflow` is installed, `pi-codecks` registers a session-scoped `tracker.codecks` WorkflowProviderV1. Account/profile configuration establishes applicability; credential availability is reported separately by preflight. Its bounded tracker/changelog guidance preserves the existing structured Codecks tools, operation-specific validation, mutation-scope rules, and dry-run flows.
+## Safety and mutation behavior
 
 A directly invoked Codecks mutation tool proceeds through its existing operation, target/entity, and payload validation to the dispatch sink. The package does not add approval-token parameters or UI confirmation prompts. Read-only queries retain bounded retries, but non-idempotent dispatches make one remote attempt and do not retry timeouts or retryable HTTP responses because their side effects are ambiguous. Raw `codecks_dispatch` retains its in-scope path and payload checks; specialized tools retain exact entity resolution and domain validation.
 
 Attachment sources are physically canonicalized relative to the invoking workspace and must remain inside it. Outside-workspace sources and symlink/junction escapes are rejected before network access. The package snapshots canonical source identity, content SHA-256, and size, then re-resolves and re-hashes the source immediately before upload so changed bytes are not sent. Attachment hashes are not exposed in tool results.
 
 These controls cover registered Codecks tools and raw `codecks_dispatch`; they do not claim to police unrelated shell or third-party HTTP clients.
-
-For legacy changelog compatibility, the package provides only `references/cg-changelog/codecks-workflow.md`, served from a byte-exact pinned 0.6.4 legacy payload copy separate from canonical Codecks guidance. Reads are bounded and return package/version/resource provenance without installation paths; it does not install, migrate, or mutate legacy resources.
 
 ## Install
 

@@ -9,8 +9,6 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
-- Added session-scoped `tracker.codecks` WorkflowProviderV1 integration with configuration applicability, separate credential preflight, bounded operation-safety tracker/changelog guidance, and stale-safe cleanup.
-- Added the bounded legacy changelog reference service for the single mapped `references/cg-changelog/codecks-workflow.md` resource, backed by a byte-exact pinned 0.6.4 payload copy with public provenance and no install/migration path.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
@@ -18,7 +16,6 @@ and this project follows semantic versioning for public package releases.
 
 ### Changed
 
-- Co-install capability-registry and workflow tarballs in neutral consumers instead of recursively bundling decomposition repositories; package validation now rejects dependency-tree and sibling paths.
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.
 - Non-idempotent mutations no longer transparently retry ambiguous failures; read-only retries remain. Attachment sources are physically canonicalized, strictly workspace-contained, tracked by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.
 - Bulk create/update records are now strict and reject unsupported fields before requests; bulk preview and apply share normalized payloads that expose all mutable fields and visible target names.

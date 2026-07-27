@@ -3,11 +3,6 @@ import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
 import {
-  loadCodecksWorkflowOwnerV1,
-  registerCodecksLegacyReferencesV1,
-  registerCodecksWorkflowProviderV1,
-} from "./src/codecks-workflow-provider";
-import {
   BALANCED_ACTIVE_CODECKS_TOOL_NAMES,
   CODECKS_TOOL_BROWSE_TEXT,
   CODECKS_TOOL_SEARCH_NAME,
@@ -1171,30 +1166,6 @@ function getCoreTool(exportName: string): CoreTool {
 }
 
 export default function codecksTools(pi: ExtensionAPI) {
-  let workflowRegistration: ReturnType<typeof registerCodecksWorkflowProviderV1> | undefined;
-  let legacyReferenceRegistration: ReturnType<typeof registerCodecksLegacyReferencesV1> | undefined;
-  let activeWorkflowScope: object | undefined;
-
-  pi.on("session_start", async (_event, ctx) => {
-    // Reloads can start a replacement scope before the previous shutdown arrives.
-    workflowRegistration?.unregister();
-    legacyReferenceRegistration?.unregister();
-    const scope = ctx.sessionManager;
-    const owner = await loadCodecksWorkflowOwnerV1();
-    workflowRegistration = registerCodecksWorkflowProviderV1(scope, owner);
-    legacyReferenceRegistration = registerCodecksLegacyReferencesV1(scope, owner);
-    activeWorkflowScope = scope;
-  });
-  pi.on("session_shutdown", (_event, ctx) => {
-    // Do not let delayed shutdown for an old scope erase a replacement registration.
-    if (activeWorkflowScope !== ctx.sessionManager) return;
-    workflowRegistration?.unregister();
-    legacyReferenceRegistration?.unregister();
-    workflowRegistration = undefined;
-    legacyReferenceRegistration = undefined;
-    activeWorkflowScope = undefined;
-  });
-
   const enabledExports = ENABLE_DEBUG_TOOLS ? CODECKS_EXPORTS : DEFAULT_CODECKS_EXPORTS;
   const enabledToolNames = new Set<string>(enabledExports.map(toToolName));
   const mode = getCodecksToolLoadingMode();
