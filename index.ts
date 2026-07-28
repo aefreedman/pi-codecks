@@ -1,9 +1,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { RegistrationToken } from "@aefree/pi-capability-registry";
+import { createWorkflowProviderRegistryV1 } from "@aefree/pi-workflow/contracts/v1";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
+import { createCodecksWorkflowProviderV1 } from "./src/codecks-workflow-provider";
 import {
   BALANCED_ACTIVE_CODECKS_TOOL_NAMES,
   CODECKS_TOOL_BROWSE_TEXT,
@@ -1244,6 +1247,8 @@ export default function codecksTools(pi: ExtensionAPI) {
   const coreDescriptions = new Map<string, string>();
   let publicReferenceRegistration: PackageReferenceRegistration | undefined;
   let publicReferenceScope: object | undefined;
+  const workflowProviderRegistry = createWorkflowProviderRegistryV1();
+  const workflowProviderRegistrations = new WeakMap<object, RegistrationToken>();
 
   for (const exportName of enabledExports) {
     const coreTool = getCoreTool(exportName);
@@ -1349,8 +1354,13 @@ export default function codecksTools(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    const scope = ctx.sessionManager;
+    const priorProviderRegistration = workflowProviderRegistrations.get(scope);
+    if (priorProviderRegistration !== undefined) workflowProviderRegistry.unregister(priorProviderRegistration);
+    workflowProviderRegistrations.set(scope, workflowProviderRegistry.register(scope, createCodecksWorkflowProviderV1()));
+
     publicReferenceRegistration?.unregister();
-    publicReferenceRegistration = await registerCodecksPublicReference(ctx.sessionManager);
+    publicReferenceRegistration = await registerCodecksPublicReference(scope);
     publicReferenceScope = ctx.sessionManager;
     const ownership = getEffectiveCodecksToolOwnership(pi.getAllTools(), EXTENSION_SOURCE_PATH);
     const active = pi.getActiveTools();
@@ -1369,7 +1379,13 @@ export default function codecksTools(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    if (publicReferenceScope !== ctx.sessionManager) return;
+    const scope = ctx.sessionManager;
+    const providerRegistration = workflowProviderRegistrations.get(scope);
+    if (providerRegistration !== undefined) {
+      workflowProviderRegistry.unregister(providerRegistration);
+      workflowProviderRegistrations.delete(scope);
+    }
+    if (publicReferenceScope !== scope) return;
     publicReferenceRegistration?.unregister();
     publicReferenceRegistration = undefined;
     publicReferenceScope = undefined;

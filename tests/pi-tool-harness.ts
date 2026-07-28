@@ -22,7 +22,8 @@ export type RegisteredTool = {
   execute: (...args: any[]) => Promise<any> | any;
 };
 
-type SessionStartHandler = (event: unknown, ctx: { sessionManager: { getBranch: () => unknown[] } }) => Promise<void> | void;
+type SessionManager = { getBranch: () => unknown[] };
+type SessionHandler = (event: unknown, ctx: { sessionManager: SessionManager }) => Promise<void> | void;
 
 const DEFAULT_EXTENSION_SOURCE: ToolSourceInfo = {
   path: fileURLToPath(new URL("../index.ts", import.meta.url)),
@@ -34,11 +35,13 @@ const DEFAULT_EXTENSION_SOURCE: ToolSourceInfo = {
 export class PiToolHarness {
   readonly registry = new Map<string, RegisteredTool>();
   readonly setActiveToolsCalls: string[][] = [];
-  private readonly sessionStartHandlers: SessionStartHandler[] = [];
+  private readonly sessionStartHandlers: SessionHandler[] = [];
+  private readonly sessionShutdownHandlers: SessionHandler[] = [];
   private readonly sourceInfoAvailable: boolean;
   private readonly extensionSourceInfo: ToolSourceInfo;
   private activeTools: string[];
   private branchEntries: unknown[];
+  readonly sessionManager: SessionManager;
 
   constructor(options: {
     activeTools?: string[];
@@ -46,9 +49,11 @@ export class PiToolHarness {
     foreignTools?: RegisteredTool[];
     sourceInfoAvailable?: boolean;
     extensionSourceInfo?: ToolSourceInfo;
+    sessionManager?: SessionManager;
   } = {}) {
     this.activeTools = [...(options.activeTools ?? [])];
     this.branchEntries = [...(options.branchEntries ?? [])];
+    this.sessionManager = options.sessionManager ?? { getBranch: () => [...this.branchEntries] };
     this.sourceInfoAvailable = options.sourceInfoAvailable ?? true;
     this.extensionSourceInfo = options.extensionSourceInfo ?? DEFAULT_EXTENSION_SOURCE;
     for (const tool of options.foreignTools ?? []) this.registry.set(tool.name, { ...tool });
@@ -61,6 +66,7 @@ export class PiToolHarness {
     },
     on: (event: string, handler: SessionStartHandler) => {
       if (event === "session_start") this.sessionStartHandlers.push(handler);
+      if (event === "session_shutdown") this.sessionShutdownHandlers.push(handler);
     },
     getActiveTools: () => [...this.activeTools],
     getAllTools: () => [...this.registry.values()],
@@ -79,8 +85,13 @@ export class PiToolHarness {
 
   async startSession(branchEntries = this.branchEntries, reason = "startup"): Promise<void> {
     this.branchEntries = [...branchEntries];
-    const ctx = { sessionManager: { getBranch: () => [...this.branchEntries] } };
+    const ctx = { sessionManager: this.sessionManager };
     for (const handler of this.sessionStartHandlers) await handler({ reason }, ctx);
+  }
+
+  async shutdownSession(reason = "shutdown", sessionManager = this.sessionManager): Promise<void> {
+    const ctx = { sessionManager };
+    for (const handler of this.sessionShutdownHandlers) await handler({ reason }, ctx);
   }
 
   getActiveTools(): string[] {

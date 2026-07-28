@@ -9,6 +9,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added session-scoped `tracker.codecks` workflow-provider registration with canonical `codecks:<account-subdomain>` targets, credential-safe readiness gaps, and bounded Codecks-owned guidance.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.

@@ -43,8 +43,12 @@ assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manife
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
+assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.equal(packageJson.dependencies, undefined, "Codecks tools and skills must not depend on the removed workflow-provider packages.");
+assert.deepEqual(packageJson.dependencies, {
+  "@aefree/pi-capability-registry": "^0.1.0",
+  "@aefree/pi-workflow": "^0.1.0",
+}, "Codecks workflow-provider registration must use the published registry and workflow contracts.");
 assert.equal(packageJson.bundledDependencies, undefined);
 assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
 assert.equal(existsSync(path.join(root, "src/mutation-authorization.ts")), false, "mutation authorization module must not be packaged");
