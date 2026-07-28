@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { loadRegisteredTools, type RegisteredTool } from "./pi-tool-harness.ts";
+import { codecksPublicReferenceRegistration } from "../index.ts";
 
 type AnyRecord = Record<string, any>;
 
 // Preserve the legacy prompt-metadata assertions in the explicit all-active compatibility condition.
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 const tools = await loadRegisteredTools();
+const publicReference = codecksPublicReferenceRegistration();
+assert.equal(publicReference.packageName, "@aefree/pi-codecks");
+assert.equal(publicReference.registeredBy, "index.ts");
+assert.deepEqual(publicReference.publicMounts, [{ prefix: "references/codecks/", directory: "references/codecks", extensions: [".md"] }]);
 
 const getTool = (name: string): RegisteredTool => {
   const tool = tools.get(name);
@@ -54,6 +59,7 @@ assertProperties("codecks_run_average_effort", ["sprintConfig", "user", "userId"
 assertProperties("codecks_velocity_report", ["sprintConfig", "user", "userId", "rosterPath", "fromDate", "toDate", "completedRuns", "excludeLabels", "csvPath", "summaryMarkdownPath", "format"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
+assertProperties("codecks_deck_get", ["deckId", "title", "format"]);
 assertProperties("codecks_deck_update", ["deckId", "description", "clearDescription", "format"]);
 assertRequired("codecks_deck_update", ["deckId"]);
 assertProperties("codecks_milestone_list", ["search", "includeDeleted", "limit", "format"]);
@@ -188,6 +194,8 @@ assert.equal(prepare("codecks_velocity_report", { summary_markdown_path: "out.md
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).runId, 91);
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).customLabel, "Label");
 assert.equal(prepare("codecks_run_update", { run: 91, custom_label: "Label", clear_custom_label: true }).clearCustomLabel, true);
+assert.equal(prepare("codecks_deck_get", { deck: "Development" }).deckId, "Development");
+assert.equal(prepare("codecks_deck_get", { name: "Development" }).title, "Development");
 assert.equal(prepare("codecks_deck_update", { deck: "Development", clear_description: true }).deckId, "Development");
 assert.equal(prepare("codecks_deck_update", { deck: "Development", clear_description: true }).clearDescription, true);
 assert.equal(prepare("codecks_deck_update", { deck_id: 12, description: "Desc" }).deckId, 12);
@@ -291,6 +299,7 @@ for (const phrase of [
   "codecks_card_get_formatted",
   "codecks_card_list_resolvables",
   "codecks_card_list_missing_effort",
+  "codecks_deck_get",
   "codecks_deck_update",
   "codecks_milestone_list",
   "codecks_milestone_get",

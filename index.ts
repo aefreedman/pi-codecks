@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
@@ -18,6 +20,40 @@ import {
 } from "./src/codecks-tool-loading";
 
 const EXTENSION_SOURCE_PATH = fileURLToPath(import.meta.url);
+const PACKAGE_ROOT = dirname(EXTENSION_SOURCE_PATH);
+const PACKAGE_REFERENCE_RUNTIME = "@aefree/pi-package-references/runtime/" + "v1";
+
+type PackageReferenceRegistration = { unregister: () => void };
+
+export const codecksPublicReferenceRegistration = (): Record<string, unknown> =>
+{
+  const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
+  if (typeof manifest.name !== "string" || typeof manifest.version !== "string") throw new Error("Invalid pi-codecks package manifest.");
+  return {
+    contractVersion: 1,
+    packageName: manifest.name,
+    packageVersion: manifest.version,
+    packageRoot: PACKAGE_ROOT,
+    registeredBy: "index.ts",
+    publicMounts: [{ prefix: "references/codecks/", directory: "references/codecks", extensions: [".md"] }],
+  };
+};
+
+const registerCodecksPublicReference = async (scope: object): Promise<PackageReferenceRegistration | undefined> =>
+{
+  // The reader is an independently activated Pi package. Keep this package usable
+  // when it is absent, while registering its narrow public contract whenever it is available.
+  let runtime: { registerPackageReferenceOwnerV1?: (scope: object, input: Record<string, unknown>) => Promise<unknown>; unregisterPackageReferenceOwnerV1?: (token: unknown) => boolean };
+  try {
+    runtime = await import(PACKAGE_REFERENCE_RUNTIME) as typeof runtime;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND") return undefined;
+    throw error;
+  }
+  if (typeof runtime.registerPackageReferenceOwnerV1 !== "function" || typeof runtime.unregisterPackageReferenceOwnerV1 !== "function") return undefined;
+  const token = await runtime.registerPackageReferenceOwnerV1(scope, codecksPublicReferenceRegistration());
+  return { unregister: () => { runtime.unregisterPackageReferenceOwnerV1!(token); } };
+};
 
 type CoreTool = {
   description?: string;
@@ -1191,6 +1227,8 @@ export default function codecksTools(pi: ExtensionAPI) {
   const enabledToolNames = new Set<string>(enabledExports.map(toToolName));
   const mode = getCodecksToolLoadingMode();
   const coreDescriptions = new Map<string, string>();
+  let publicReferenceRegistration: PackageReferenceRegistration | undefined;
+  let publicReferenceScope: object | undefined;
 
   for (const exportName of enabledExports) {
     const coreTool = getCoreTool(exportName);
@@ -1295,7 +1333,10 @@ export default function codecksTools(pi: ExtensionAPI) {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    publicReferenceRegistration?.unregister();
+    publicReferenceRegistration = await registerCodecksPublicReference(ctx.sessionManager);
+    publicReferenceScope = ctx.sessionManager;
     const ownership = getEffectiveCodecksToolOwnership(pi.getAllTools(), EXTENSION_SOURCE_PATH);
     const active = pi.getActiveTools();
     if (!ownership.usesSourceInfo) return;
@@ -1310,5 +1351,12 @@ export default function codecksTools(pi: ExtensionAPI) {
     const restored = getRestoredCodecksToolNames(ctx.sessionManager.getBranch(), ownership.ownedToolNames);
     const preserved = active.filter((name) => !ownedInitiallyInactive.has(name));
     pi.setActiveTools([...new Set([...preserved, CODECKS_TOOL_SEARCH_NAME, ...restored])]);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (publicReferenceScope !== ctx.sessionManager) return;
+    publicReferenceRegistration?.unregister();
+    publicReferenceRegistration = undefined;
+    publicReferenceScope = undefined;
   });
 }
