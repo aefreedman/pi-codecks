@@ -36,6 +36,7 @@ const outputFormatEnum = Type.Union([Type.Literal("text"), Type.Literal("json")]
 const cardSearchOutputModeEnum = Type.Union([Type.Literal("compact"), Type.Literal("detailed"), Type.Literal("counts")]);
 const cardRefSchema = Type.Union([Type.String(), Type.Number()]);
 const bulkCreateRecordSchema = Type.Object({
+  correlationKey: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Opaque caller correlation key echoed in results; not an idempotency key." })),
   title: Type.Optional(Type.String()),
   content: Type.Optional(Type.String()),
   cardType: Type.Optional(Type.String()),
@@ -49,6 +50,7 @@ const bulkCreateRecordSchema = Type.Object({
   tags: Type.Optional(Type.Array(Type.String())),
 }, { additionalProperties: false });
 const bulkUpdateRecordSchema = Type.Object({
+  correlationKey: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Opaque caller correlation key echoed in results; not an idempotency key." })),
   cardId: cardRefSchema,
   title: Type.Optional(Type.String()),
   content: Type.Optional(Type.String()),
@@ -145,6 +147,7 @@ const DEFAULT_CODECKS_EXPORTS = [
   "card_bulk_create",
   "card_bulk_update",
   "card_set_parent",
+  "deck_get",
   "deck_update",
   "milestone_list",
   "milestone_get",
@@ -438,6 +441,24 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   },
   card_update: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+  },
+  deck_get: {
+    parameters: Type.Object({
+      deckId: Type.Optional(cardRefSchema),
+      title: Type.Optional(Type.String({ description: "Exact visible Deck title." })),
+      format: Type.Optional(outputFormatEnum),
+    }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      applyDeckIdAliases(input);
+      if (input.name !== undefined && input.title === undefined) input.title = input.name;
+      return input;
+    },
+    promptSnippet: "Fetch one Codecks Deck and its current description.",
+    promptGuidelines: [
+      "Use codecks_deck_get to inspect a Deck description before editing; use codecks_deck_update only for an explicit description change.",
+      "Numeric deckId values are deck account sequences, not card short codes. Titles must be exact visible titles.",
+    ],
   },
   deck_update: {
     parameters: Type.Object({

@@ -15,7 +15,7 @@ const harness = new PiToolHarness({ activeTools: [...DEFAULT_CODECKS_TOOL_NAMES,
 await harness.load();
 await harness.startSession();
 
-assert.equal(harness.registry.size, 43, "debug opt-in registers the 40 default tools, two debug tools, and loader");
+assert.equal(harness.registry.size, 44, "debug opt-in registers the 41 default tools, two debug tools, and loader");
 assert(debugNames.every((name) => harness.registry.has(name)), "both opt-in debug definitions should be registered");
 assert.deepEqual(new Set(harness.getActiveTools()), new Set([CODECKS_TOOL_SEARCH_NAME]), "loader-only defers opt-in debug tools like ordinary deferred tools");
 

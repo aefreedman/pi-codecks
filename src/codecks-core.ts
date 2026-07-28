@@ -1476,6 +1476,45 @@ const normalizeCardBodyInput = (value: string): string =>
     return normalizeCardReferencesForUserText(value);
 };
 
+type MutationTextError = { field: string; kind: "replacement_character" | "unpaired_surrogate"; utf16Offset: number; codePointOffset: number };
+
+const findMutationTextError = (field: string, value: unknown): MutationTextError | undefined =>
+{
+    if (typeof value !== "string") return undefined;
+    let codePointOffset = 0;
+    for (let utf16Offset = 0; utf16Offset < value.length; )
+    {
+        const codeUnit = value.charCodeAt(utf16Offset);
+        if (codeUnit === 0xfffd)
+        {
+            return { field, kind: "replacement_character", utf16Offset, codePointOffset };
+        }
+        if (codeUnit >= 0xd800 && codeUnit <= 0xdbff)
+        {
+            const next = value.charCodeAt(utf16Offset + 1);
+            if (!(next >= 0xdc00 && next <= 0xdfff))
+            {
+                return { field, kind: "unpaired_surrogate", utf16Offset, codePointOffset };
+            }
+            utf16Offset += 2;
+            codePointOffset += 1;
+            continue;
+        }
+        if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
+        {
+            return { field, kind: "unpaired_surrogate", utf16Offset, codePointOffset };
+        }
+        utf16Offset += 1;
+        codePointOffset += 1;
+    }
+    return undefined;
+};
+
+const validateMutationText = (values: Array<[string, unknown]>): string[] => values
+    .map(([field, value]) => findMutationTextError(field, value))
+    .filter((value): value is MutationTextError => value !== undefined)
+    .map((error) => `${error.field} contains ${error.kind === "replacement_character" ? "Unicode replacement character U+FFFD" : "an unpaired UTF-16 surrogate"} at UTF-16 offset ${error.utf16Offset} (code-point offset ${error.codePointOffset}).`);
+
 const resolveCardDocument = (title: string | undefined, content: string | undefined): { titleLine: string; body: string } =>
 {
     const normalizedTitle = title !== undefined ? normalizeCardTitleInput(title) : "";
@@ -1704,6 +1743,7 @@ export const __test = {
     parseCardIdentifier: (value: string | number | undefined) => parseCardIdentifier(value),
     buildReusableCardRefs: (value?: number) => buildReusableCardRefs(value),
     classifyApiErrorCategory: (value: string) => classifyApiErrorCategory(value),
+    validateMutationText,
     snapshotAttachmentSource,
     assertUnchangedAttachmentSource,
 };
@@ -3302,6 +3342,7 @@ const deckDetailFields = [
     "accountSeq",
     "title",
     "description",
+    "isDeleted",
 ];
 
 const milestoneDetailFields = [
@@ -6958,6 +6999,15 @@ export const card_create = tool({
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([
+            ["title", args.title],
+            ["content", args.content],
+            ...(args.tags ?? []).map((tag, index) => [`tags[${index}]`, tag] as [string, unknown]),
+        ]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "card-create", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         const document = resolveCardDocument(args.title, args.content);
         const content = buildCardContent(document.titleLine, document.body);
         const normalizedTags = normalizeCreateTags(args.tags);
@@ -7183,6 +7233,7 @@ export const card_create = tool({
 });
 
 type BulkCreateRecord = {
+    correlationKey?: string;
     title?: string;
     content?: string;
     cardType?: string;
@@ -7197,6 +7248,7 @@ type BulkCreateRecord = {
 };
 
 type BulkUpdateRecord = {
+    correlationKey?: string;
     cardId?: string | number;
     title?: string;
     content?: string;
@@ -7216,6 +7268,7 @@ type BulkUpdateRecord = {
 
 type NormalizedBulkCreateRecord = {
     index: number;
+    correlationKey: string | null;
     title: string;
     content: string;
     cardType: CardTypeValue;
@@ -7233,6 +7286,7 @@ type NormalizedBulkCreateRecord = {
 
 type NormalizedBulkUpdateRecord = {
     index: number;
+    correlationKey: string | null;
     target: { cardId: string; accountSeq: number | null; cardRef: string | null; accountSeqRef: string | null; title: string };
     updatedFields: string[];
     mode: "replace" | "append" | "prepend";
@@ -7241,8 +7295,8 @@ type NormalizedBulkUpdateRecord = {
     payload: Record<string, unknown>;
 };
 
-const BULK_CREATE_FIELDS = new Set(["title", "content", "cardType", "deck", "milestone", "effort", "priority", "assigneeId", "putOnHand", "parentCardId", "tags"]);
-const BULK_UPDATE_FIELDS = new Set(["cardId", "title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent", "mode"]);
+const BULK_CREATE_FIELDS = new Set(["correlationKey", "title", "content", "cardType", "deck", "milestone", "effort", "priority", "assigneeId", "putOnHand", "parentCardId", "tags"]);
+const BULK_UPDATE_FIELDS = new Set(["correlationKey", "cardId", "title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent", "mode"]);
 const BULK_UPDATE_VALUE_FIELDS = ["title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent"];
 
 const validateStrictBulkRecords = (records: unknown[], kind: "create" | "update"): string[] =>
@@ -7267,6 +7321,15 @@ const validateStrictBulkRecords = (records: unknown[], kind: "create" | "update"
                     : `${path}[${index}].${field} is unsupported.`);
             }
         }
+        if (record.correlationKey !== undefined && (typeof record.correlationKey !== "string" || record.correlationKey.length === 0 || record.correlationKey.length > 200))
+        {
+            errors.push(`${path}[${index}].correlationKey must be a non-empty string of at most 200 characters.`);
+        }
+        errors.push(...validateMutationText([
+            [`${path}[${index}].title`, record.title],
+            [`${path}[${index}].content`, record.content],
+            ...((Array.isArray(record.tags) ? record.tags : []).map((tag, tagIndex) => [`${path}[${index}].tags[${tagIndex}]`, tag] as [string, unknown])),
+        ]));
         if (kind === "create" && !buildCardContent(resolveCardDocument(record.title as string | undefined, record.content as string | undefined).titleLine, resolveCardDocument(record.title as string | undefined, record.content as string | undefined).body).trim())
         {
             errors.push(`cards[${index}] requires title and/or content.`);
@@ -7341,6 +7404,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     const putOnHand = record.putOnHand ?? false;
     return {
         index,
+        correlationKey: record.correlationKey ?? null,
         title: document.titleLine || "(untitled)",
         content,
         cardType: cardType.value,
@@ -7401,33 +7465,101 @@ const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], d
     };
 };
 
-const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>[]) => ({
-    index: record.index,
-    operation: "create",
-    title: record.title,
-    content: record.content,
-    contentMode: "replace",
-    cardType: record.cardType,
-    deck: record.deck,
-    milestone: record.milestone,
-    assignee: record.assignee,
-    effort: record.effort,
-    priority: record.priority,
-    tags: record.tags,
-    bodyHashtags: record.bodyHashtags,
-    putOnHand: record.putOnHand,
-    handState: record.putOnHand ? "on_hand" : "off_hand",
-    parent: record.parent,
-    run: null,
-    privateCard: !record.deck && !record.parent,
-    duplicateCandidates,
-});
+const normalizedMutationFingerprint = (value: Record<string, unknown>): string =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+const actionKeyFor = (operation: "create" | "update", index: number, payload: Record<string, unknown>): string =>
+{
+    const { sessionId: _sessionId, ...stablePayload } = payload;
+    return `${operation}:${index}:${normalizedMutationFingerprint(stablePayload).slice(0, 24)}`;
+};
+
+const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
+{
+    const normalizedRequested = {
+        title: record.title,
+        content: record.content,
+        contentMode: "replace",
+        cardType: record.cardType,
+        deck: record.deck,
+        milestone: record.milestone,
+        assignee: record.assignee,
+        effort: record.effort,
+        priority: record.priority,
+        tags: record.tags,
+        bodyHashtags: record.bodyHashtags,
+        putOnHand: record.putOnHand,
+        handState: record.putOnHand ? "on_hand" : "off_hand",
+        parent: record.parent,
+        run: null,
+        privateCard: !record.deck && !record.parent,
+    } as Record<string, unknown>;
+    return {
+        index: record.index,
+        operation: "create",
+        correlationKey: record.correlationKey,
+        actionKey: actionKeyFor("create", record.index, record.payload),
+        normalizedRequested,
+        normalizedRequestedFingerprint: normalizedMutationFingerprint(normalizedRequested),
+        dispatchReturned: null,
+        persistedVerified: null,
+        verificationState: "not_performed",
+        ...normalizedRequested,
+        duplicateCandidates,
+    };
+};
+
+const preflightOutcomeRecords = (records: unknown[], operation: "create" | "update", errors: Array<{ index?: number; message: string }> = []) =>
+{
+    const byIndex = new Map<number, string[]>();
+    for (const error of errors)
+    {
+        const index = error.index ?? Number(error.message.match(/\[(\d+)\]/)?.[1]);
+        if (Number.isInteger(index)) byIndex.set(index, [...(byIndex.get(index) ?? []), error.message]);
+    }
+    return records.map((record, index) =>
+    {
+        const input = isRecord(record) ? record : {};
+        const messages = byIndex.get(index) ?? [];
+        return {
+            index,
+            operation,
+            correlationKey: typeof input.correlationKey === "string" ? input.correlationKey : null,
+            actionKey: null,
+            status: messages.length > 0 ? "failed" : "definitely_unsent",
+            certainty: messages.length > 0 ? "definitely_rejected" : "definitely_unsent",
+            ...(messages.length > 0 ? { error: { category: "validation_error", message: messages.join(" ") } } : {}),
+        };
+    });
+};
+
+const classifyMutationOutcome = (error: unknown): "failed" | "indeterminate" =>
+{
+    if (error instanceof CodecksOperationError && ["request_timeout", "caller_aborted"].includes(error.category)) return "indeterminate";
+    const message = toErrorMessage(error);
+    return /\b(?:5\d\d|timeout|timed out|network|socket|connection|econn|epipe|fetch failed)\b/i.test(message)
+        ? "indeterminate"
+        : "failed";
+};
+
+const markDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number): void =>
+{
+    for (const entry of results)
+    {
+        if (Number(entry.index) > afterIndex && entry.status === "ready")
+        {
+            entry.status = "definitely_unsent";
+            entry.certainty = "definitely_unsent";
+            entry.reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made." };
+        }
+    }
+};
 
 export const card_bulk_create = tool({
     description: "Preview or create multiple Codecks cards with duplicate detection and per-card status results.",
     args: {
         cards: tool.schema.array(tool.schema.object({
-            title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
+            correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
             deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
             effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
             putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional(),
@@ -7450,10 +7582,12 @@ export const card_bulk_create = tool({
         const structuralErrors = validateStrictBulkRecords(rawRecords, "create");
         if (structuralErrors.length > 0)
         {
+            const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
             return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), {
                 indexedErrors: structuralErrors,
                 invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
                 requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "create", indexedErrors),
             });
         }
 
@@ -7489,6 +7623,8 @@ export const card_bulk_create = tool({
             return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map((entry) => entry.message).join(" "), {
                 indexedErrors: normalizationErrors,
                 invalidRecordCount: normalizationErrors.length,
+                requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "create", normalizationErrors),
             });
         }
 
@@ -7522,6 +7658,8 @@ export const card_bulk_create = tool({
             return {
                 ...publicBulkCreateRecord(record, candidates),
                 status: duplicateScan.metadata.complete ? (candidates.length > 0 ? "duplicate_candidate" : "ready") : "scan_incomplete",
+                certainty: "not_dispatched",
+                verificationState: dryRun ? "not_applicable" : "not_performed",
             };
         });
 
@@ -7535,30 +7673,46 @@ export const card_bulk_create = tool({
                     const created = response?.card && typeof response.card === "object" ? response.card as CodecksEntity : response as CodecksEntity | undefined;
                     const accountSeq = typeof created?.accountSeq === "number" ? created.accountSeq : undefined;
                     results[record.index].status = "created";
+                    results[record.index].certainty = "dispatch_returned";
+                    results[record.index].dispatchReturned = truncateStructuredValue(response ?? null).value;
                     results[record.index].created = {
                         cardId: created?.cardId ?? null,
                         accountSeq: accountSeq ?? null,
                         shortCode: formatShortCode(accountSeq) || null,
                         ...buildReusableCardRefs(accountSeq),
-                        title: record.title,
+                        title: created?.title ?? null,
                     };
                 }
                 catch (error)
                 {
-                    results[record.index].status = "failed";
+                    const outcome = classifyMutationOutcome(error);
+                    results[record.index].status = outcome;
+                    results[record.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
                     results[record.index].error = {
                         category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
                         message: toErrorMessage(error),
                         ...getOperationErrorData(error),
                         retried: false,
                     };
-                    if (!continueOnError) break;
+                    if (outcome === "indeterminate")
+                    {
+                        results[record.index].reconciliation = { actionKey: results[record.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
+                        markDefinitelyUnsent(results, record.index);
+                        break;
+                    }
+                    if (!continueOnError)
+                    {
+                        markDefinitelyUnsent(results, record.index);
+                        break;
+                    }
                 }
             }
         }
 
         const created = results.filter((entry) => entry.status === "created").length;
         const failed = results.filter((entry) => entry.status === "failed").length;
+        const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
+        const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
         const duplicateCandidates = results.filter((entry) => Array.isArray(entry.duplicateCandidates) && entry.duplicateCandidates.length > 0).length;
         const lines = [
             "## Bulk Card Create",
@@ -7567,16 +7721,21 @@ export const card_bulk_create = tool({
             `Records: ${rawRecords.length}`,
             `Created: ${created}`,
             `Failed: ${failed}`,
+            `Indeterminate: ${indeterminate}`,
+            `Definitely Unsent: ${definitelyUnsent}`,
             `Duplicate Candidates: ${duplicateCandidates}`,
             `Scan: ${duplicateScan.metadata.complete ? "complete" : "incomplete"}; ${duplicateScan.metadata.scanned} cards; ${duplicateScan.metadata.requestsAttempted} request(s)`,
             "",
             ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.title} — ${(entry.deck as { name?: string } | null)?.name ?? "Private"} — ${(entry.assignee as { name: string }).name}`),
         ];
         return toStructuredResult(format, "card-bulk-create", lines.join("\n"), {
+            responseSchemaVersion: 1,
             dryRun,
             count: rawRecords.length,
             created,
             failed,
+            indeterminate,
+            definitelyUnsent,
             invalidRecordCount: 0,
             duplicateCandidates,
             complete: duplicateScan.metadata.complete,
@@ -7719,6 +7878,7 @@ const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number
 
     return {
         index,
+        correlationKey: record.correlationKey ?? null,
         target: {
             cardId: String(card.cardId),
             accountSeq: accountSeq ?? null,
@@ -7738,7 +7898,7 @@ export const card_bulk_update = tool({
     description: "Preview or apply strict bounded updates including effort, priority, tags, Run, and parent changes.",
     args: {
         updates: tool.schema.array(tool.schema.object({
-            cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]),
+            correlationKey: tool.schema.string().min(1).max(200).optional(), cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]),
             title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
             deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
             assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(),
@@ -7758,10 +7918,12 @@ export const card_bulk_update = tool({
         const structuralErrors = validateStrictBulkRecords(rawRecords, "update");
         if (structuralErrors.length > 0)
         {
+            const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
             return toStructuredErrorResult(format, "card-bulk-update", "validation_error", structuralErrors.join(" "), {
                 indexedErrors: structuralErrors,
                 invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
                 requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "update", indexedErrors),
             });
         }
 
@@ -7774,15 +7936,24 @@ export const card_bulk_update = tool({
             {
                 const value = await normalizeBulkUpdateRecord(rawRecords[index] as BulkUpdateRecord, index, normalizationContext);
                 normalized.push(value);
+                const normalizedRequested = { target: value.target, updatedFields: value.updatedFields, contentMode: value.mode, ...value.proposed } as Record<string, unknown>;
                 results[index] = {
                     index,
                     operation: "update",
+                    correlationKey: value.correlationKey,
+                    actionKey: actionKeyFor("update", index, value.payload),
+                    normalizedRequested,
+                    normalizedRequestedFingerprint: normalizedMutationFingerprint(normalizedRequested),
+                    dispatchReturned: null,
+                    persistedVerified: null,
+                    verificationState: dryRun ? "not_applicable" : "not_performed",
                     target: value.target,
                     updatedFields: value.updatedFields,
                     contentMode: value.mode,
                     current: value.current,
                     proposed: value.proposed,
                     status: "ready",
+                    certainty: "not_dispatched",
                 };
             }
             catch (error)
@@ -7797,12 +7968,26 @@ export const card_bulk_update = tool({
         }
 
         const invalidRecordCount = results.filter((entry) => entry.status === "invalid").length;
-        if (!dryRun && invalidRecordCount > 0 && !continueOnError)
+        if (!dryRun && invalidRecordCount > 0)
         {
-            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", "Batch normalization failed; no mutations were dispatched because continueOnError=false.", {
+            for (const entry of results)
+            {
+                if (entry.status === "ready")
+                {
+                    entry.status = "definitely_unsent";
+                    entry.certainty = "definitely_unsent";
+                }
+                else if (entry.status === "invalid")
+                {
+                    entry.status = "failed";
+                    entry.certainty = "definitely_rejected";
+                }
+            }
+            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", "Batch normalization failed; no mutations were dispatched.", {
                 invalidRecordCount,
                 applied: 0,
                 failed: invalidRecordCount,
+                requestsAttempted: 0,
                 results,
             });
         }
@@ -7813,25 +7998,41 @@ export const card_bulk_update = tool({
             {
                 try
                 {
-                    await runDispatch("cards/update", value.payload);
+                    const response = unwrapData(await runDispatch("cards/update", value.payload));
                     results[value.index].status = "updated";
+                    results[value.index].certainty = "dispatch_returned";
+                    results[value.index].dispatchReturned = truncateStructuredValue(response).value;
                 }
                 catch (error)
                 {
-                    results[value.index].status = "failed";
+                    const outcome = classifyMutationOutcome(error);
+                    results[value.index].status = outcome;
+                    results[value.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
                     results[value.index].error = {
                         category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
                         message: toErrorMessage(error),
                         ...getOperationErrorData(error),
                         retried: false,
                     };
-                    if (!continueOnError) break;
+                    if (outcome === "indeterminate")
+                    {
+                        results[value.index].reconciliation = { actionKey: results[value.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
+                        markDefinitelyUnsent(results, value.index);
+                        break;
+                    }
+                    if (!continueOnError)
+                    {
+                        markDefinitelyUnsent(results, value.index);
+                        break;
+                    }
                 }
             }
         }
 
         const updated = results.filter((entry) => entry.status === "updated").length;
         const failed = results.filter((entry) => entry.status === "failed" || entry.status === "invalid").length;
+        const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
+        const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
         const pending = results.filter((entry) => entry.status === "ready").length;
         const lines = [
             "## Bulk Card Update",
@@ -7840,6 +8041,8 @@ export const card_bulk_update = tool({
             `Records: ${rawRecords.length}`,
             `Updated: ${updated}`,
             `Failed/Invalid: ${failed}`,
+            `Indeterminate: ${indeterminate}`,
+            `Definitely Unsent: ${definitelyUnsent}`,
             "",
             ...results.map((entry) => {
                 const target = entry.target as NormalizedBulkUpdateRecord["target"] | undefined;
@@ -7847,6 +8050,7 @@ export const card_bulk_update = tool({
             }),
         ];
         return toStructuredResult(format, "card-bulk-update", lines.join("\n"), {
+            responseSchemaVersion: 1,
             dryRun,
             count: rawRecords.length,
             complete: dryRun ? results.length === rawRecords.length : pending === 0,
@@ -7856,6 +8060,8 @@ export const card_bulk_update = tool({
             updated,
             applied: updated,
             failed,
+            indeterminate,
+            definitelyUnsent,
             pending,
             continueOnError,
             ambiguousMutationsRetried: false,
@@ -7956,6 +8162,77 @@ export const card_set_parent = tool({
     },
 });
 
+const resolveDeckForGet = async (value: string | number): Promise<DeckLookupResult> =>
+{
+    const accountSeq = parseDeckAccountSeq(value);
+    const raw = String(value).trim();
+    const decks = accountSeq === undefined ? await fetchAccountDecks() : await fetchDecksByAccountSeq(accountSeq);
+    const matches = accountSeq !== undefined
+        ? decks
+        : isUuidLike(raw)
+            ? decks.filter((deck) => getDeckId(deck) === raw)
+            : decks.filter((deck) => getDeckLabel(deck) === raw || getDeckLabel(deck).toLowerCase() === raw.toLowerCase());
+    if (matches.length === 0) return { kind: "missing", label: "deck" };
+    if (matches.length > 1) return {
+        kind: "ambiguous",
+        label: "deck",
+        candidates: matches.map((deck) => ({ id: getDeckId(deck), title: getDeckLabel(deck), accountSeq: getDeckAccountSeq(deck) })),
+    };
+    const deck = matches[0]!;
+    return { kind: "resolved", id: getDeckId(deck), label: getDeckLabel(deck), deck, accountSeq: getDeckAccountSeq(deck) };
+};
+
+export const deck_get = tool({
+    description: "Fetch one Codecks Deck and its current description by immutable ID, account sequence, or exact visible title.",
+    args: {
+        deckId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck immutable ID, account sequence, or exact visible title."),
+        title: tool.schema.string().optional().describe("Alias for deckId when matching an exact visible Deck title."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "json";
+        const lookupValue = blankToUndefined(args.deckId) ?? blankToUndefined(args.title);
+        if (lookupValue === undefined)
+        {
+            return toStructuredErrorResult(format, "deck-get", "validation_error", "Provide deckId, account sequence, or exact title.");
+        }
+        try
+        {
+            const result = await resolveDeckForGet(lookupValue);
+            if (result.kind !== "resolved")
+            {
+                return toStructuredErrorResult(format, "deck-get", result.kind === "ambiguous" ? "ambiguous_match" : "not_found", renderLookupMessage(result, String(lookupValue)));
+            }
+            const deck = result.deck;
+            const data = {
+                deckId: result.id,
+                accountSeq: result.accountSeq ?? null,
+                title: result.label,
+                description: typeof deck.description === "string" ? deck.description : "",
+                isDeleted: deck.isDeleted === true,
+                status: typeof deck.status === "string" ? deck.status : null,
+            };
+            const text = [
+                "## Codecks Deck",
+                "",
+                `- Deck: #${data.accountSeq ?? "?"} ${data.title}`,
+                `- ID: ${data.deckId}`,
+                `- Deleted: ${data.isDeleted ? "yes" : "no"}`,
+                "",
+                "Description",
+                "-----------",
+                data.description || "(empty)",
+            ].join("\n");
+            return toStructuredResult(format, "deck-get", text, data);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+    },
+});
+
 export const deck_update = tool({
     description: "Update a Codecks deck description using decks/update.",
     args: {
@@ -7967,6 +8244,11 @@ export const deck_update = tool({
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([["description", args.description]]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "deck-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         const hasDescription = args.description !== undefined;
         const shouldClearDescription = args.clearDescription === true;
         if (!hasDescription && !shouldClearDescription)
@@ -9236,6 +9518,15 @@ export const card_update = tool({
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([
+            ["title", args.title],
+            ["content", args.content],
+            ...(args.tags ?? []).map((tag, index) => [`tags[${index}]`, tag] as [string, unknown]),
+        ]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "card-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         if (
             args.title === undefined
             && args.content === undefined
@@ -9409,29 +9700,23 @@ export const card_update = tool({
             );
         }
 
+        let dispatchReturned: unknown;
         try
         {
-            await runDispatch("cards/update", payload);
+            dispatchReturned = unwrapData(await runDispatch("cards/update", payload));
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update", "api_error", toErrorMessage(error));
+            const outcome = classifyMutationOutcome(error);
+            return toStructuredErrorResult(format, "card-update", outcome === "indeterminate" ? "request_timeout" : "api_error", toErrorMessage(error), {
+                status: outcome,
+                certainty: outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected",
+                actionKey: actionKeyFor("update", 0, payload),
+                retry: outcome === "indeterminate" ? "do_not_retry" : "not_automatic",
+            });
         }
 
-        let refreshedCard: CodecksEntity | undefined;
-        try
-        {
-            refreshedCard = await fetchCardById(cardId);
-        }
-        catch
-        {
-            refreshedCard = undefined;
-        }
-
-        const resolvedCardType = resolveCardType(
-            refreshedCard
-            ?? (normalizedCardType ? { isDoc: normalizedCardType.isDoc } as CodecksEntity : current),
-        );
+        const resolvedCardType = normalizedCardType?.value ?? resolveCardType(current);
         const title = resolvedTitle ?? (current?.title ? String(current.title) : "");
         const url = shortCode ? formatCardUrl(shortCode) : "";
         const fieldsUpdated = [
@@ -9465,6 +9750,22 @@ export const card_update = tool({
             "card-update",
             lines.join("\n"),
             {
+                responseSchemaVersion: 1,
+                status: "updated",
+                certainty: "dispatch_returned",
+                actionKey: actionKeyFor("update", 0, payload),
+                normalizedRequested: {
+                    title: payload.title ?? null,
+                    content: payload.content ?? null,
+                    deckId: payload.deckId ?? null,
+                    milestoneId: payload.milestoneId ?? null,
+                    assigneeId: payload.assigneeId ?? null,
+                    tags: payload.masterTags ?? null,
+                    cardType: normalizedCardType?.value ?? null,
+                },
+                dispatchReturned: truncateStructuredValue(dispatchReturned).value,
+                persistedVerified: null,
+                verificationState: "not_performed",
                 title: title || "(untitled)",
                 cardId,
                 shortCode: shortCode || null,

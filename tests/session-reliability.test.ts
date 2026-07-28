@@ -127,10 +127,15 @@ try {
   const batch = parseResult(await invoke(core.card_bulk_update, { updates: runUpdates, dryRun: false, continueOnError: true, format: "json" }));
   assert.equal(batch.ok, true);
   assert.equal(batch.data.count, 31);
-  assert.equal(batch.data.updated, 30);
-  assert.equal(batch.data.failed, 1);
+  assert.equal(batch.data.updated, 6);
+  assert.equal(batch.data.failed, 0);
+  assert.equal(batch.data.indeterminate, 1);
+  assert.equal(batch.data.definitelyUnsent, 24);
   assert.equal(batch.data.ambiguousMutationsRetried, false);
-  assert.equal(mutationAttempts, 31, "each batch row gets at most one mutation attempt");
+  assert.equal(mutationAttempts, 7, "an ambiguous mutation stops later dispatches and is never retried");
+  assert.equal(batch.data.results[6].status, "indeterminate");
+  assert.equal(batch.data.results[6].reconciliation.retry, "do_not_retry");
+  assert.equal(batch.data.results[7].status, "definitely_unsent");
   assert.equal(batch.data.results[0].proposed.run.accountSeq, 116);
   assert.equal(batch.data.results[0].target.cardRef.startsWith("$"), true);
   assert.equal(batch.data.results[0].target.accountSeqRef, "seq:2481");
