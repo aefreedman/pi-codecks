@@ -3550,17 +3550,12 @@ const resolveDeck = async (value: string | number | undefined): Promise<LookupRe
         return { kind: "resolved", id: toIdValue(value), label: String(value) };
     }
 
-    if (isUuidLike(raw))
-    {
-        return { kind: "resolved", id: raw, label: raw };
-    }
-
     const query = {
         _root: [
             {
                 account: [
                     {
-                        decks: ["id", "title", "accountSeq"],
+                        decks: ["id", "title", "accountSeq", "isDeleted"],
                     },
                 ],
             },
@@ -3568,7 +3563,16 @@ const resolveDeck = async (value: string | number | undefined): Promise<LookupRe
     };
 
     const payload = await runQuery(query);
-    const decks = extractEntitiesFromPayload(payload, "decks", "deck");
+    const decks = extractEntitiesFromPayload(payload, "decks", "deck")
+        .filter((entry) => entry.isDeleted !== true && String(entry.isDeleted ?? "").toLowerCase() !== "true");
+    if (isUuidLike(raw))
+    {
+        const deck = decks.find((entry) => String(entry.id ?? "") === raw);
+        return deck?.id !== undefined
+            ? { kind: "resolved", id: deck.id as string | number, label: String(deck.title ?? deck.name ?? raw) }
+            : { kind: "missing", label: "deck" };
+    }
+
     return resolveByNameWithCaseFallback(
         decks.map((deck) => ({
             id: deck.id as string | number | undefined,
@@ -3731,17 +3735,12 @@ const resolveMilestone = async (value: string | number | undefined): Promise<Loo
         return { kind: "resolved", id: toIdValue(value), label: String(value) };
     }
 
-    if (isUuidLike(raw))
-    {
-        return { kind: "resolved", id: raw, label: raw };
-    }
-
     const query = {
         _root: [
             {
                 account: [
                     {
-                        milestones: ["id", "name", "accountSeq"],
+                        milestones: ["id", "name", "accountSeq", "isDeleted"],
                     },
                 ],
             },
@@ -3749,7 +3748,16 @@ const resolveMilestone = async (value: string | number | undefined): Promise<Loo
     };
 
     const payload = await runQuery(query);
-    const milestones = extractEntitiesFromPayload(payload, "milestones", "milestone");
+    const milestones = extractEntitiesFromPayload(payload, "milestones", "milestone")
+        .filter((entry) => entry.isDeleted !== true && String(entry.isDeleted ?? "").toLowerCase() !== "true");
+    if (isUuidLike(raw))
+    {
+        const milestone = milestones.find((entry) => String(entry.id ?? "") === raw);
+        return milestone?.id !== undefined
+            ? { kind: "resolved", id: milestone.id as string | number, label: String(milestone.name ?? milestone.title ?? raw) }
+            : { kind: "missing", label: "milestone" };
+    }
+
     return resolveByNameWithCaseFallback(
         milestones.map((milestone) => ({
             id: milestone.id as string | number | undefined,
@@ -6895,6 +6903,42 @@ export const card_get_vision_board = tool({
     },
 });
 
+type CardCreatePayloadOptions = {
+    assigneeId: string | number;
+    content: string;
+    putOnHand: boolean;
+    deckId: string | number | null;
+    milestoneId: string | number | null;
+    effort: number | null;
+    priority: string | null;
+    userId: string | number | undefined;
+    parentCardId: string | null;
+    isDoc?: boolean;
+};
+
+const buildCardCreatePayload = (options: CardCreatePayloadOptions): Record<string, unknown> =>
+{
+    const payload: Record<string, unknown> = {
+        assigneeId: options.assigneeId,
+        content: options.content,
+        putOnHand: options.putOnHand,
+        deckId: options.deckId === null ? null : String(options.deckId),
+        milestoneId: options.milestoneId === null ? null : String(options.milestoneId),
+        masterTags: [],
+        attachments: [],
+        effort: options.effort,
+        priority: options.priority,
+        childCards: [],
+        userId: options.userId,
+        parentCardId: options.parentCardId,
+    };
+    if (options.isDoc !== undefined)
+    {
+        payload.isDoc = options.isDoc;
+    }
+    return payload;
+};
+
 export const card_create = tool({
     description: "Create a Codecks card in a deck or milestone.",
     args: {
@@ -7017,24 +7061,18 @@ export const card_create = tool({
 
         const createsPrivateCard = !deckId && !parentCardId;
 
-        const payload: Record<string, unknown> = {
+        const payload = buildCardCreatePayload({
             assigneeId,
             content: contentWithTags,
             putOnHand: args.putOnHand ?? false,
             deckId,
             milestoneId,
-            masterTags: [],
-            attachments: [],
             effort: args.effort ?? null,
-            priority: normalizedPriority ? normalizedPriority.code : null,
-            childCards: [],
+            priority: normalizedPriority?.code ?? null,
             userId: user.id,
             parentCardId: parentCardId ?? null,
-        };
-        if (normalizedCardType)
-        {
-            payload.isDoc = normalizedCardType.isDoc;
-        }
+            isDoc: normalizedCardType?.isDoc,
+        });
 
         let response: unknown;
         try
@@ -7267,7 +7305,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     {
         const result = await resolveDeck(deckValue);
         if (result.kind !== "resolved") throw new Error(`cards[${index}].deck: ${renderLookupMessage(result, String(deckValue))}`);
-        deck = { id: result.id, name: result.label };
+        deck = { id: String(result.id), name: result.label };
     }
 
     let milestone: NormalizedBulkCreateRecord["milestone"] = null;
@@ -7276,7 +7314,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     {
         const result = await resolveMilestone(milestoneValue);
         if (result.kind !== "resolved") throw new Error(`cards[${index}].milestone: ${renderLookupMessage(result, String(milestoneValue))}`);
-        milestone = { id: result.id, name: result.label };
+        milestone = { id: String(result.id), name: result.label };
     }
 
     const explicitAssignee = blankToUndefined(record.assigneeId);
@@ -7315,21 +7353,18 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
         bodyHashtags,
         putOnHand,
         parent,
-        payload: {
+        payload: buildCardCreatePayload({
             assigneeId: assignee.id,
             content,
             putOnHand,
             deckId: deck?.id ?? null,
             milestoneId: milestone?.id ?? null,
-            masterTags: [],
-            attachments: [],
             effort: record.effort ?? null,
             priority: priority.code,
-            childCards: [],
             userId: loggedInUser.id,
             parentCardId: parent?.cardId ?? null,
-            isDoc: cardType.isDoc,
-        },
+            isDoc: record.cardType === undefined ? undefined : cardType.isDoc,
+        }),
     };
 };
 
