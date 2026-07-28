@@ -13,6 +13,8 @@ and this project follows semantic versioning for public package releases.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
 - Added reusable `cardRef` and `accountSeqRef` fields to structured card results plus explicit `seq:` recovery guidance for numeric not-found lookups.
+- Added `codecks_deck_get` for structured Deck-description reads, read-versus-update capability routing, and a registered public Codecks tool-contract reference.
+- Added fail-closed mutation-text validation for Unicode replacement characters and unpaired surrogates.
 
 ### Changed
 
@@ -21,6 +23,7 @@ and this project follows semantic versioning for public package releases.
 - Bulk create/update records are now strict and reject unsupported fields before requests; bulk preview and apply share normalized payloads that expose all mutable fields and visible target names.
 - Bulk-create duplicate detection now performs one bounded shared scan instead of one broad search per record and blocks apply when completeness cannot be established. A generic public batch-search tool remains deferred in favor of narrow sequential discovery.
 - Broad account scans now have bounded concurrency and queue depth, with stable caller-cancel, rate-queue cancel, timeout, rate-limit, and queue-full diagnostics plus request/queue/elapsed metadata.
+- Sequential bulk mutations now distinguish failed, indeterminate, and definitely-unsent records, stop after ambiguous writes, expose correlation/action keys, and label normalized request data separately from dispatch-returned and persisted-verification data.
 
 ## [0.8.0] - 2026-07-25
 
