@@ -16,6 +16,10 @@ and this project follows semantic versioning for public package releases.
 - Added `codecks_deck_get` for structured Deck-description reads, read-versus-update capability routing, and a registered public Codecks tool-contract reference.
 - Added fail-closed mutation-text validation for Unicode replacement characters and unpaired surrogates.
 
+### Fixed
+
+- Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
+
 ### Changed
 
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.

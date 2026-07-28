@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { loadRegisteredTools, type RegisteredTool } from "./pi-tool-harness.ts";
-import { codecksPublicReferenceRegistration } from "../index.ts";
+import { codecksPublicReferenceRegistration, isMissingPackageReferenceRuntime } from "../index.ts";
 
 type AnyRecord = Record<string, any>;
 
@@ -13,6 +13,20 @@ const publicReference = codecksPublicReferenceRegistration();
 assert.equal(publicReference.packageName, "@aefree/pi-codecks");
 assert.equal(publicReference.registeredBy, "index.ts");
 assert.deepEqual(publicReference.publicMounts, [{ prefix: "references/codecks/", directory: "references/codecks", extensions: [".md"] }]);
+
+assert.equal(isMissingPackageReferenceRuntime({
+  code: "MODULE_NOT_FOUND",
+  message: "Cannot find module '@aefree/pi-package-references/runtime/v1'\nRequire stack:\n- C:\\package\\index.ts",
+}), true, "CommonJS-transpiled Pi loaders may report MODULE_NOT_FOUND");
+assert.equal(isMissingPackageReferenceRuntime({
+  code: "ERR_MODULE_NOT_FOUND",
+  message: "Cannot find package '@aefree/pi-package-references' imported from C:\\package\\index.ts",
+}), true, "native ESM missing-package errors remain optional");
+assert.equal(isMissingPackageReferenceRuntime({
+  code: "MODULE_NOT_FOUND",
+  message: "Cannot find module './internal-dependency'\nRequire stack:\n- C:\\node_modules\\@aefree\\pi-package-references\\runtime\\v1.js",
+}), false, "missing dependencies inside an installed runtime must surface");
+assert.equal(isMissingPackageReferenceRuntime({ code: "ERR_MODULE_NOT_FOUND", message: "Cannot find package 'other-package' imported from runtime" }), false);
 
 const getTool = (name: string): RegisteredTool => {
   const tool = tools.get(name);

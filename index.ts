@@ -25,6 +25,21 @@ const PACKAGE_REFERENCE_RUNTIME = "@aefree/pi-package-references/runtime/" + "v1
 
 type PackageReferenceRegistration = { unregister: () => void };
 
+/**
+ * Accept only failures resolving the optional runtime itself. A generic
+ * MODULE_NOT_FOUND can instead originate from inside an installed runtime and
+ * must remain visible to the extension host.
+ */
+export const isMissingPackageReferenceRuntime = (error: unknown): boolean => {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code !== "ERR_MODULE_NOT_FOUND" && candidate.code !== "MODULE_NOT_FOUND") return false;
+  if (typeof candidate.message !== "string") return false;
+  return candidate.message.includes(`'${PACKAGE_REFERENCE_RUNTIME}'`) ||
+    candidate.message.includes(`\"${PACKAGE_REFERENCE_RUNTIME}\"`) ||
+    candidate.message.includes("Cannot find package '@aefree/pi-package-references'");
+};
+
 export const codecksPublicReferenceRegistration = (): Record<string, unknown> =>
 {
   const manifest = JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8")) as { name?: unknown; version?: unknown };
@@ -47,7 +62,7 @@ const registerCodecksPublicReference = async (scope: object): Promise<PackageRef
   try {
     runtime = await import(PACKAGE_REFERENCE_RUNTIME) as typeof runtime;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND") return undefined;
+    if (isMissingPackageReferenceRuntime(error)) return undefined;
     throw error;
   }
   if (typeof runtime.registerPackageReferenceOwnerV1 !== "function" || typeof runtime.unregisterPackageReferenceOwnerV1 !== "function") return undefined;
