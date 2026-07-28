@@ -9229,6 +9229,7 @@ export const card_update = tool({
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID."),
         assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Assignee ID."),
+        tags: tool.schema.array(tool.schema.string()).optional().describe("Replacement list of card tags."),
         mode: tool.schema.enum(["replace", "append", "prepend"]).optional().describe("How to apply content updates."),
         format: outputFormatArg,
     },
@@ -9242,13 +9243,14 @@ export const card_update = tool({
             && args.deck === undefined
             && args.milestone === undefined
             && args.assigneeId === undefined
+            && args.tags === undefined
         )
         {
             return toStructuredErrorResult(
                 format,
                 "card-update",
                 "validation_error",
-                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId).",
+                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId, tags).",
             );
         }
 
@@ -9377,6 +9379,11 @@ export const card_update = tool({
             }
         }
 
+        if (args.tags !== undefined)
+        {
+            payload.masterTags = normalizeCreateTags(args.tags);
+        }
+
         if ((args.title !== undefined || updatedContent !== undefined) && resolvedTitle)
         {
             payload.title = resolvedTitle;
@@ -9398,7 +9405,7 @@ export const card_update = tool({
                 format,
                 "card-update",
                 "validation_error",
-                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId).",
+                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId, tags).",
             );
         }
 
@@ -9434,6 +9441,7 @@ export const card_update = tool({
             args.deck !== undefined ? "deck" : null,
             args.milestone !== undefined ? "milestone" : null,
             args.assigneeId !== undefined ? "assignee" : null,
+            args.tags !== undefined ? "tags" : null,
         ].filter(Boolean) as string[];
 
         const lines = [

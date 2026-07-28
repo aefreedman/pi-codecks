@@ -770,6 +770,28 @@ const testSingleAndBulkCreateUseIdenticalPayloads = async (tools: ToolModule): P
   assert.equal(payloads[0].isDoc, true);
 };
 
+const testCardUpdateAllowsTagOnlyUpdate = async (tools: ToolModule): Promise<void> => {
+  let updatePayload: AnyRecord | undefined;
+  await withMockedCodecks(({ path, query, payload }) => {
+    if (path === "cards/update") {
+      updatePayload = payload;
+      return jsonResponse({ payload: {} });
+    }
+    assert.equal(path, "query");
+    const key = directCardKey(query!);
+    assert.ok(key, `expected card lookup query: ${JSON.stringify(query)}`);
+    return jsonResponse(buildCardPayload());
+  }, async () => {
+    const result = await tools.card_update.execute({ cardId: CARD_ID, tags: ["#alpha", "Beta", "alpha"], format: "json" });
+    const data = getData(String(result));
+    assert.deepEqual(data.updatedFields, ["tags"]);
+  });
+  assert.ok(updatePayload, "expected tag-only cards/update dispatch");
+  assert.deepEqual(updatePayload!.masterTags, ["alpha", "Beta"]);
+  assert.equal(updatePayload!.title, undefined);
+  assert.equal(updatePayload!.content, undefined);
+};
+
 const testCardRunClearDispatchesNullSprintId = async (tools: ToolModule): Promise<void> => {
   let cardUpdatePayload: AnyRecord | undefined;
   await withMockedCodecks(({ path, query, payload }) => {
@@ -823,6 +845,7 @@ await testBulkCreateRejectsInvalidUuidLocationsWithoutDispatch(tools);
 await testCardCreateRejectsInvalidUuidDeckWithoutDispatch(tools);
 await testBulkCreateResolvesValidUuidLocations(tools);
 await testSingleAndBulkCreateUseIdenticalPayloads(tools);
+await testCardUpdateAllowsTagOnlyUpdate(tools);
 await testRunUpdateDispatchesSprintUpdate(tools);
 await testRunUpdateClearsCustomLabel(tools);
 await testDeckUpdateDispatchesDescription(tools);

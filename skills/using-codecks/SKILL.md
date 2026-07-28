@@ -112,7 +112,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not surround `$123` card references with formatting wrappers such as `**`, `*`, `_`, `~~`, backticks, or code fences.
 - Markdown structure like `# $123` and `* $123` is valid because the `$123` token itself stays plain.
 - For card type metadata, use `cardType: regular|documentation` on create/update.
-- `codecks_card_bulk_update` also supports effort, priority, tags, Run assignment/removal, and parent assignment/removal. Each apply record makes one non-retried mutation attempt and reports indexed applied/failed outcomes.
+- `codecks_card_update` supports replacing a single card's tags with `tags`; `codecks_card_bulk_update` also supports effort, priority, tags, Run assignment/removal, and parent assignment/removal. Each apply record makes one non-retried mutation attempt and reports indexed applied/failed outcomes.
 
 ## Tool-specific notes
 - Use `codecks_card_get` when the agent needs structured card data for inspection, planning, or follow-up work.
