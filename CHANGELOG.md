@@ -9,7 +9,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
-- Added session-scoped `tracker.codecks` workflow-provider registration with canonical `codecks:<account-subdomain>` targets, credential-safe readiness gaps, and bounded Codecks-owned guidance.
+- Added session-scoped `tracker.codecks` workflow-provider registration with strict `codecks:deck:<uuid>`, `codecks:card:<uuid>`, `codecks:milestone:<uuid>`, and `codecks:run:<uuid>` resource targets, credential-safe readiness gaps, and bounded Codecks-owned guidance.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
@@ -19,6 +19,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Made Codecks workflow-provider detection resource-scoped and independent of the configured account; credentials now affect readiness only and missing credentials preflight as `codecks_credentials_missing` without network access.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
 ### Changed

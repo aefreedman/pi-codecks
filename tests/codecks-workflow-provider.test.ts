@@ -22,30 +22,53 @@ try {
   let fetchCalls = 0;
   globalThis.fetch = (async () => { fetchCalls += 1; throw new Error("workflow provider must not call Codecks"); }) as typeof fetch;
 
-  assert.equal(parseCodecksWorkflowTargetV1("codecks:acme"), "acme");
-  assert.equal(parseCodecksWorkflowTargetV1("codecks:acme-team"), "acme-team");
-  for (const target of ["tracker:acme", "codecks:Acme", "codecks:acme/card/12", "codecks:", "codecks:acme_team"]) {
-    assert.equal(parseCodecksWorkflowTargetV1(target), undefined, `must not claim unrelated or noncanonical target '${target}'`);
+  const resourceTargets = [
+    ["deck", "123e4567-e89b-12d3-a456-426614174000"],
+    ["card", "123e4567-e89b-12d3-a456-426614174001"],
+    ["milestone", "123e4567-e89b-12d3-a456-426614174002"],
+    ["run", "123e4567-e89b-12d3-a456-426614174003"],
+  ] as const;
+  for (const [kind, id] of resourceTargets) {
+    assert.deepEqual(parseCodecksWorkflowTargetV1(`codecks:${kind}:${id}`), { kind, id });
+  }
+  for (const target of [
+    "tracker:card:123e4567-e89b-12d3-a456-426614174000",
+    "github:issue:123e4567-e89b-12d3-a456-426614174000",
+    "codecks:acme",
+    "codecks:card:not-a-uuid",
+    "codecks:issue:123e4567-e89b-12d3-a456-426614174000",
+    "codecks:card:123E4567-E89B-12D3-A456-426614174000",
+    "codecks:card:123e4567-e89b-12d3-a456-426614174000:extra",
+    "codecks:card:123e4567-e89b-12d3-a456-426614174000/child",
+  ]) {
+    assert.equal(parseCodecksWorkflowTargetV1(target), undefined, `must not claim unrelated or invalid target '${target}'`);
   }
 
   resetCredentials();
   const provider = createCodecksWorkflowProviderV1();
   const signal = new AbortController().signal;
   const context = { cwd: process.cwd(), signal };
-  const detectedWithoutCredentials = await provider.detect(context, { targetPath: "codecks:acme", operation: "mutate", signal });
-  assert.equal(detectedWithoutCredentials.outcome, "match", "missing credentials are readiness, not provider existence");
-  assert.deepEqual(await provider.preflight!(context, { targetPath: "codecks:acme", workspaceRoot: "codecks:acme", operation: "mutate", signal }), {
-    outcome: "blocked", code: "codecks_credentials_missing", retryable: false,
+  const invalidTarget = "github:issue:123e4567-e89b-12d3-a456-426614174000";
+  assert.deepEqual(await provider.detect(context, { targetPath: invalidTarget, operation: "mutate", signal }), { outcome: "no_match" });
+  assert.deepEqual(await provider.preflight!(context, { targetPath: invalidTarget, workspaceRoot: invalidTarget, operation: "mutate", signal }), {
+    outcome: "blocked", code: "codecks_target_invalid", retryable: false,
   });
+  for (const [kind, id] of resourceTargets) {
+    const targetPath = `codecks:${kind}:${id}`;
+    const detectedWithoutCredentials = await provider.detect(context, { targetPath, operation: "mutate", signal });
+    assert.equal(detectedWithoutCredentials.outcome, "match", "missing credentials are readiness, not provider applicability");
+    assert.deepEqual(await provider.preflight!(context, { targetPath, workspaceRoot: targetPath, operation: "mutate", signal }), {
+      outcome: "blocked", code: "codecks_credentials_missing", retryable: false,
+    });
+  }
 
   process.env.CODECKS_ACCOUNT = "other-account";
   process.env.CODECKS_TOKEN = "test-token";
-  assert.deepEqual(await provider.detect(context, { targetPath: "codecks:acme", operation: "mutate", signal }), { outcome: "no_match" }, "a configured account must not claim another Codecks account");
-
-  process.env.CODECKS_ACCOUNT = "acme";
-  const detected = await provider.detect(context, { targetPath: "codecks:acme", operation: "mutate", signal });
-  assert.equal(detected.outcome, "match");
-  assert.deepEqual(await provider.preflight!(context, { targetPath: "codecks:acme", workspaceRoot: "codecks:acme", operation: "mutate", signal }), { outcome: "ready" });
+  for (const [kind, id] of resourceTargets) {
+    const targetPath = `codecks:${kind}:${id}`;
+    assert.equal((await provider.detect(context, { targetPath, operation: "mutate", signal })).outcome, "match", "configured account must not affect resource ownership");
+    assert.deepEqual(await provider.preflight!(context, { targetPath, workspaceRoot: targetPath, operation: "mutate", signal }), { outcome: "ready" }, "configured account only establishes credential readiness");
+  }
   const guidance = await provider.loadGuidance!(context, { resourceId: "guidance/codecks/work", purpose: "work", maxChars: 48, signal });
   assert.equal(guidance.outcome, "available");
   if (guidance.outcome === "available") {
@@ -57,8 +80,8 @@ try {
 
   const conformance = await assertWorkflowProviderConformanceV1({
     createProvider: createCodecksWorkflowProviderV1,
-    matchingTarget: "codecks:acme",
-    nonMatchingTarget: "tracker:acme",
+    matchingTarget: "codecks:card:123e4567-e89b-12d3-a456-426614174000",
+    nonMatchingTarget: "tracker:card:123e4567-e89b-12d3-a456-426614174000",
     guidanceResourceId: "guidance/codecks/work",
   });
   assert.equal(conformance.passed, true);

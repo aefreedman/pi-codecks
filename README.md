@@ -131,7 +131,7 @@ Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>
 
 ## Workflow provider
 
-When `@aefree/pi-workflow` is installed, `pi-codecks` registers `tracker.codecks` on every Pi session start, independently of dynamic Codecks tool activation. Its canonical external workflow target is `codecks:<account-subdomain>`, for example `codecks:acme`. It claims only that exact Codecks target form and, when `CODECKS_ACCOUNT`/`CODECKS_SUBDOMAIN` is configured, only the configured account. A missing account or token is reported by workflow preflight as the typed `codecks_credentials_missing` readiness gap; registration and detection make no Codecks network call and never expose credential values.
+When `@aefree/pi-workflow` is installed, `pi-codecks` registers `tracker.codecks` on every Pi session start, independently of dynamic Codecks tool activation. Its canonical external workflow targets are strict resource UUIDs: `codecks:deck:<uuid>`, `codecks:card:<uuid>`, `codecks:milestone:<uuid>`, and `codecks:run:<uuid>`. It claims only those exact Codecks target forms, never local paths or unrelated tracker schemes. `CODECKS_ACCOUNT`/`CODECKS_SUBDOMAIN` and the token establish credential readiness only; they never determine resource-target applicability or ownership. A missing account or token is reported by workflow preflight as the typed `codecks_credentials_missing` readiness gap; registration, detection, and preflight make no Codecks network call and never expose credential values.
 
 ## Card Retrieval Tools
 
