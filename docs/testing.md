@@ -18,7 +18,7 @@ npm run pack:dry-run
 
 `npm run pack:validate` checks the npm dry-run manifest against the public allow-list, verifies required Pi resources, rejects private/local paths, and scans packed text for high-confidence sensitive-content patterns.
 
-`npm run pack:smoke` creates a tarball in an operating-system temporary directory, removes Codecks variables from the child environment, installs the tarball into a neutral temporary project in offline mode, and verifies the source entrypoint, skills, and prompt assets. The temporary files are removed afterward.
+`npm run pack:smoke` creates a tarball in an operating-system temporary directory, removes Codecks variables from the child environment, installs the tarball into a neutral temporary project in offline mode, and verifies the source entrypoint, skills, and prompt assets. It also loads the isolated extension without `@aefree/pi-workflow` and confirms a deliberately present broken workflow contract fails visibly. The temporary files are removed afterward.
 
 Public GitHub Actions run only these safe checks. Forked pull requests never receive Codecks secrets.
 

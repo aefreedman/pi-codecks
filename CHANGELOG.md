@@ -19,6 +19,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Made `@aefree/pi-workflow` an optional peer integration: packed installs without it retain Codecks core tools, dynamic tool loading, and public references while skipping only `tracker.codecks` registration. A present but broken or incompatible workflow contract now fails visibly rather than being treated as absent.
 - Made Codecks workflow-provider detection resource-scoped and independent of the configured account; credentials now affect readiness only and missing credentials preflight as `codecks_credentials_missing` without network access.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
