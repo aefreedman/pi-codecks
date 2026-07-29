@@ -9,7 +9,6 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
-- Added session-scoped `tracker.codecks` workflow-provider registration with strict `codecks:deck:<uuid>`, `codecks:card:<uuid>`, `codecks:milestone:<uuid>`, and `codecks:run:<uuid>` resource targets, credential-safe readiness gaps, and bounded Codecks-owned guidance.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
@@ -19,12 +18,11 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
-- Made `@aefree/pi-workflow` an optional peer integration: packed installs without it retain Codecks core tools, dynamic tool loading, and public references while skipping only `tracker.codecks` registration. A present but broken or incompatible workflow contract now fails visibly rather than being treated as absent.
-- Made Codecks workflow-provider detection resource-scoped and independent of the configured account; credentials now affect readiness only and missing credentials preflight as `codecks_credentials_missing` without network access.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
 ### Changed
 
+- Removed the `tracker.codecks` workflow provider, inline workflow guidance, UUID-only workflow target parsing, and workflow credential/preflight integration. Codecks skills and direct tool metadata continue to handle public short references, untrusted external data, explicit mutation intent, and operation validation without a workflow dependency.
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.
 - Non-idempotent mutations no longer transparently retry ambiguous failures; read-only retries remain. Attachment sources are physically canonicalized, strictly workspace-contained, tracked by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.
 - Bulk create/update records are now strict and reject unsupported fields before requests; bulk preview and apply share normalized payloads that expose all mutable fields and visible target names.

@@ -43,16 +43,15 @@ assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manife
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
-assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider\.test\.ts/);
+assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.deepEqual(packageJson.dependencies, {
-  "@aefree/pi-capability-registry": "^0.1.0",
-}, "Codecks core loading must not require workflow composition.");
-assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], "^0.1.0");
-assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"]?.optional, true);
-assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], "^0.1.0", "workflow contract types and lifecycle tests remain development dependencies");
-assert.match(read("index.ts"), /await import\(WORKFLOW_CONTRACT_MODULE\)/);
-assert.doesNotMatch(read("index.ts"), /from "@aefree\/pi-workflow\/contracts\/v1"/);
+assert.equal(packageJson.dependencies, undefined, "Codecks has no runtime package dependency on workflow composition.");
+assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
+assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
+assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], undefined);
+assert.doesNotMatch(read("index.ts"), /pi-workflow|workflow provider|WORKFLOW_CONTRACT_MODULE/);
+assert.equal(existsSync(path.join(root, "src/codecks-workflow-provider.ts")), false, "retired Codecks workflow provider must stay removed");
+assert.equal(existsSync(path.join(root, "tests/codecks-workflow-provider.test.ts")), false, "retired workflow provider tests must stay removed");
 assert.equal(packageJson.bundledDependencies, undefined);
 assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
 assert.equal(existsSync(path.join(root, "src/mutation-authorization.ts")), false, "mutation authorization module must not be packaged");
@@ -118,7 +117,7 @@ const mutationRuntimeSurface = [
   readme,
   read("skills/using-codecks/SKILL.md"),
 ].join("\n");
-assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm/);
+assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm|tracker\.codecks|guidance\/codecks\/work|workflow preflight/i);
 
 assert.match(readme, /pi install npm:@aefree\/pi-codecks/);
 assert.match(readme, /npm ci && npm test/);

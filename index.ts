@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { RegistrationToken } from "@aefree/pi-capability-registry";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,14 +22,7 @@ import {
 const EXTENSION_SOURCE_PATH = fileURLToPath(import.meta.url);
 const PACKAGE_ROOT = dirname(EXTENSION_SOURCE_PATH);
 const PACKAGE_REFERENCE_RUNTIME = "@aefree/pi-package-references/runtime/" + "v1";
-const WORKFLOW_CONTRACT_MODULE = "@aefree/pi-workflow/contracts/" + "v1";
-
 type PackageReferenceRegistration = { unregister: () => void };
-type WorkflowProviderRegistry = {
-  register: (scope: object, provider: unknown) => RegistrationToken;
-  unregister: (token: RegistrationToken) => boolean;
-};
-type WorkflowProviderRegistration = { registry: WorkflowProviderRegistry; token: RegistrationToken };
 
 /**
  * Accept only failures resolving the optional runtime itself. A generic
@@ -46,46 +38,6 @@ export const isMissingPackageReferenceRuntime = (error: unknown): boolean => {
     candidate.message.includes(`\"${PACKAGE_REFERENCE_RUNTIME}\"`) ||
     candidate.message.includes("Cannot find package '@aefree/pi-package-references'");
 };
-
-/**
- * Only a package-resolution failure proves the optional workflow package is
- * absent. A missing contract subpath or a module that throws while loading is
- * an installed-but-incompatible/broken workflow package and must stay visible.
- */
-export const isMissingWorkflowContractModule = (error: unknown): boolean => {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as { code?: unknown; message?: unknown };
-  if (candidate.code !== "ERR_MODULE_NOT_FOUND" && candidate.code !== "MODULE_NOT_FOUND") return false;
-  if (typeof candidate.message !== "string") return false;
-  return candidate.message.includes("Cannot find package '@aefree/pi-workflow'");
-};
-
-async function registerCodecksWorkflowProvider(
-  scope: object,
-  priorRegistration: WorkflowProviderRegistration | undefined,
-): Promise<WorkflowProviderRegistration | undefined> {
-  let contracts: { createWorkflowProviderRegistryV1?: () => WorkflowProviderRegistry };
-  try {
-    contracts = await import(WORKFLOW_CONTRACT_MODULE) as typeof contracts;
-  } catch (error) {
-    if (isMissingWorkflowContractModule(error)) return undefined;
-    throw error;
-  }
-  if (typeof contracts.createWorkflowProviderRegistryV1 !== "function") {
-    throw new Error(`Incompatible workflow contract module '${WORKFLOW_CONTRACT_MODULE}': createWorkflowProviderRegistryV1 is unavailable.`);
-  }
-
-  const providerModule = await import("./src/codecks-workflow-provider") as {
-    createCodecksWorkflowProviderV1?: () => unknown;
-  };
-  if (typeof providerModule.createCodecksWorkflowProviderV1 !== "function") {
-    throw new Error("Codecks workflow provider module is incompatible: createCodecksWorkflowProviderV1 is unavailable.");
-  }
-
-  priorRegistration?.registry.unregister(priorRegistration.token);
-  const registry = contracts.createWorkflowProviderRegistryV1();
-  return { registry, token: registry.register(scope, providerModule.createCodecksWorkflowProviderV1()) };
-}
 
 export const codecksPublicReferenceRegistration = (): Record<string, unknown> =>
 {
@@ -1291,7 +1243,6 @@ export default function codecksTools(pi: ExtensionAPI) {
   const coreDescriptions = new Map<string, string>();
   let publicReferenceRegistration: PackageReferenceRegistration | undefined;
   let publicReferenceScope: object | undefined;
-  const workflowProviderRegistrations = new WeakMap<object, WorkflowProviderRegistration>();
 
   for (const exportName of enabledExports) {
     const coreTool = getCoreTool(exportName);
@@ -1398,10 +1349,6 @@ export default function codecksTools(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     const scope = ctx.sessionManager;
-    const workflowProviderRegistration = await registerCodecksWorkflowProvider(scope, workflowProviderRegistrations.get(scope));
-    if (workflowProviderRegistration === undefined) workflowProviderRegistrations.delete(scope);
-    else workflowProviderRegistrations.set(scope, workflowProviderRegistration);
-
     publicReferenceRegistration?.unregister();
     publicReferenceRegistration = await registerCodecksPublicReference(scope);
     publicReferenceScope = ctx.sessionManager;
@@ -1423,11 +1370,6 @@ export default function codecksTools(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (_event, ctx) => {
     const scope = ctx.sessionManager;
-    const providerRegistration = workflowProviderRegistrations.get(scope);
-    if (providerRegistration !== undefined) {
-      providerRegistration.registry.unregister(providerRegistration.token);
-      workflowProviderRegistrations.delete(scope);
-    }
     if (publicReferenceScope !== scope) return;
     publicReferenceRegistration?.unregister();
     publicReferenceRegistration = undefined;

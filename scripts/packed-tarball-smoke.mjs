@@ -20,8 +20,8 @@ try {
       name: "pi-codecks-neutral-smoke",
       private: true,
       version: "0.0.0",
-      // The extension imports TypeBox at runtime; make it explicit without
-      // installing optional peers such as pi-workflow.
+      // The extension imports TypeBox at runtime; make it explicit for the
+      // neutral packed-consumer smoke test.
       dependencies: { typebox: `file:${path.join(packageRoot, "node_modules", "typebox")}` },
     }, null, 2)}\n`,
   );
@@ -48,6 +48,7 @@ try {
   assert.deepEqual(packageJson.pi?.extensions, ["./index.ts"]);
   assert.deepEqual(packageJson.pi?.skills, ["./skills"]);
   assert.deepEqual(packageJson.pi?.prompts, ["./prompts"]);
+  assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined, "packed package must not declare a workflow integration");
 
   for (const relativePath of [
     "index.ts",
@@ -69,8 +70,6 @@ try {
     assert.equal(existsSync(path.join(installedRoot, excludedPath)), false, `did not expect installed package path: ${excludedPath}`);
   }
 
-  assert.equal(existsSync(path.join(consumerDir, "node_modules", "@aefree", "pi-workflow")), false, "workflow must be absent from the isolated packed consumer");
-
   const fixturePath = path.join(consumerDir, "load-extension.mjs");
   writeFileSync(fixturePath, `
 import assert from "node:assert/strict";
@@ -88,8 +87,8 @@ codecksTools({
 assert.ok(tools.has("codecks_card_get"), "core Codecks tools must load without workflow");
 assert.ok(tools.has("codecks_tool_search"), "dynamic Codecks tool loading must remain available without workflow");
 const sessionManager = { getBranch: () => [] };
-for (const handler of sessionStartHandlers) await handler({ reason: "packed-workflow-absent" }, { sessionManager });
-console.log("isolated packed extension loaded without workflow");
+for (const handler of sessionStartHandlers) await handler({ reason: "packed-standalone" }, { sessionManager });
+console.log("isolated packed extension loaded");
 `);
   const tsxLoader = pathToFileURL(path.join(packageRoot, "node_modules", "tsx", "dist", "loader.mjs")).href;
   const runFixture = () => spawnSync(process.execPath, ["--import", tsxLoader, fixturePath], {
@@ -97,23 +96,11 @@ console.log("isolated packed extension loaded without workflow");
     env: cleanEnv,
     encoding: "utf8",
   });
-  const absentResult = runFixture();
-  assert.equal(absentResult.status, 0, `workflow-absent packed extension load failed:\n${absentResult.stdout}\n${absentResult.stderr}`);
-  assert.match(absentResult.stdout, /isolated packed extension loaded without workflow/);
+  const standaloneResult = runFixture();
+  assert.equal(standaloneResult.status, 0, `standalone packed extension load failed:\n${standaloneResult.stdout}\n${standaloneResult.stderr}`);
+  assert.match(standaloneResult.stdout, /isolated packed extension loaded/);
 
-  const brokenWorkflowRoot = path.join(consumerDir, "node_modules", "@aefree", "pi-workflow");
-  mkdirSync(path.join(brokenWorkflowRoot, "contracts"), { recursive: true });
-  writeFileSync(path.join(brokenWorkflowRoot, "package.json"), `${JSON.stringify({
-    name: "@aefree/pi-workflow",
-    type: "module",
-    exports: { "./contracts/v1": "./contracts/v1.js" },
-  }, null, 2)}\n`);
-  writeFileSync(path.join(brokenWorkflowRoot, "contracts", "v1.js"), "throw new Error('broken workflow contract fixture');\n");
-  const brokenResult = runFixture();
-  assert.notEqual(brokenResult.status, 0, "a present broken workflow contract must fail visibly");
-  assert.match(`${brokenResult.stdout}\n${brokenResult.stderr}`, /broken workflow contract fixture/);
-
-  console.log("Packed tarball smoke test passed in a credential-free temporary project with isolated optional-workflow loading.");
+  console.log("Packed tarball smoke test passed in a credential-free temporary project.");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }
