@@ -18,6 +18,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Bulk creates now preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses, expose explicit dispatch versus persisted identity, and perform one bounded read-back per identifiable created card without overstating dispatch certainty.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
 ### Changed

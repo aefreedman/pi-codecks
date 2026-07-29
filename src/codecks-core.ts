@@ -4868,10 +4868,11 @@ const getCardMatchedFields = (card: CodecksEntity, context?: CardSearchRenderCon
     return fields.size > 0 ? Array.from(fields) : undefined;
 };
 
-const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRenderContext): Record<string, unknown> =>
+const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRenderContext, detailed = false): Record<string, unknown> =>
 {
     const deck = card.deck as CodecksEntity | undefined;
     const milestone = card.milestone as CodecksEntity | undefined;
+    const parentCard = card.parentCard as CodecksEntity | undefined;
 
     const childCount = getCardChildCountInfo(card);
     const hasEffort = hasOwn(card, "effort");
@@ -4905,6 +4906,11 @@ const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRen
         assignee: (card.assignee as CodecksEntity | undefined)?.name
             ?? (card.assignee as CodecksEntity | undefined)?.fullName,
         tags: formatTags(card.masterTags),
+        ...(detailed ? {
+            content: card.content ?? "",
+            parentReference: formatShortCode(parentCard?.accountSeq as number | undefined) || null,
+            archived: card.visibility === "archived" || card.visibility === "deleted",
+        } : {}),
         ...(matchedFields ? { matchedFields } : {}),
     };
 };
@@ -5493,7 +5499,12 @@ export const card_search = tool({
                 location: args.location ?? null,
                 deck: args.deck ?? null,
                 milestone: args.milestone ?? null,
-                includeDone: args.includeDone ?? null,
+                includeArchived: args.includeArchived ?? false,
+                includeDone: args.includeDone ?? false,
+                limit: args.limit ?? 20,
+                scanLimit: args.scanLimit ?? 3000,
+                pageSize: args.pageSize ?? 500,
+                outputMode,
             };
             const lines = [
                 "## Card Search Results",
@@ -5546,6 +5557,21 @@ export const card_search = tool({
             ...(outputMode === "counts" ? sampleCards : detailCards).map((card, index) => `${index + 1}. ${formatCardLine(card)}`),
         ].filter((line): line is string => line !== undefined);
 
+        const criteria = {
+            title: args.title ?? null,
+            text: args.text ?? null,
+            searchIn: args.searchIn ?? null,
+            cardCode: args.cardCode ?? inferredCode ?? null,
+            location: args.location ?? null,
+            deck: args.deck ?? null,
+            milestone: args.milestone ?? null,
+            includeArchived: args.includeArchived ?? false,
+            includeDone: args.includeDone ?? false,
+            limit: args.limit ?? 20,
+            scanLimit: args.scanLimit ?? 3000,
+            pageSize: args.pageSize ?? 500,
+            outputMode,
+        };
         const baseData: Record<string, unknown> = {
             matches: rawMatches,
             rawMatches,
@@ -5561,6 +5587,7 @@ export const card_search = tool({
             requestsAttempted: result.requestsAttempted ?? null,
             queueWaitMs: result.queueWaitMs ?? 0,
             elapsedMs: result.elapsedMs ?? null,
+            criteria,
             facets: outputMode === "counts" || truncated ? buildCardSearchFacets(matchedCards) : undefined,
         };
 
@@ -5570,7 +5597,7 @@ export const card_search = tool({
         }
         else
         {
-            baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext));
+            baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext, outputMode === "detailed"));
         }
 
         return toStructuredResult(
@@ -7474,6 +7501,96 @@ const actionKeyFor = (operation: "create" | "update", index: number, payload: Re
     return `${operation}:${index}:${normalizedMutationFingerprint(stablePayload).slice(0, 24)}`;
 };
 
+type DispatchCardIdentity = {
+    cardId: string | null;
+    accountSeq: number | null;
+    title: string | null;
+};
+
+const parseCardAccountSeq = (value: unknown): number | null =>
+{
+    if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+    if (typeof value === "string" && /^\d+$/.test(value))
+    {
+        const parsed = Number(value);
+        return Number.isSafeInteger(parsed) ? parsed : null;
+    }
+    return null;
+};
+
+// Dispatch responses vary between { card }, { payload: { card } }, and { payload }.
+// Nested card/payload records are authoritative; a generic outer `id` may be
+// an action ID and is therefore never interpreted as a card identity.
+const extractDispatchCardIdentity = (response: unknown): DispatchCardIdentity =>
+{
+    const data = unwrapData(response);
+    const candidates: Array<{ value: Record<string, unknown>; allowGenericId: boolean }> = [];
+    if (isRecord(data))
+    {
+        if (isRecord(data.card)) candidates.push({ value: data.card, allowGenericId: true });
+        if (isRecord(data.payload))
+        {
+            if (isRecord(data.payload.card)) candidates.push({ value: data.payload.card, allowGenericId: true });
+            candidates.push({ value: data.payload, allowGenericId: true });
+        }
+        candidates.push({ value: data, allowGenericId: false });
+    }
+
+    for (const { value: candidate, allowGenericId } of candidates)
+    {
+        const rawCardId = candidate.cardId ?? (allowGenericId ? candidate.id : undefined);
+        const cardId = rawCardId === undefined || rawCardId === null || String(rawCardId).trim() === ""
+            ? null
+            : String(rawCardId);
+        const accountSeq = parseCardAccountSeq(candidate.accountSeq);
+        if (cardId || accountSeq !== null)
+        {
+            return {
+                cardId,
+                accountSeq,
+                title: typeof candidate.title === "string" ? candidate.title : null,
+            };
+        }
+    }
+    return { cardId: null, accountSeq: null, title: null };
+};
+
+const publicCardIdentity = (identity: Pick<DispatchCardIdentity, "cardId" | "accountSeq">) =>
+{
+    const accountSeq = identity.accountSeq ?? undefined;
+    return {
+        cardId: identity.cardId,
+        accountSeq: identity.accountSeq,
+        shortCode: formatShortCode(accountSeq) || null,
+        ...buildReusableCardRefs(accountSeq),
+    };
+};
+
+const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<Record<string, unknown> | null> =>
+{
+    const card = identity.accountSeq !== null
+        ? await fetchCardByAccountSeq(identity.accountSeq, ["cardId", "accountSeq", "title"])
+        : identity.cardId
+            ? await fetchCardById(identity.cardId, ["cardId", "accountSeq", "title"])
+            : undefined;
+    if (!card) return null;
+
+    const persistedIdentity: DispatchCardIdentity = {
+        cardId: card.cardId === undefined || card.cardId === null ? null : String(card.cardId),
+        accountSeq: parseCardAccountSeq(card.accountSeq),
+        title: typeof card.title === "string" ? card.title : null,
+    };
+    if ((identity.cardId && persistedIdentity.cardId !== identity.cardId)
+        || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq))
+    {
+        throw new Error("persisted card identity does not match dispatch identity");
+    }
+    return {
+        ...publicCardIdentity(persistedIdentity),
+        title: persistedIdentity.title,
+    };
+};
+
 const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
 {
     const normalizedRequested = {
@@ -7669,19 +7786,42 @@ export const card_bulk_create = tool({
             {
                 try
                 {
-                    const response = unwrapData(await runDispatch("cards/create", record.payload)) as Record<string, unknown> | undefined;
-                    const created = response?.card && typeof response.card === "object" ? response.card as CodecksEntity : response as CodecksEntity | undefined;
-                    const accountSeq = typeof created?.accountSeq === "number" ? created.accountSeq : undefined;
+                    const response = unwrapData(await runDispatch("cards/create", record.payload));
+                    const dispatchIdentity = extractDispatchCardIdentity(response);
                     results[record.index].status = "created";
                     results[record.index].certainty = "dispatch_returned";
                     results[record.index].dispatchReturned = truncateStructuredValue(response ?? null).value;
+                    // `created` is retained for compatibility; `dispatchIdentity` makes its source explicit.
+                    results[record.index].dispatchIdentity = publicCardIdentity(dispatchIdentity);
                     results[record.index].created = {
-                        cardId: created?.cardId ?? null,
-                        accountSeq: accountSeq ?? null,
-                        shortCode: formatShortCode(accountSeq) || null,
-                        ...buildReusableCardRefs(accountSeq),
-                        title: created?.title ?? null,
+                        ...publicCardIdentity(dispatchIdentity),
+                        title: dispatchIdentity.title,
                     };
+                    if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
+                    {
+                        try
+                        {
+                            const persistedVerified = await verifyCreatedCard(dispatchIdentity);
+                            if (persistedVerified)
+                            {
+                                results[record.index].persistedVerified = persistedVerified;
+                                results[record.index].verificationState = "persisted_verified";
+                            }
+                            else
+                            {
+                                results[record.index].verificationState = "not_found";
+                            }
+                        }
+                        catch (error)
+                        {
+                            results[record.index].verificationState = "failed";
+                            results[record.index].verificationError = {
+                                category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                                message: toErrorMessage(error),
+                                ...getOperationErrorData(error),
+                            };
+                        }
+                    }
                 }
                 catch (error)
                 {

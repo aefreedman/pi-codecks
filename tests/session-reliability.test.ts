@@ -30,6 +30,7 @@ const relationKey = (query: Json, relation: string): string | undefined => {
 const loggedInPayload = () => ({ data: { _root: { loggedInUser: USER_ID }, user: { [USER_ID]: { id: USER_ID, name: "Sam", fullName: "Sam Example" } } } });
 const emptyCardScanPayload = (key: string) => ({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [key]: [] } }, card: {} } });
 const cardPayload = () => ({ data: { card: { [CARD_ID]: { cardId: CARD_ID, accountSeq: 2481, title: "Batch target", content: "Batch target\n\nBody", status: "not_started", isDoc: false } } } });
+const verifiedCreatedCardPayload = (key: string) => ({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [key]: [CARD_ID] } }, card: { [CARD_ID]: { cardId: CARD_ID, accountSeq: 2481, title: "Parity", status: "not_started", isDoc: false } } } });
 const runPayload = (key: string) => ({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [key]: [RUN_ID] } }, sprint: { [RUN_ID]: { id: RUN_ID, accountSeq: 116, name: "Run 116", startDate: "2026-07-20", endDate: "2026-08-02" } } } });
 
 const invoke = async (tool: any, args: Json, signal?: AbortSignal) => core.runWithAbortSignal(signal, () => tool.execute(args), process.cwd());
@@ -86,7 +87,8 @@ try {
     const body = JSON.parse(String(init?.body ?? "{}"));
     if (url.includes("/dispatch/cards/create")) {
       appliedCreate = body;
-      return response({ data: { card: { cardId: CARD_ID, accountSeq: 2481 } } });
+      // Codecks also returns this shape in production; bulk create must retain it.
+      return response({ id: "dispatch-action-id", payload: { id: CARD_ID, accountSeq: 2481 } });
     }
     const query = body.query as Json;
     if (JSON.stringify(query).includes("loggedInUser")) return response(loggedInPayload());
@@ -94,19 +96,40 @@ try {
     const key = relationKey(query, "cards");
     assert.ok(key);
     cardScans += 1;
-    return response(emptyCardScanPayload(key!));
+    return response(key!.includes('"accountSeq":[2481]')
+      ? verifiedCreatedCardPayload(key!)
+      : emptyCardScanPayload(key!));
   }) as typeof fetch;
   const createArgs = { cards: [{ title: "Parity", content: "Body", assigneeId: USER_ID, effort: 3, priority: "high", tags: ["alpha"], putOnHand: true }], format: "json" };
   const preview = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: true }));
   const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false }));
   assert.equal(preview.ok, true);
   assert.equal(apply.ok, true);
+  assert.equal(apply.data.results[0].status, "created");
+  assert.equal(apply.data.results[0].certainty, "dispatch_returned");
+  assert.deepEqual(apply.data.results[0].dispatchReturned, { id: "dispatch-action-id", payload: { id: CARD_ID, accountSeq: 2481 } });
   assert.equal(preview.data.results[0].assignee.id, appliedCreate!.assigneeId);
   assert.equal(preview.data.results[0].effort, appliedCreate!.effort);
   assert.equal(preview.data.results[0].priority.code, appliedCreate!.priority);
   assert.equal(preview.data.results[0].content, appliedCreate!.content);
   assert.equal(preview.data.results[0].putOnHand, appliedCreate!.putOnHand);
-  assert.equal(cardScans, 2, "preview and apply each perform one shared duplicate scan");
+  assert.equal(cardScans, 3, "preview and apply perform one shared duplicate scan each; apply verifies its dispatch identity once");
+  assert.deepEqual(apply.data.results[0].dispatchIdentity, {
+    cardId: CARD_ID,
+    accountSeq: 2481,
+    shortCode: "$45j",
+    cardRef: "$45j",
+    accountSeqRef: "seq:2481",
+  });
+  assert.deepEqual(apply.data.results[0].created, {
+    ...apply.data.results[0].dispatchIdentity,
+    title: null,
+  });
+  assert.equal(apply.data.results[0].verificationState, "persisted_verified");
+  assert.deepEqual(apply.data.results[0].persistedVerified, {
+    ...apply.data.results[0].dispatchIdentity,
+    title: "Parity",
+  });
 
   let mutationAttempts = 0;
   globalThis.fetch = (async (input, init) => {
