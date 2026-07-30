@@ -7465,29 +7465,109 @@ const relationEntityId = (value: unknown): string | null =>
     return value === undefined || value === null ? null : String(value);
 };
 
-const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number) =>
+type DuplicatePolicy = "required" | "best_effort" | "skip";
+type BulkCreateOutputMode = "compact" | "detailed";
+type BulkCreateVerification = "none" | "identity";
+
+// Title-contains is the narrow, portable discovery primitive. Four title probes are
+// intentionally the request budget: larger title sets use one bounded account fallback.
+const BULK_CREATE_TITLE_REQUEST_BUDGET = 4;
+const normalizeDuplicateTitle = (title: string): string => title.trim().toLocaleLowerCase();
+const recordMatchesDuplicate = (card: CodecksEntity, record: NormalizedBulkCreateRecord): boolean =>
+    normalizeDuplicateTitle(String(card.title ?? "")) === normalizeDuplicateTitle(record.title)
+    && (!record.deck || relationEntityId(card.deck) === String(record.deck.id))
+    && (!record.milestone || relationEntityId(card.milestone) === String(record.milestone.id));
+
+const emptyDuplicateCandidates = (records: NormalizedBulkCreateRecord[]): Map<number, Record<string, unknown>[]> =>
+    new Map(records.map((record) => [record.index, []]));
+
+const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number, policy: DuplicatePolicy) =>
 {
-    const scan = await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) });
-    const candidates = new Map<number, Record<string, unknown>[]>();
-    for (const record of records)
+    if (policy === "skip")
     {
-        const matches = scan.cards
-            .filter((card) => String(card.title ?? "").trim().toLowerCase() === record.title.trim().toLowerCase())
-            .filter((card) => !record.deck || relationEntityId(card.deck) === String(record.deck.id))
-            .filter((card) => !record.milestone || relationEntityId(card.milestone) === String(record.milestone.id))
-            .slice(0, duplicateLimit)
-            .map((card) => normalizeCardSearchSummary(card));
-        candidates.set(record.index, matches);
+        return {
+            candidates: emptyDuplicateCandidates(records),
+            metadata: {
+                strategy: "skipped",
+                credentialVisibleScope: "not_scanned",
+                complete: false,
+                scanned: 0,
+                scanLimit,
+                requestsAttempted: 0,
+                queueWaitMs: 0,
+                elapsedMs: 0,
+                bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, scanLimit, pageSize: Math.min(scanLimit, 500) },
+                fallback: null,
+                policyOutcome: "skipped_by_request",
+            },
+        };
     }
+
+    const titles = [...new Set(records.map((record) => normalizeDuplicateTitle(record.title)))];
+    let scans: PagedCardScanResult[] = [];
+    let strategy = "title_contains";
+    let fallback: string | null = null;
+    if (titles.length <= BULK_CREATE_TITLE_REQUEST_BUDGET)
+    {
+        try
+        {
+            scans = await Promise.all(titles.map((title) => fetchPagedCards({
+                filters: { title: { op: "contains", value: title } },
+                fields: cardPlanningFields,
+                scanLimit,
+                pageSize: Math.min(scanLimit, 500),
+            })));
+        }
+        catch (error)
+        {
+            // Infrastructure failure is not evidence and must remain blocking under
+            // every policy. Only a semantic narrow-filter rejection may use fallback.
+            const message = toErrorMessage(error);
+            if (error instanceof CodecksOperationError || /\b(?:5\d\d|timeout|timed out|network|socket|connection|econn|epipe|fetch failed)\b/i.test(message)) throw error;
+            fallback = "title_contains_unavailable";
+            scans = [];
+        }
+    }
+    else
+    {
+        fallback = "title_request_budget_exceeded";
+    }
+
+    if (scans.length === 0 || scans.some((scan) => !scan.complete))
+    {
+        fallback ??= "title_scan_incomplete";
+        strategy = "account_fallback";
+        scans = [await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) })];
+    }
+
+    const cards = scans.flatMap((scan) => scan.cards);
+    const candidates = emptyDuplicateCandidates(records);
+    if (duplicateLimit > 0)
+    {
+        for (const record of records)
+        {
+            candidates.set(record.index, cards
+                .filter((card) => recordMatchesDuplicate(card, record))
+                .slice(0, duplicateLimit)
+                .map((card) => normalizeCardSearchSummary(card)));
+        }
+    }
+    const complete = scans.every((scan) => scan.complete);
+    const incompleteOnlyByBound = !complete && scans.every((scan) => scan.scanLimitReached);
     return {
         candidates,
         metadata: {
-            complete: scan.complete,
-            scanned: scan.scannedCards,
+            strategy,
+            credentialVisibleScope: "cards accessible to the configured credential at scan time",
+            complete,
+            scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
             scanLimit,
-            requestsAttempted: scan.requestsAttempted,
-            queueWaitMs: scan.queueWaitMs,
-            elapsedMs: scan.elapsedMs,
+            requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
+            queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
+            elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
+            bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, scanLimit, pageSize: Math.min(scanLimit, 500) },
+            fallback,
+            policyOutcome: complete ? "complete" : (incompleteOnlyByBound ? "incomplete_scan_limit" : "incomplete"),
         },
     };
 };
@@ -7566,29 +7646,24 @@ const publicCardIdentity = (identity: Pick<DispatchCardIdentity, "cardId" | "acc
     };
 };
 
-const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<Record<string, unknown> | null> =>
+const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<{ state: "identity_verified" | "not_found" | "mismatch"; observed?: Record<string, unknown>; checkedFields: string[] }> =>
 {
     const card = identity.accountSeq !== null
         ? await fetchCardByAccountSeq(identity.accountSeq, ["cardId", "accountSeq", "title"])
         : identity.cardId
             ? await fetchCardById(identity.cardId, ["cardId", "accountSeq", "title"])
             : undefined;
-    if (!card) return null;
+    if (!card) return { state: "not_found", checkedFields: ["cardId", "accountSeq"] };
 
     const persistedIdentity: DispatchCardIdentity = {
         cardId: card.cardId === undefined || card.cardId === null ? null : String(card.cardId),
         accountSeq: parseCardAccountSeq(card.accountSeq),
         title: typeof card.title === "string" ? card.title : null,
     };
-    if ((identity.cardId && persistedIdentity.cardId !== identity.cardId)
-        || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq))
-    {
-        throw new Error("persisted card identity does not match dispatch identity");
-    }
-    return {
-        ...publicCardIdentity(persistedIdentity),
-        title: persistedIdentity.title,
-    };
+    const observed = { ...publicCardIdentity(persistedIdentity), title: persistedIdentity.title };
+    const mismatch = (identity.cardId && persistedIdentity.cardId !== identity.cardId)
+        || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq);
+    return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields: ["cardId", "accountSeq"] };
 };
 
 const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
@@ -7624,6 +7699,33 @@ const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCan
         ...normalizedRequested,
         duplicateCandidates,
     };
+};
+
+const compactBulkCreateRecord = (entry: Record<string, unknown>): Record<string, unknown> =>
+{
+    const result: Record<string, unknown> = {
+        index: entry.index,
+        correlationKey: entry.correlationKey,
+        status: entry.status,
+        certainty: entry.certainty,
+    };
+    const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
+    if (identity?.cardRef) result.cardRef = identity.cardRef;
+    if (identity?.cardId) result.cardId = identity.cardId;
+    if (identity?.accountSeqRef) result.accountSeqRef = identity.accountSeqRef;
+    if (entry.status === "indeterminate") result.actionKey = entry.actionKey;
+    if (entry.error) result.error = entry.error;
+    if (entry.reconciliation) result.reconciliation = entry.reconciliation;
+    return result;
+};
+
+const boundedBulkWarnings = (metadata: Record<string, unknown>, policy: DuplicatePolicy): string[] =>
+{
+    const warnings: string[] = [];
+    if (policy === "skip") warnings.push("Duplicate discovery was skipped by explicit request.");
+    else if (metadata.complete === false) warnings.push("Duplicate discovery is incomplete; no-match rows are not definitive evidence.");
+    if (typeof metadata.fallback === "string") warnings.push(`Duplicate discovery used account fallback: ${metadata.fallback}.`);
+    return warnings.slice(0, 3);
 };
 
 const preflightOutcomeRecords = (records: unknown[], operation: "create" | "update", errors: Array<{ index?: number; message: string }> = []) =>
@@ -7686,7 +7788,10 @@ export const card_bulk_create = tool({
         parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default parent Hero card for cards without a parentCardId."),
         dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
         duplicateLimit: tool.schema.number().min(0).max(20).optional().describe("Maximum duplicate candidates to record per card. Defaults to 5."),
-        duplicateScanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum cards scanned once for shared duplicate detection. Defaults to 3000."),
+        duplicateScanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum rows per bounded duplicate-discovery relation. Defaults to 3000."),
+        duplicatePolicy: tool.schema.enum(["required", "best_effort", "skip"]).optional().describe("Duplicate evidence policy. Dry-run defaults to required; apply defaults to best_effort. skip performs no discovery."),
+        verification: tool.schema.enum(["none", "identity"]).optional().describe("Post-create verification. none (default) performs zero reads; identity makes at most one exact read for each identifiable create."),
+        outputMode: tool.schema.enum(["compact", "detailed"]).optional().describe("Structured result detail. Dry-run defaults to detailed (schema v1); apply defaults to compact (schema v2)."),
         continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
         format: outputFormatArg,
     },
@@ -7695,6 +7800,9 @@ export const card_bulk_create = tool({
         const format = args.format ?? "text";
         const dryRun = args.dryRun !== false;
         const continueOnError = args.continueOnError !== false;
+        const duplicatePolicy: DuplicatePolicy = (args.duplicatePolicy as DuplicatePolicy | undefined) ?? (dryRun ? "required" : "best_effort");
+        const verification: BulkCreateVerification = (args.verification as BulkCreateVerification | undefined) ?? "none";
+        const outputMode: BulkCreateOutputMode = (args.outputMode as BulkCreateOutputMode | undefined) ?? (dryRun ? "detailed" : "compact");
         const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : [];
         const structuralErrors = validateStrictBulkRecords(rawRecords, "create");
         if (structuralErrors.length > 0)
@@ -7745,10 +7853,19 @@ export const card_bulk_create = tool({
             });
         }
 
+        if (duplicatePolicy === "required" && normalized.some((record) => record.parent))
+        {
+            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "duplicatePolicy=required is unavailable for parent-scoped creates until parent-local duplicate matching is supported.", {
+                duplicatePolicy,
+                requestsAttempted: 0,
+                recoveryHint: "Use duplicatePolicy=best_effort after reviewing a dry-run, or omit parentCardId for an account-visible required check.",
+            });
+        }
+
         let duplicateScan: Awaited<ReturnType<typeof scanBulkCreateDuplicates>>;
         try
         {
-            duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000);
+            duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000, duplicatePolicy);
         }
         catch (error)
         {
@@ -7761,11 +7878,20 @@ export const card_bulk_create = tool({
             );
         }
 
-        if (!duplicateScan.metadata.complete && !dryRun)
+        duplicateScan.metadata.policyOutcome = duplicatePolicy === "skip"
+            ? "skipped_by_request"
+            : duplicateScan.metadata.complete
+                ? "complete"
+                : duplicatePolicy === "required"
+                    ? (dryRun ? "required_incomplete_review" : "required_blocked")
+                    : (dryRun ? "best_effort_incomplete_review" : "best_effort_proceeded");
+
+        if (!duplicateScan.metadata.complete && !dryRun && duplicatePolicy === "required")
         {
-            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "Duplicate scan is incomplete; no creates were dispatched.", {
+            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "Duplicate discovery is incomplete under duplicatePolicy=required; no creates were dispatched.", {
                 scan: duplicateScan.metadata,
-                recoveryHint: "Increase duplicateScanLimit or narrow the scope, then preview again.",
+                duplicatePolicy,
+                recoveryHint: "Increase duplicateScanLimit or use duplicatePolicy=best_effort only after reviewing the incomplete evidence.",
             });
         }
 
@@ -7774,9 +7900,11 @@ export const card_bulk_create = tool({
             const candidates = duplicateScan.candidates.get(record.index) ?? [];
             return {
                 ...publicBulkCreateRecord(record, candidates),
-                status: duplicateScan.metadata.complete ? (candidates.length > 0 ? "duplicate_candidate" : "ready") : "scan_incomplete",
+                status: duplicatePolicy === "skip" || duplicateScan.metadata.complete
+                    ? (candidates.length > 0 ? "duplicate_candidate" : "ready")
+                    : "scan_incomplete",
                 certainty: "not_dispatched",
-                verificationState: dryRun ? "not_applicable" : "not_performed",
+                verificationState: dryRun ? "not_applicable" : (verification === "none" ? "not_requested" : "not_identifiable"),
             };
         });
 
@@ -7797,29 +7925,31 @@ export const card_bulk_create = tool({
                         ...publicCardIdentity(dispatchIdentity),
                         title: dispatchIdentity.title,
                     };
-                    if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
+                    if (verification === "identity")
                     {
-                        try
+                        if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
                         {
-                            const persistedVerified = await verifyCreatedCard(dispatchIdentity);
-                            if (persistedVerified)
+                            try
                             {
-                                results[record.index].persistedVerified = persistedVerified;
-                                results[record.index].verificationState = "persisted_verified";
+                                const identityCheck = await verifyCreatedCard(dispatchIdentity);
+                                results[record.index].verificationState = identityCheck.state;
+                                results[record.index].verificationCheckedFields = identityCheck.checkedFields;
+                                if (identityCheck.state === "not_found") results[record.index].verificationWarning = "Identity was not found after one read; this can be eventual-consistency delay, not a failed create.";
+                                if (identityCheck.observed) results[record.index].persistedVerified = identityCheck.observed;
                             }
-                            else
+                            catch (error)
                             {
-                                results[record.index].verificationState = "not_found";
+                                results[record.index].verificationState = "read_failed";
+                                results[record.index].verificationError = {
+                                    category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                                    message: toErrorMessage(error),
+                                    ...getOperationErrorData(error),
+                                };
                             }
                         }
-                        catch (error)
+                        else
                         {
-                            results[record.index].verificationState = "failed";
-                            results[record.index].verificationError = {
-                                category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
-                                message: toErrorMessage(error),
-                                ...getOperationErrorData(error),
-                            };
+                            results[record.index].verificationState = "not_identifiable";
                         }
                     }
                 }
@@ -7864,13 +7994,25 @@ export const card_bulk_create = tool({
             `Indeterminate: ${indeterminate}`,
             `Definitely Unsent: ${definitelyUnsent}`,
             `Duplicate Candidates: ${duplicateCandidates}`,
-            `Scan: ${duplicateScan.metadata.complete ? "complete" : "incomplete"}; ${duplicateScan.metadata.scanned} cards; ${duplicateScan.metadata.requestsAttempted} request(s)`,
+            `Discovery: ${duplicateScan.metadata.strategy}; ${duplicateScan.metadata.complete ? "complete" : "incomplete"}; ${duplicateScan.metadata.scanned} rows; ${duplicateScan.metadata.requestsAttempted} request(s); policy ${duplicatePolicy}`,
             "",
-            ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.title} — ${(entry.deck as { name?: string } | null)?.name ?? "Private"} — ${(entry.assignee as { name: string }).name}`),
+            ...results.map((entry) => {
+                const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
+                const reference = identity?.cardRef ? ` ${identity.cardRef}` : "";
+                const cardId = identity?.cardId ? ` (${identity.cardId})` : "";
+                const detail = entry.status === "indeterminate"
+                    ? ` — reconcile; action ${entry.actionKey}`
+                    : entry.error && isRecord(entry.error) ? ` — ${String(entry.error.message ?? "error")}` : "";
+                return `- #${Number(entry.index) + 1}${entry.correlationKey ? ` [${entry.correlationKey}]` : ""} ${entry.status}/${entry.certainty}${reference}${cardId}${detail}`;
+            }),
         ];
-        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), {
+        const warnings = boundedBulkWarnings(duplicateScan.metadata, duplicatePolicy);
+        const detailedData = {
             responseSchemaVersion: 1,
             dryRun,
+            outputMode: "detailed",
+            duplicatePolicy,
+            verification,
             count: rawRecords.length,
             created,
             failed,
@@ -7881,7 +8023,23 @@ export const card_bulk_create = tool({
             complete: duplicateScan.metadata.complete,
             scan: duplicateScan.metadata,
             results,
-        }, duplicateScan.metadata.complete ? undefined : ["Duplicate scan was incomplete; no-match rows are not definitive evidence."]);
+        };
+        const compactData = {
+            responseSchemaVersion: 2,
+            dryRun,
+            outputMode: "compact",
+            duplicatePolicy,
+            verification,
+            count: rawRecords.length,
+            created,
+            failed,
+            indeterminate,
+            definitelyUnsent,
+            duplicateCandidates,
+            duplicateDiscovery: duplicateScan.metadata,
+            results: results.map(compactBulkCreateRecord),
+        };
+        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), outputMode === "detailed" ? detailedData : compactData, warnings);
     },
 });
 

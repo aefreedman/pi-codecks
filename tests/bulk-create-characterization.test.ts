@@ -32,7 +32,7 @@ const loggedInPayload = () => ({ data: { _root: { loggedInUser: USER_ID }, user:
 const emptyCardScanPayload = (key: string) => ({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [key]: [] } }, card: {} } });
 const invoke = async (args: Json) => core.runWithAbortSignal(undefined, () => core.card_bulk_create.execute(args), process.cwd());
 
-const measure = async (count: number, dryRun: boolean): Promise<Measurement> => {
+const measure = async (count: number, dryRun: boolean, options: Json): Promise<Measurement> => {
   const requests: RequestCounts = { loggedInUser: 0, duplicateScans: 0, creates: 0, identityReads: 0 };
   const identities = new Map<number, string>();
   let nextAccountSeq = 2400;
@@ -78,6 +78,7 @@ const measure = async (count: number, dryRun: boolean): Promise<Measurement> => 
       cards: Array.from({ length: count }, (_, index) => ({ title: `Characterization ${index}`, correlationKey: `row-${index}` })),
       dryRun,
       format: "json",
+      ...options,
     });
     const parsed = parseResult(result);
     assert.equal(parsed.ok, true);
@@ -89,29 +90,27 @@ const measure = async (count: number, dryRun: boolean): Promise<Measurement> => 
   }
 };
 
-const expectedBytes = new Map([
-  [1, { preview: 2331, apply: 3211 }],
-  [4, { preview: 7683, apply: 11200 }],
-  [34, { preview: 61372, apply: 91260 }],
-  [100, { preview: 179579, apply: 267482 }],
+const expectedDefaultApply = new Map([
+  [1, { loggedInUser: 1, duplicateScans: 1, creates: 1, identityReads: 0, serializedBytes: 1170 }],
+  [4, { loggedInUser: 1, duplicateScans: 4, creates: 4, identityReads: 0, serializedBytes: 1962 }],
+  [34, { loggedInUser: 1, duplicateScans: 1, creates: 34, identityReads: 0, serializedBytes: 10062 }],
+  [100, { loggedInUser: 1, duplicateScans: 1, creates: 100, identityReads: 0, serializedBytes: 27623 }],
 ]);
 
-console.log("cards,preview_login,preview_scan,preview_creates,preview_identity_reads,preview_bytes,apply_login,apply_scan,apply_creates,apply_identity_reads,apply_bytes");
+console.log("cards,historical_preview_scan,historical_apply_scan,historical_apply_identity_reads,default_apply_scan,default_apply_identity_reads,default_apply_bytes");
 for (const count of [1, 4, 34, 100]) {
-  const preview = await measure(count, true);
-  const apply = await measure(count, false);
-  const bytes = expectedBytes.get(count)!;
-  assert.deepEqual(
-    preview,
-    { loggedInUser: 1, duplicateScans: 1, creates: 0, identityReads: 0, serializedBytes: bytes.preview },
-    `${count}-card preview characterization changed`,
-  );
-  assert.deepEqual(
-    apply,
-    { loggedInUser: 1, duplicateScans: 1, creates: count, identityReads: count, serializedBytes: bytes.apply },
-    `${count}-card apply characterization changed`,
-  );
-  console.log(`${count},${preview.loggedInUser},${preview.duplicateScans},${preview.creates},${preview.identityReads},${preview.serializedBytes},${apply.loggedInUser},${apply.duplicateScans},${apply.creates},${apply.identityReads},${apply.serializedBytes}`);
+  // Phase-0 characterization is intentionally explicit: schema-v1 detailed output
+  // plus opt-in identity verification keeps its old diagnostic purpose visible.
+  const historicalPreview = await measure(count, true, { outputMode: "detailed", verification: "identity" });
+  const historicalApply = await measure(count, false, { outputMode: "detailed", verification: "identity" });
+  const defaultPreview = await measure(count, true, {});
+  const defaultApply = await measure(count, false, {});
+  assert.equal(defaultPreview.identityReads, 0, `${count}-card default preview must not verify identities`);
+  assert.equal(defaultApply.identityReads, 0, `${count}-card default apply must not verify identities`);
+  assert.deepEqual(defaultApply, expectedDefaultApply.get(count), `${count}-card compact defaults changed`);
+  assert.ok(defaultApply.serializedBytes <= (count === 4 ? 4200 : count === 34 ? 19000 : count === 100 ? 52000 : 1600), `${count}-card compact response exceeded budget`);
+  assert.equal(historicalApply.identityReads, count, `${count}-card opt-in identity verification bound changed`);
+  console.log(`${count},${historicalPreview.duplicateScans},${historicalApply.duplicateScans},${historicalApply.identityReads},${defaultApply.duplicateScans},${defaultApply.identityReads},${defaultApply.serializedBytes}`);
 }
 
 console.log("bulk-create characterization tests passed");

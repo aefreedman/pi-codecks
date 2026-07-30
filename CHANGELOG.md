@@ -18,7 +18,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
-- Bulk creates now preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses, expose explicit dispatch versus persisted identity, and perform one bounded read-back per identifiable created card without overstating dispatch certainty.
+- Bulk creates preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses without treating a generic outer dispatch action ID as a card ID.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
 ### Changed
@@ -27,7 +27,9 @@ and this project follows semantic versioning for public package releases.
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.
 - Non-idempotent mutations no longer transparently retry ambiguous failures; read-only retries remain. Attachment sources are physically canonicalized, strictly workspace-contained, tracked by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.
 - Bulk create/update records are now strict and reject unsupported fields before requests; bulk preview and apply share normalized payloads that expose all mutable fields and visible target names.
-- Bulk-create duplicate detection now performs one bounded shared scan instead of one broad search per record and blocks apply when completeness cannot be established. A generic public batch-search tool remains deferred in favor of narrow sequential discovery.
+- Bulk create now deduplicates normalized titles and uses a bounded title-first duplicate probe with conservative accessible-account fallback. Dry-run defaults to `duplicatePolicy=required`; apply defaults to `best_effort` for scan-limit incompleteness, while `required` remains available and `skip` is explicit. Parent-local required matching remains unavailable.
+- Bulk-create identity verification is now opt-in (`verification=identity`); the default performs zero post-create reads. Identity read outcomes label checked fields and do not change dispatch certainty or retry a create.
+- Bulk-create dry-runs retain detailed response schema v1 by default. Apply now defaults to compact schema v2 results with correlation/status/certainty, returned references/card IDs, aggregate discovery metadata, and bounded warnings; explicit `outputMode=detailed` retains normalized and dispatch diagnostics.
 - Broad account scans now have bounded concurrency and queue depth, with stable caller-cancel, rate-queue cancel, timeout, rate-limit, and queue-full diagnostics plus request/queue/elapsed metadata.
 - Sequential bulk mutations now distinguish failed, indeterminate, and definitely-unsent records, stop after ambiguous writes, expose correlation/action keys, and label normalized request data separately from dispatch-returned and persisted-verification data.
 

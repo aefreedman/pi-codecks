@@ -446,6 +446,9 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       dryRun: Type.Optional(Type.Boolean()),
       duplicateLimit: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
       duplicateScanLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10000 })),
+      duplicatePolicy: Type.Optional(Type.Union([Type.Literal("required"), Type.Literal("best_effort"), Type.Literal("skip")])),
+      verification: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("identity")])),
+      outputMode: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("detailed")])),
       continueOnError: Type.Optional(Type.Boolean()),
       format: Type.Optional(outputFormatEnum),
     }),
@@ -454,6 +457,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       if (input.dry_run !== undefined && input.dryRun === undefined) input.dryRun = input.dry_run;
       if (input.duplicate_limit !== undefined && input.duplicateLimit === undefined) input.duplicateLimit = input.duplicate_limit;
       if (input.duplicate_scan_limit !== undefined && input.duplicateScanLimit === undefined) input.duplicateScanLimit = input.duplicate_scan_limit;
+      if (input.duplicate_policy !== undefined && input.duplicatePolicy === undefined) input.duplicatePolicy = input.duplicate_policy;
+      if (input.output_mode !== undefined && input.outputMode === undefined) input.outputMode = input.output_mode;
       if (input.continue_on_error !== undefined && input.continueOnError === undefined) input.continueOnError = input.continue_on_error;
       if (input.parent_card_id !== undefined && input.parentCardId === undefined) input.parentCardId = input.parent_card_id;
       return input;
@@ -463,7 +468,8 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_bulk_create for CSV/import-style card creation after mapping rows into card objects.",
       "Run codecks_card_bulk_create with dryRun=true before applying creates, especially for imports or bulk deck/milestone work.",
-      "Review duplicateCandidates and scan.complete from codecks_card_bulk_create before rerunning with dryRun=false; an incomplete scan is not definitive no-match evidence.",
+      "Review duplicate candidates and discovery completeness before apply. Apply defaults to best_effort only for scan-limit incompleteness; use required for a blocking credential-visible guarantee or skip only when deliberately bypassing discovery.",
+      "Apply defaults to compact schema-v2 results with returned $references. Use outputMode=detailed for schema-v1 normalized diagnostics; verification=identity is opt-in and makes at most one exact read per identifiable create.",
       "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request.",
     ],
   },

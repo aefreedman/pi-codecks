@@ -51,9 +51,10 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
 - Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons. If `complete` is false, increase `scanLimit` or narrow the scope before asking for approval; apply effort separately only after explicit user approval.
-- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the complete normalized per-card preview and duplicate/current-proposed evidence, then apply only after approval. A bulk apply is sequential and can be partially applied.
+- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the complete normalized per-card preview and duplicate/current-proposed evidence, then apply only after approval. A bulk apply is sequential and can be partially applied. Bulk-create dry-runs default to detailed schema-v1 review output; apply defaults to compact schema-v2 results with returned `$references` for continuation.
 - Bulk records are strict. Use `assigneeId` from `codecks_user_lookup`; never pass display-name fields such as `assignee` and assume they will be ignored.
 - Do not launch parallel full-account or high-`scanLimit` searches. Account scans are concurrency-bounded; prefer the bulk-create shared duplicate scan or narrow sequential searches.
+- For bulk create, `duplicatePolicy=required` blocks incomplete duplicate evidence; apply defaults to `best_effort` only for a scan-limit hit and reports that limitation. Explicit `skip` performs no duplicate discovery. Cancellation, timeout, queue rejection, and API failures always remain blocking. `duplicateLimit=0` hides candidate rows but does not skip discovery. Parent-local required duplicate matching is unavailable.
 - Treat `complete=false`, cancellation, timeout, or queue rejection as incomplete evidence, never as a definitive empty result. Follow the structured recovery hint.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
@@ -108,6 +109,7 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Cards created without a deck are Private cards. They are allowed, but must have an owner/assignee; inform the user after creation when no deck was assigned.
 - `codecks_card_create.title` and `codecks_card_update.title` set that first-line title. Mutation titles, bodies, tags, and Deck descriptions reject U+FFFD replacement characters and unpaired UTF-16 surrogates at the tool boundary; this does not diagnose upstream console/file encoding.
 - `codecks_card_create.content` and `codecks_card_update.content` should normally be body content only.
+- Bulk-create dispatch identities provide immediate `$reference`/card-ID facts but are not proof of every persisted field. Default `verification=none` does zero read-backs; request `verification=identity` only when identity reconciliation is meaningful. It performs at most one exact read per identifiable create and never retries a create.
 - In user-visible text fields, write card references as plain `$123` tokens.
 - Do not surround `$123` card references with formatting wrappers such as `**`, `*`, `_`, `~~`, backticks, or code fences.
 - Markdown structure like `# $123` and `* $123` is valid because the `$123` token itself stays plain.

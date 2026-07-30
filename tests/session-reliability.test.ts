@@ -76,8 +76,8 @@ try {
     assert.equal(preview.ok, true);
     assert.equal(preview.data.count, count);
     assert.equal(preview.data.scan.complete, true);
-    assert.equal(preview.data.scan.requestsAttempted, 1);
-    assert.equal(scans, 1, `${count}-record preview must use one shared card scan`);
+    assert.equal(preview.data.scan.requestsAttempted, count <= 4 ? count : 1);
+    assert.equal(scans, count <= 4 ? count : 1, `${count}-record preview must stay within the title-first request budget`);
   }
 
   let appliedCreate: Json | undefined;
@@ -102,7 +102,7 @@ try {
   }) as typeof fetch;
   const createArgs = { cards: [{ title: "Parity", content: "Body", assigneeId: USER_ID, effort: 3, priority: "high", tags: ["alpha"], putOnHand: true }], format: "json" };
   const preview = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: true }));
-  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false }));
+  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false, outputMode: "detailed" }));
   assert.equal(preview.ok, true);
   assert.equal(apply.ok, true);
   assert.equal(apply.data.results[0].status, "created");
@@ -113,7 +113,7 @@ try {
   assert.equal(preview.data.results[0].priority.code, appliedCreate!.priority);
   assert.equal(preview.data.results[0].content, appliedCreate!.content);
   assert.equal(preview.data.results[0].putOnHand, appliedCreate!.putOnHand);
-  assert.equal(cardScans, 3, "preview and apply perform one shared duplicate scan each; apply verifies its dispatch identity once");
+  assert.equal(cardScans, 2, "preview and apply use bounded duplicate discovery; default apply performs no identity read");
   assert.deepEqual(apply.data.results[0].dispatchIdentity, {
     cardId: CARD_ID,
     accountSeq: 2481,
@@ -125,11 +125,8 @@ try {
     ...apply.data.results[0].dispatchIdentity,
     title: null,
   });
-  assert.equal(apply.data.results[0].verificationState, "persisted_verified");
-  assert.deepEqual(apply.data.results[0].persistedVerified, {
-    ...apply.data.results[0].dispatchIdentity,
-    title: "Parity",
-  });
+  assert.equal(apply.data.results[0].verificationState, "not_requested");
+  assert.equal(apply.data.results[0].persistedVerified, null);
 
   let mutationAttempts = 0;
   globalThis.fetch = (async (input, init) => {

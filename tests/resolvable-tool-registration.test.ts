@@ -82,7 +82,7 @@ assertProperties("codecks_milestone_update", ["milestoneId", "description", "cle
 assertRequired("codecks_milestone_update", ["milestoneId"]);
 assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "clearRun", "format"]);
 assertRequired("codecks_card_update_run", ["cardId"]);
-assertProperties("codecks_card_bulk_create", ["cards", "deck", "milestone", "parentCardId", "dryRun", "duplicateLimit", "continueOnError", "format"]);
+assertProperties("codecks_card_bulk_create", ["cards", "deck", "milestone", "parentCardId", "dryRun", "duplicateLimit", "duplicateScanLimit", "duplicatePolicy", "verification", "outputMode", "continueOnError", "format"]);
 assertRequired("codecks_card_bulk_create", ["cards"]);
 assertProperties("codecks_card_bulk_update", ["updates", "dryRun", "continueOnError", "format"]);
 assertRequired("codecks_card_bulk_update", ["updates"]);
