@@ -52,7 +52,8 @@
   },
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts && tsx tests/codecks-dynamic-tool-loading.test.ts && tsx tests/debug-tool-loading.test.ts && tsx tests/codecks-mutation-dispatch.test.ts && tsx tests/session-reliability.test.ts && tsx tests/backlog-hardening.test.ts && tsx tests/package-validation.test.ts",
+    "test:unit": "tsx tests/velocity-report.test.ts && tsx tests/vision-board-tool.test.ts && tsx tests/card-reference-normalization.test.ts && tsx tests/done-timeframe-validation.test.ts && tsx tests/card-get-tool.test.ts && tsx tests/card-search-preview.test.ts && tsx tests/resolvable-tool-registration.test.ts && tsx tests/schema-lifecycle.test.ts && tsx tests/cdx-tool-updates.test.ts && tsx tests/tool-rendering.test.ts && tsx tests/codecks-dynamic-tool-loading.test.ts && tsx tests/debug-tool-loading.test.ts && tsx tests/codecks-mutation-dispatch.test.ts && tsx tests/session-reliability.test.ts && tsx tests/bulk-create-characterization.test.ts && tsx tests/backlog-hardening.test.ts && tsx tests/package-validation.test.ts",
+    "test:characterization": "tsx tests/bulk-create-characterization.test.ts",
     "test:integration": "tsx tests/codecks-tool-validation.ts",
     "test:all": "npm run test:unit && npm run test:integration",
     "pack:dry-run": "npm pack --dry-run --json",

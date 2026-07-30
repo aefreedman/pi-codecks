@@ -22,6 +22,7 @@ Registered default tools:
 - `codecks_card_bulk_create`
 - `codecks_card_bulk_update`
 - `codecks_card_set_parent`
+- `codecks_deck_get`
 - `codecks_deck_update`
 - `codecks_milestone_list`
 - `codecks_milestone_get`

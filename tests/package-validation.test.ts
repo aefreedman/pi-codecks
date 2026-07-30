@@ -41,6 +41,7 @@ assert.doesNotMatch(packageJson.scripts?.test ?? "", /integration|CODECKS_/i);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-tool-validation|CODECKS_/i);
 assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manifest/);
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
+assert.match(packageJson.scripts?.["test:characterization"] ?? "", /bulk-create-characterization/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
@@ -120,6 +121,7 @@ const mutationRuntimeSurface = [
 assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm|tracker\.codecks|guidance\/codecks\/work|workflow preflight/i);
 
 assert.match(readme, /pi install npm:@aefree\/pi-codecks/);
+assert.match(readme, /`codecks_deck_get`/);
 assert.match(readme, /npm ci && npm test/);
 assert.match(testing, /credential-free/i);
 assert.match(testing, /npm run test:integration/);
