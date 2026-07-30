@@ -91,10 +91,10 @@ const measure = async (count: number, dryRun: boolean, options: Json): Promise<M
 };
 
 const expectedDefaultApply = new Map([
-  [1, { loggedInUser: 1, duplicateScans: 1, creates: 1, identityReads: 0, serializedBytes: 1170 }],
-  [4, { loggedInUser: 1, duplicateScans: 4, creates: 4, identityReads: 0, serializedBytes: 1962 }],
-  [34, { loggedInUser: 1, duplicateScans: 1, creates: 34, identityReads: 0, serializedBytes: 10062 }],
-  [100, { loggedInUser: 1, duplicateScans: 1, creates: 100, identityReads: 0, serializedBytes: 27623 }],
+  [1, { loggedInUser: 1, duplicateScans: 1, creates: 1, identityReads: 0, serializedBytes: 1566 }],
+  [4, { loggedInUser: 1, duplicateScans: 4, creates: 4, identityReads: 0, serializedBytes: 2496 }],
+  [34, { loggedInUser: 1, duplicateScans: 1, creates: 34, identityReads: 0, serializedBytes: 11946 }],
+  [100, { loggedInUser: 1, duplicateScans: 1, creates: 100, identityReads: 0, serializedBytes: 32543 }],
 ]);
 
 console.log("cards,historical_preview_scan,historical_apply_scan,historical_apply_identity_reads,default_apply_scan,default_apply_identity_reads,default_apply_bytes");

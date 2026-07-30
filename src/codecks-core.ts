@@ -2281,6 +2281,25 @@ const fetchCardById = async (
         ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
 };
 
+const fetchCardByAccountSeqExactlyOnce = async (seq: number, fields: Array<string | Record<string, unknown>>): Promise<CodecksEntity | undefined> =>
+{
+    const query = { _root: [{ account: [{ [relationQuery("cards", { accountSeq: [seq] })]: fields }] }] };
+    return extractCardsFromPayload(await runExactReadQuery(query), "cards")[0];
+};
+
+const fetchCardByIdExactlyOnce = async (cardId: string, fields: Array<string | Record<string, unknown>>): Promise<CodecksEntity | undefined> =>
+{
+    const idLiteral = formatIdForQuery(cardId);
+    const query = { [`card(${idLiteral})`]: fields };
+    const payload = await runExactReadQuery(query);
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const cardMap = getEntityMap(data, "card");
+    const lookupKey = `card(${idLiteral})`;
+    return cardMap[String(cardId)]
+        ?? resolveFromMap(data ? data[lookupKey] : undefined, cardMap)
+        ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
+};
+
 const statusUpdateCardFields = [
     "cardId",
     "accountSeq",
@@ -3145,7 +3164,7 @@ const formatRootSemanticError = (errors: unknown[]): string =>
     return `Codecks API semantic error: ${messages.join("; ") || "Codecks returned a nonempty root errors array."}`;
 };
 
-type CodecksRequestRetryPolicy = "read-only" | "non-idempotent-mutation";
+type CodecksRequestRetryPolicy = "read-only" | "exact-read" | "non-idempotent-mutation";
 
 const requestJson = async (
     path: string,
@@ -3292,6 +3311,17 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
         method: "POST",
         body: JSON.stringify({ query }),
     }, config, "read-only");
+};
+
+// Identity verification is diagnostic, so it must make one physical request rather
+// than inheriting normal read retries.
+const runExactReadQuery = async (query: Record<string, unknown>): Promise<unknown> =>
+{
+    const config = getConfig();
+    return requestJson("/", {
+        method: "POST",
+        body: JSON.stringify({ query }),
+    }, config, "exact-read");
 };
 
 const runDispatch = async (
@@ -7469,8 +7499,9 @@ type DuplicatePolicy = "required" | "best_effort" | "skip";
 type BulkCreateOutputMode = "compact" | "detailed";
 type BulkCreateVerification = "none" | "identity";
 
-// Title-contains is the narrow, portable discovery primitive. Four title probes are
-// intentionally the request budget: larger title sets use one bounded account fallback.
+// Title-contains is the narrow, portable discovery primitive. Four logical title
+// probes are allowed; each probe can paginate and therefore use multiple HTTP requests.
+// Larger title sets use one bounded account fallback.
 const BULK_CREATE_TITLE_REQUEST_BUDGET = 4;
 const normalizeDuplicateTitle = (title: string): string => title.trim().toLocaleLowerCase();
 const recordMatchesDuplicate = (card: CodecksEntity, record: NormalizedBulkCreateRecord): boolean =>
@@ -7481,91 +7512,88 @@ const recordMatchesDuplicate = (card: CodecksEntity, record: NormalizedBulkCreat
 const emptyDuplicateCandidates = (records: NormalizedBulkCreateRecord[]): Map<number, Record<string, unknown>[]> =>
     new Map(records.map((record) => [record.index, []]));
 
+const semanticTitleFilterRejection = (error: unknown): boolean =>
+{
+    // Only a server-declared rejection of this narrow filter can widen discovery.
+    // Transport, auth, rate, cancellation, timeout, and queue errors stay blocking.
+    if (error instanceof CodecksOperationError) return false;
+    const message = toErrorMessage(error);
+    return /^Codecks API semantic error:/i.test(message)
+        && /\btitle\b/i.test(message)
+        && /\b(?:contains|filter|operator)\b/i.test(message)
+        && /\b(?:unsupported|unavailable|invalid|not allowed|rejected)\b/i.test(message);
+};
+
+const scanStageMetadata = (stage: "title_contains" | "account_fallback", scans: PagedCardScanResult[], probesAttempted?: number) => ({
+    stage,
+    ...(probesAttempted === undefined ? {} : { probesAttempted }),
+    complete: scans.every((scan) => scan.complete),
+    scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
+    requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
+});
+
 const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number, policy: DuplicatePolicy) =>
 {
-    if (policy === "skip")
-    {
-        return {
-            candidates: emptyDuplicateCandidates(records),
-            metadata: {
-                strategy: "skipped",
-                credentialVisibleScope: "not_scanned",
-                complete: false,
-                scanned: 0,
-                scanLimit,
-                requestsAttempted: 0,
-                queueWaitMs: 0,
-                elapsedMs: 0,
-                bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, scanLimit, pageSize: Math.min(scanLimit, 500) },
-                fallback: null,
-                policyOutcome: "skipped_by_request",
-            },
-        };
-    }
+    const bounds = { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) };
+    if (policy === "skip") return {
+        candidates: emptyDuplicateCandidates(records),
+        metadata: { strategy: "skipped", credentialVisibleScope: "not_scanned", complete: false, scanned: 0, scanLimit, requestsAttempted: 0, queueWaitMs: 0, elapsedMs: 0, bounds, stages: [], fallback: null, policyOutcome: "skipped_by_request" },
+    };
 
     const titles = [...new Set(records.map((record) => normalizeDuplicateTitle(record.title)))];
-    let scans: PagedCardScanResult[] = [];
-    let strategy = "title_contains";
+    let titleScans: PagedCardScanResult[] = [];
+    let fallbackScan: PagedCardScanResult | null = null;
     let fallback: string | null = null;
     if (titles.length <= BULK_CREATE_TITLE_REQUEST_BUDGET)
     {
         try
         {
-            scans = await Promise.all(titles.map((title) => fetchPagedCards({
-                filters: { title: { op: "contains", value: title } },
-                fields: cardPlanningFields,
-                scanLimit,
-                pageSize: Math.min(scanLimit, 500),
+            titleScans = await Promise.all(titles.map((title) => fetchPagedCards({
+                filters: { title: { op: "contains", value: title } }, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500),
             })));
         }
         catch (error)
         {
-            // Infrastructure failure is not evidence and must remain blocking under
-            // every policy. Only a semantic narrow-filter rejection may use fallback.
-            const message = toErrorMessage(error);
-            if (error instanceof CodecksOperationError || /\b(?:5\d\d|timeout|timed out|network|socket|connection|econn|epipe|fetch failed)\b/i.test(message)) throw error;
-            fallback = "title_contains_unavailable";
-            scans = [];
+            if (!semanticTitleFilterRejection(error)) throw error;
+            fallback = "title_contains_semantically_rejected";
+            titleScans = [];
         }
     }
-    else
-    {
-        fallback = "title_request_budget_exceeded";
-    }
+    else fallback = "title_request_budget_exceeded";
 
-    if (scans.length === 0 || scans.some((scan) => !scan.complete))
+    if (titleScans.length === 0 || titleScans.some((scan) => !scan.complete))
     {
         fallback ??= "title_scan_incomplete";
-        strategy = "account_fallback";
-        scans = [await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) })];
+        fallbackScan = await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) });
     }
 
-    const cards = scans.flatMap((scan) => scan.cards);
+    const scans = [...titleScans, ...(fallbackScan ? [fallbackScan] : [])];
+    // Accessible archived cards are valid duplicate evidence; deleted cards are not.
+    // Inaccessible Private cards cannot be returned by this credential-visible scan.
+    const cards = scans.flatMap((scan) => scan.cards)
+        .filter((card) => String(card.visibility ?? "").toLowerCase() !== "deleted");
     const candidates = emptyDuplicateCandidates(records);
-    if (duplicateLimit > 0)
-    {
-        for (const record of records)
-        {
-            candidates.set(record.index, cards
-                .filter((card) => recordMatchesDuplicate(card, record))
-                .slice(0, duplicateLimit)
-                .map((card) => normalizeCardSearchSummary(card)));
-        }
-    }
-    const complete = scans.every((scan) => scan.complete);
-    const incompleteOnlyByBound = !complete && scans.every((scan) => scan.scanLimitReached);
+    if (duplicateLimit > 0) for (const record of records) candidates.set(record.index, cards
+        .filter((card) => recordMatchesDuplicate(card, record)).slice(0, duplicateLimit).map((card) => normalizeCardSearchSummary(card)));
+    const complete = fallbackScan ? fallbackScan.complete : titleScans.every((scan) => scan.complete);
+    const incompleteOnlyByBound = !complete && !!fallbackScan && fallbackScan.scanLimitReached;
+    const stages = [
+        ...(titleScans.length > 0 ? [scanStageMetadata("title_contains", titleScans, titles.length)] : []),
+        ...(fallbackScan ? [scanStageMetadata("account_fallback", [fallbackScan])] : []),
+    ];
     return {
         candidates,
         metadata: {
-            strategy,
-            credentialVisibleScope: "cards accessible to the configured credential at scan time",
+            strategy: fallbackScan ? "account_fallback" : "title_contains",
+            credentialVisibleScope: "cards accessible to the configured credential at scan time (including archived cards when returned; excluding deleted and inaccessible Private cards)",
             complete,
             scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
             scanLimit,
             requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
             queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
             elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
-            bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, scanLimit, pageSize: Math.min(scanLimit, 500) },
+            bounds,
+            stages,
             fallback,
             policyOutcome: complete ? "complete" : (incompleteOnlyByBound ? "incomplete_scan_limit" : "incomplete"),
         },
@@ -7649,21 +7677,25 @@ const publicCardIdentity = (identity: Pick<DispatchCardIdentity, "cardId" | "acc
 const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<{ state: "identity_verified" | "not_found" | "mismatch"; observed?: Record<string, unknown>; checkedFields: string[] }> =>
 {
     const card = identity.accountSeq !== null
-        ? await fetchCardByAccountSeq(identity.accountSeq, ["cardId", "accountSeq", "title"])
+        ? await fetchCardByAccountSeqExactlyOnce(identity.accountSeq, ["cardId", "accountSeq", "title"])
         : identity.cardId
-            ? await fetchCardById(identity.cardId, ["cardId", "accountSeq", "title"])
+            ? await fetchCardByIdExactlyOnce(identity.cardId, ["cardId", "accountSeq", "title"])
             : undefined;
-    if (!card) return { state: "not_found", checkedFields: ["cardId", "accountSeq"] };
+    // No persisted entity means no identity component was compared.
+    if (!card) return { state: "not_found", checkedFields: [] };
 
     const persistedIdentity: DispatchCardIdentity = {
         cardId: card.cardId === undefined || card.cardId === null ? null : String(card.cardId),
         accountSeq: parseCardAccountSeq(card.accountSeq),
         title: typeof card.title === "string" ? card.title : null,
     };
+    const checkedFields: string[] = [];
+    if (identity.cardId) checkedFields.push("cardId");
+    if (identity.accountSeq !== null) checkedFields.push("accountSeq");
     const observed = { ...publicCardIdentity(persistedIdentity), title: persistedIdentity.title };
-    const mismatch = (identity.cardId && persistedIdentity.cardId !== identity.cardId)
+    const mismatch = (identity.cardId !== null && persistedIdentity.cardId !== identity.cardId)
         || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq);
-    return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields: ["cardId", "accountSeq"] };
+    return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields };
 };
 
 const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
@@ -7714,6 +7746,14 @@ const compactBulkCreateRecord = (entry: Record<string, unknown>): Record<string,
     if (identity?.cardId) result.cardId = identity.cardId;
     if (identity?.accountSeqRef) result.accountSeqRef = identity.accountSeqRef;
     if (entry.status === "indeterminate") result.actionKey = entry.actionKey;
+    if (entry.verificationState) result.verificationState = entry.verificationState;
+    if (Array.isArray(entry.verificationCheckedFields)) result.verificationCheckedFields = entry.verificationCheckedFields;
+    if (entry.verificationObservedIdentity) result.verificationObservedIdentity = entry.verificationObservedIdentity;
+    if (entry.verificationWarning) result.verificationWarning = String(entry.verificationWarning).slice(0, 240);
+    if (entry.verificationError && isRecord(entry.verificationError)) result.verificationError = {
+        category: entry.verificationError.category,
+        message: String(entry.verificationError.message ?? "Verification read failed.").slice(0, 240),
+    };
     if (entry.error) result.error = entry.error;
     if (entry.reconciliation) result.reconciliation = entry.reconciliation;
     return result;
@@ -7724,7 +7764,8 @@ const boundedBulkWarnings = (metadata: Record<string, unknown>, policy: Duplicat
     const warnings: string[] = [];
     if (policy === "skip") warnings.push("Duplicate discovery was skipped by explicit request.");
     else if (metadata.complete === false) warnings.push("Duplicate discovery is incomplete; no-match rows are not definitive evidence.");
-    if (typeof metadata.fallback === "string") warnings.push(`Duplicate discovery used account fallback: ${metadata.fallback}.`);
+    if (metadata.policyOutcome === "parent_local_required_unavailable") warnings.push("Parent-local duplicate matching is unavailable; this is a preview only and no create was dispatched.");
+    if (typeof metadata.fallback === "string" && metadata.fallback !== "parent_local_required_unavailable") warnings.push(`Duplicate discovery used account fallback: ${metadata.fallback}.`);
     return warnings.slice(0, 3);
 };
 
@@ -7853,7 +7894,8 @@ export const card_bulk_create = tool({
             });
         }
 
-        if (duplicatePolicy === "required" && normalized.some((record) => record.parent))
+        const parentScopedRequiredUnavailable = duplicatePolicy === "required" && normalized.some((record) => record.parent);
+        if (parentScopedRequiredUnavailable && !dryRun)
         {
             return toStructuredErrorResult(format, "card-bulk-create", "conflict", "duplicatePolicy=required is unavailable for parent-scoped creates until parent-local duplicate matching is supported.", {
                 duplicatePolicy,
@@ -7863,7 +7905,28 @@ export const card_bulk_create = tool({
         }
 
         let duplicateScan: Awaited<ReturnType<typeof scanBulkCreateDuplicates>>;
-        try
+        if (parentScopedRequiredUnavailable)
+        {
+            const scanLimit = args.duplicateScanLimit ?? 3000;
+            duplicateScan = {
+                candidates: emptyDuplicateCandidates(normalized),
+                metadata: {
+                    strategy: "parent_local_unavailable",
+                    credentialVisibleScope: "not_scanned",
+                    complete: false,
+                    scanned: 0,
+                    scanLimit,
+                    requestsAttempted: 0,
+                    queueWaitMs: 0,
+                    elapsedMs: 0,
+                    bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) },
+                    stages: [],
+                    fallback: "parent_local_required_unavailable",
+                    policyOutcome: "parent_local_required_unavailable",
+                },
+            };
+        }
+        else try
         {
             duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000, duplicatePolicy);
         }
@@ -7878,7 +7941,7 @@ export const card_bulk_create = tool({
             );
         }
 
-        duplicateScan.metadata.policyOutcome = duplicatePolicy === "skip"
+        if (!parentScopedRequiredUnavailable) duplicateScan.metadata.policyOutcome = duplicatePolicy === "skip"
             ? "skipped_by_request"
             : duplicateScan.metadata.complete
                 ? "complete"
@@ -7905,6 +7968,7 @@ export const card_bulk_create = tool({
                     : "scan_incomplete",
                 certainty: "not_dispatched",
                 verificationState: dryRun ? "not_applicable" : (verification === "none" ? "not_requested" : "not_identifiable"),
+                ...(verification === "identity" ? { verificationCheckedFields: [] } : {}),
             };
         });
 
@@ -7935,7 +7999,8 @@ export const card_bulk_create = tool({
                                 results[record.index].verificationState = identityCheck.state;
                                 results[record.index].verificationCheckedFields = identityCheck.checkedFields;
                                 if (identityCheck.state === "not_found") results[record.index].verificationWarning = "Identity was not found after one read; this can be eventual-consistency delay, not a failed create.";
-                                if (identityCheck.observed) results[record.index].persistedVerified = identityCheck.observed;
+                                if (identityCheck.observed) results[record.index].verificationObservedIdentity = identityCheck.observed;
+                                if (identityCheck.state === "identity_verified" && identityCheck.observed) results[record.index].persistedVerified = identityCheck.observed;
                             }
                             catch (error)
                             {
@@ -8003,7 +8068,15 @@ export const card_bulk_create = tool({
                 const detail = entry.status === "indeterminate"
                     ? ` — reconcile; action ${entry.actionKey}`
                     : entry.error && isRecord(entry.error) ? ` — ${String(entry.error.message ?? "error")}` : "";
-                return `- #${Number(entry.index) + 1}${entry.correlationKey ? ` [${entry.correlationKey}]` : ""} ${entry.status}/${entry.certainty}${reference}${cardId}${detail}`;
+                const verificationState = entry.verificationState ? `; verification ${entry.verificationState}` : "";
+                const checkedFields = Array.isArray(entry.verificationCheckedFields) && entry.verificationCheckedFields.length > 0
+                    ? ` (${entry.verificationCheckedFields.join(", ")})` : "";
+                const verificationObserved = isRecord(entry.verificationObservedIdentity)
+                    ? `; observed ${String(entry.verificationObservedIdentity.cardRef ?? entry.verificationObservedIdentity.cardId ?? "identity")}` : "";
+                const verificationDetail = entry.verificationWarning
+                    ? `; ${String(entry.verificationWarning).slice(0, 240)}`
+                    : isRecord(entry.verificationError) ? `; verification read error: ${String(entry.verificationError.message ?? "failed").slice(0, 240)}` : "";
+                return `- #${Number(entry.index) + 1}${entry.correlationKey ? ` [${entry.correlationKey}]` : ""} ${entry.status}/${entry.certainty}${reference}${cardId}${verificationState}${checkedFields}${verificationObserved}${detail}${verificationDetail}`;
             }),
         ];
         const warnings = boundedBulkWarnings(duplicateScan.metadata, duplicatePolicy);

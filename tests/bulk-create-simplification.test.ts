@@ -118,11 +118,16 @@ try {
     }
     return response(emptyCards(key!));
   }) as typeof fetch;
-  const checked = parse(await invoke({ cards: [{ title: "Check" }], dryRun: false, verification: "identity", outputMode: "detailed", format: "json" }));
+  const checked = parse(await invoke({ cards: [{ title: "Check" }], dryRun: false, verification: "identity", format: "json" }));
   assert.equal(identityReads, 1);
   assert.equal(checked.data.results[0].status, "created");
+  assert.equal(checked.data.results[0].certainty, "dispatch_returned");
   assert.equal(checked.data.results[0].verificationState, "mismatch");
   assert.deepEqual(checked.data.results[0].verificationCheckedFields, ["cardId", "accountSeq"]);
+  assert.equal(checked.data.results[0].persistedVerified, undefined);
+  assert.equal(checked.data.results[0].verificationObservedIdentity.cardId, "other");
+  const mismatchText = String(await invoke({ cards: [{ title: "Check text" }], dryRun: false, verification: "identity" }));
+  assert.match(mismatchText, /verification mismatch \(cardId, accountSeq\); observed \$/);
 
   // An unidentifiable dispatch does not trigger a query. A one-shot absent read is
   // explicitly an eventual-consistency possibility, not a failed create.
@@ -137,9 +142,12 @@ try {
     if (/"accountSeq":\[/.test(key!)) identityReads += 1;
     return response(emptyCards(key!));
   }) as typeof fetch;
-  const unidentified = parse(await invoke({ cards: [{ title: "No identity" }], dryRun: false, verification: "identity", outputMode: "detailed", format: "json" }));
+  const unidentified = parse(await invoke({ cards: [{ title: "No identity" }], dryRun: false, verification: "identity", format: "json" }));
   assert.equal(unidentified.data.results[0].verificationState, "not_identifiable");
+  assert.equal(unidentified.data.results[0].certainty, "dispatch_returned");
   assert.equal(identityReads, 0);
+  const unidentifiedText = String(await invoke({ cards: [{ title: "No identity text" }], dryRun: false, verification: "identity" }));
+  assert.match(unidentifiedText, /verification not_identifiable/);
 
   identityReads = 0;
   globalThis.fetch = (async (input, init) => {
@@ -152,12 +160,14 @@ try {
     if (/"accountSeq":\[/.test(key!)) identityReads += 1;
     return response(emptyCards(key!));
   }) as typeof fetch;
-  const absent = parse(await invoke({ cards: [{ title: "Eventually visible" }], dryRun: false, verification: "identity", outputMode: "detailed", format: "json" }));
+  const absent = parse(await invoke({ cards: [{ title: "Eventually visible" }], dryRun: false, verification: "identity", format: "json" }));
   assert.equal(identityReads, 1);
   assert.equal(absent.data.results[0].status, "created");
   assert.equal(absent.data.results[0].verificationState, "not_found");
+  assert.deepEqual(absent.data.results[0].verificationCheckedFields, []);
   assert.match(absent.data.results[0].verificationWarning, /eventual-consistency/i);
 
+  let failedReadRequests = 0;
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.includes("/dispatch/cards/create")) return response({ payload: { id: CARD, accountSeq: 81 } });
@@ -165,12 +175,179 @@ try {
     if (JSON.stringify(query).includes("loggedInUser")) return response(login());
     const key = relationKey(query, "cards");
     assert.ok(key);
-    if (/"accountSeq":\[/.test(key!)) return new Response("unavailable", { status: 503, statusText: "Unavailable" });
+    if (/"accountSeq":\[/.test(key!)) { failedReadRequests += 1; return new Response("unavailable", { status: 503, statusText: "Unavailable" }); }
     return response(emptyCards(key!));
   }) as typeof fetch;
-  const readFailure = parse(await invoke({ cards: [{ title: "Read failure" }], dryRun: false, verification: "identity", outputMode: "detailed", format: "json" }));
+  const readFailure = parse(await invoke({ cards: [{ title: "Read failure" }], dryRun: false, verification: "identity", format: "json" }));
+  assert.equal(failedReadRequests, 1, "verification must not retry a 503 read");
   assert.equal(readFailure.data.results[0].status, "created");
   assert.equal(readFailure.data.results[0].verificationState, "read_failed");
+  assert.equal(readFailure.data.results[0].verificationError.category, "api_error");
+  const readFailureText = String(await invoke({ cards: [{ title: "Read failure text" }], dryRun: false, verification: "identity" }));
+  assert.match(readFailureText, /verification read_failed; verification read error: Codecks API error 503/);
+
+  let timeoutReadRequests = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/dispatch/cards/create")) return response({ payload: { id: CARD, accountSeq: 81 } });
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    if (/"accountSeq":\[/.test(key!)) { timeoutReadRequests += 1; throw new DOMException("timeout", "AbortError"); }
+    return response(emptyCards(key!));
+  }) as typeof fetch;
+  const timeoutFailure = parse(await invoke({ cards: [{ title: "Timeout failure" }], dryRun: false, verification: "identity", format: "json" }));
+  assert.equal(timeoutReadRequests, 1, "verification must not retry a timeout read");
+  assert.equal(timeoutFailure.data.results[0].verificationState, "read_failed");
+  assert.equal(timeoutFailure.data.results[0].verificationError.category, "request_timeout");
+
+  // Compact and text results retain a verified identity outcome without exposing a
+  // normalized payload. Detailed compatibility persistence is reserved for verified identities.
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/dispatch/cards/create")) return response({ payload: { id: CARD, accountSeq: 81 } });
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    if (/"accountSeq":\[/.test(key!)) return response({ data: { _root: { account: ACCOUNT }, account: { [ACCOUNT]: { id: ACCOUNT, [key!]: [CARD] } }, card: { [CARD]: { cardId: CARD, accountSeq: 81, title: "Verified" } } } });
+    return response(emptyCards(key!));
+  }) as typeof fetch;
+  const verified = parse(await invoke({ cards: [{ title: "Verified" }], dryRun: false, verification: "identity", format: "json" }));
+  assert.equal(verified.data.results[0].verificationState, "identity_verified");
+  assert.deepEqual(verified.data.results[0].verificationCheckedFields, ["cardId", "accountSeq"]);
+  assert.equal(verified.data.results[0].verificationObservedIdentity.cardId, CARD);
+  const verifiedDetailed = parse(await invoke({ cards: [{ title: "Verified detailed" }], dryRun: false, verification: "identity", outputMode: "detailed", format: "json" }));
+  assert.equal(verifiedDetailed.data.results[0].persistedVerified.cardId, CARD);
+  const verifiedText = String(await invoke({ cards: [{ title: "Verified text" }], dryRun: false, verification: "identity" }));
+  assert.match(verifiedText, /verification identity_verified \(cardId, accountSeq\); observed \$13w/);
+
+  // A card-ID-only dispatch compares only cardId and surfaces a neutral mismatch observation.
+  let cardIdReads = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/dispatch/cards/create")) return response({ payload: { id: CARD } });
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const direct = Object.keys(query).find((key) => key.startsWith("card("));
+    if (direct) { cardIdReads += 1; return response({ data: { card: { [CARD]: { cardId: "other", accountSeq: 82, title: "Other" } } } }); }
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    return response(emptyCards(key!));
+  }) as typeof fetch;
+  const cardOnlyMismatch = parse(await invoke({ cards: [{ title: "Card only" }], dryRun: false, verification: "identity", format: "json" }));
+  assert.equal(cardIdReads, 1);
+  assert.equal(cardOnlyMismatch.data.results[0].verificationState, "mismatch");
+  assert.deepEqual(cardOnlyMismatch.data.results[0].verificationCheckedFields, ["cardId"]);
+  assert.equal(cardOnlyMismatch.data.results[0].verificationObservedIdentity.accountSeq, 82);
+
+  // An account-sequence-only dispatch keeps a missing read unverified rather than
+  // claiming either identity field was checked. Text exposes the outcome and warning.
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/dispatch/cards/create")) return response({ payload: { accountSeq: 81 } });
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    return response(emptyCards(key!));
+  }) as typeof fetch;
+  const accountOnlyNotFound = parse(await invoke({ cards: [{ title: "Sequence only" }], dryRun: false, verification: "identity", format: "json" }));
+  assert.equal(accountOnlyNotFound.data.results[0].verificationState, "not_found");
+  assert.deepEqual(accountOnlyNotFound.data.results[0].verificationCheckedFields, []);
+  const notFoundText = String(await invoke({ cards: [{ title: "Sequence only text" }], dryRun: false, verification: "identity" }));
+  assert.match(notFoundText, /verification not_found; Identity was not found after one read; this can be eventual-consistency delay/);
+
+  // Probe/fallback metadata preserves both stages instead of replacing title-probe accounting.
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    const titleProbe = /"title"/.test(key!);
+    const ids = titleProbe ? ["probe-a", "probe-b"] : ["fallback"];
+    return response({ data: { _root: { account: ACCOUNT }, account: { [ACCOUNT]: { id: ACCOUNT, [key!]: ids } }, card: {} } });
+  }) as typeof fetch;
+  const oneProbeFallback = parse(await invoke({ cards: [{ title: "One probe" }], dryRun: true, duplicateScanLimit: 2, format: "json" }));
+  assert.equal(oneProbeFallback.data.scan.requestsAttempted, 2);
+  assert.equal(oneProbeFallback.data.scan.scanned, 3);
+  assert.deepEqual(oneProbeFallback.data.scan.stages.map((stage: Json) => stage.stage), ["title_contains", "account_fallback"]);
+  assert.equal(oneProbeFallback.data.scan.stages[0].probesAttempted, 1);
+
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    const titleProbe = /"title"/.test(key!);
+    const ids = titleProbe ? ["probe"] : [];
+    return response({ data: { _root: { account: ACCOUNT }, account: { [ACCOUNT]: { id: ACCOUNT, [key!]: ids } }, card: {} } });
+  }) as typeof fetch;
+  const fourProbeFallback = parse(await invoke({ cards: ["A", "B", "C", "D"].map((title) => ({ title })), dryRun: true, duplicateScanLimit: 1, format: "json" }));
+  assert.equal(fourProbeFallback.data.scan.requestsAttempted, 5);
+  assert.equal(fourProbeFallback.data.scan.scanned, 4);
+  assert.equal(fourProbeFallback.data.scan.stages[0].probesAttempted, 4);
+  assert.equal(fourProbeFallback.data.scan.stages[1].requestsAttempted, 1);
+
+  let pagedTitleRequests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    pagedTitleRequests += 1;
+    const ids = pagedTitleRequests === 1 ? Array.from({ length: 500 }, (_, index) => `page-${index}`) : [];
+    return response({ data: { _root: { account: ACCOUNT }, account: { [ACCOUNT]: { id: ACCOUNT, [key!]: ids } }, card: {} } });
+  }) as typeof fetch;
+  const pagedProbe = parse(await invoke({ cards: [{ title: "Paged" }], dryRun: true, duplicateScanLimit: 501, format: "json" }));
+  assert.equal(pagedProbe.data.scan.requestsAttempted, 2, "one logical title probe may paginate");
+  assert.equal(pagedProbe.data.scan.stages.length, 1);
+  assert.equal(pagedProbe.data.scan.stages[0].probesAttempted, 1);
+  assert.equal(pagedProbe.data.scan.bounds.titleRequestBudgetUnit, "logical_title_probes");
+
+  // Accessible archived cards remain duplicate evidence, while deleted cards do not.
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    return response({ data: {
+      _root: { account: ACCOUNT }, account: { [ACCOUNT]: { id: ACCOUNT, [key!]: ["archived", "deleted"] } },
+      card: {
+        archived: { cardId: "archived", accountSeq: 82, title: "Visibility check", visibility: "archived" },
+        deleted: { cardId: "deleted", accountSeq: 83, title: "Visibility check", visibility: "deleted" },
+      },
+    } });
+  }) as typeof fetch;
+  const visibilityEvidence = parse(await invoke({ cards: [{ title: "Visibility check" }], dryRun: true, format: "json" }));
+  assert.equal(visibilityEvidence.data.results[0].duplicateCandidates.length, 1);
+  assert.equal(visibilityEvidence.data.results[0].duplicateCandidates[0].visibility, "archived");
+
+  // Parent-scoped required dry-runs stay useful normalized previews while the same
+  // required apply remains blocked and neither path dispatches a create.
+  let parentCreates = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.includes("/dispatch/cards/create")) { parentCreates += 1; return response({}); }
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const direct = Object.keys(query).find((key) => key.startsWith("card("));
+    assert.ok(direct);
+    return response({ data: { card: { [CARD]: { cardId: CARD, accountSeq: 81, title: "Parent" } } } });
+  }) as typeof fetch;
+  const parentPreview = parse(await invoke({ cards: [{ title: "Child", parentCardId: CARD }], format: "json" }));
+  assert.equal(parentPreview.ok, true);
+  assert.equal(parentPreview.data.outputMode, "detailed");
+  assert.equal(parentPreview.data.scan.policyOutcome, "parent_local_required_unavailable");
+  assert.equal(parentPreview.data.scan.requestsAttempted, 0);
+  assert.equal(parentPreview.data.results[0].normalizedRequested.parent.cardId, CARD);
+  assert.equal(parentCreates, 0);
+  assert.ok(parentPreview.warnings.some((warning: string) => /parent-local duplicate matching is unavailable/i.test(warning)));
+  const parentApply = parse(await invoke({ cards: [{ title: "Child", parentCardId: CARD }], dryRun: false, duplicatePolicy: "required", format: "json" }));
+  assert.equal(parentApply.ok, false);
+  assert.equal(parentApply.error.category, "conflict");
+  assert.equal(parentCreates, 0);
 
   console.log("bulk create simplification tests passed");
 } finally {

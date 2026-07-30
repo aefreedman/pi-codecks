@@ -18,6 +18,8 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Bulk-create identity verification now makes one non-retrying exact read, reports only compared identity components plus neutral observations, retains compatibility persistence only for verified identities, and exposes bounded outcomes in compact and text results.
+- Bulk-create discovery now preserves aggregate title-probe and fallback accounting, distinguishes logical title probes from paginated requests, and returns no-create detailed parent-scoped required previews while keeping required apply blocked.
 - Bulk creates preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses without treating a generic outer dispatch action ID as a card ID.
 - Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
 
