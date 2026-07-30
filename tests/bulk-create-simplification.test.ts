@@ -290,6 +290,48 @@ try {
   assert.equal(fourProbeFallback.data.scan.stages[0].probesAttempted, 4);
   assert.equal(fourProbeFallback.data.scan.stages[1].requestsAttempted, 1);
 
+  // A server root semantic rejection retains its failed logical probe before the
+  // account fallback; ordinary transport failures still stop rather than widen.
+  let semanticRequests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    semanticRequests += 1;
+    if (/"title"/.test(key!)) return response({ errors: [{ message: "title contains filter unsupported" }] });
+    return response(emptyCards(key!));
+  }) as typeof fetch;
+  const semanticFallback = parse(await invoke({ cards: [{ title: "Rejected" }], dryRun: true, format: "json" }));
+  assert.equal(semanticFallback.ok, true);
+  assert.equal(semanticRequests, 2, "the rejected title request and one fallback request were sent");
+  assert.equal(semanticFallback.data.scan.requestsAttempted, 2);
+  assert.equal(semanticFallback.data.scan.scanned, 0);
+  assert.equal(semanticFallback.data.scan.fallback, "title_contains_semantically_rejected");
+  assert.equal(semanticFallback.data.scan.semanticRejectedProbes, 1);
+  assert.equal(semanticFallback.data.scan.semanticRejectedRequests, 1);
+  assert.deepEqual(semanticFallback.data.scan.stages.map((stage: Json) => stage.stage), ["title_contains", "account_fallback"]);
+  assert.equal(semanticFallback.data.scan.stages[0].probesAttempted, 1);
+  assert.equal(semanticFallback.data.scan.stages[0].semanticRejectedProbes, 1);
+  assert.equal(semanticFallback.data.scan.stages[0].semanticRejectedRequests, 1);
+  for (const stage of semanticFallback.data.scan.stages) {
+    assert.equal(typeof stage.queueWaitMs, "number");
+    assert.equal(typeof stage.elapsedMs, "number");
+  }
+
+  let transportRequests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Json;
+    if (JSON.stringify(query).includes("loggedInUser")) return response(login());
+    const key = relationKey(query, "cards");
+    assert.ok(key);
+    transportRequests += 1;
+    throw new Error("network unavailable");
+  }) as typeof fetch;
+  const transportFailure = parse(await invoke({ cards: [{ title: "No widening" }], dryRun: true, format: "json" }));
+  assert.equal(transportFailure.ok, false);
+  assert.equal(transportRequests, 1, "transport failure must not issue an account fallback request");
+
   let pagedTitleRequests = 0;
   globalThis.fetch = (async (_input, init) => {
     const query = JSON.parse(String(init?.body)).query as Json;

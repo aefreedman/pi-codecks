@@ -5000,6 +5000,17 @@ type CardSearchResult = {
 
 type PagedCardScanResult = { cards: CodecksEntity[]; scannedCards: number; complete: boolean; scanLimitReached: boolean; requestsAttempted: number; queueWaitMs: number; elapsedMs: number };
 
+// A failed page still represents an attempted logical scan and may have returned
+// earlier pages. Keep that evidence so semantic title-filter fallback is auditable.
+class PagedCardScanFailure extends Error
+{
+    constructor(readonly cause: unknown, readonly scan: PagedCardScanResult)
+    {
+        super(toErrorMessage(cause));
+        this.name = "PagedCardScanFailure";
+    }
+}
+
 const fetchPagedCardsWithoutSlot = async (args: {
     filters: Record<string, unknown>;
     fields: Array<string | Record<string, unknown>>;
@@ -5024,17 +5035,33 @@ const fetchPagedCardsWithoutSlot = async (args: {
             $offset: offset,
         };
         requestsAttempted += 1;
-        const payload = await runQuery({
-            _root: [
-                {
-                    account: [
-                        {
-                            [relationQuery("cards", pageFilters)]: args.fields,
-                        },
-                    ],
-                },
-            ],
-        });
+        let payload: unknown;
+        try
+        {
+            payload = await runQuery({
+                _root: [
+                    {
+                        account: [
+                            {
+                                [relationQuery("cards", pageFilters)]: args.fields,
+                            },
+                        ],
+                    },
+                ],
+            });
+        }
+        catch (error)
+        {
+            throw new PagedCardScanFailure(error, {
+                cards,
+                scannedCards,
+                complete: false,
+                scanLimitReached: false,
+                requestsAttempted,
+                queueWaitMs: 0,
+                elapsedMs: 0,
+            });
+        }
         const account = getAccount(payload);
         const serverRows = normalizeCollection(getRelation(account, "cards") as unknown[] | undefined);
         const rowCount = serverRows.length;
@@ -5088,6 +5115,14 @@ const fetchPagedCards = async (args: {
         }
         catch (error)
         {
+            if (error instanceof PagedCardScanFailure)
+            {
+                throw new PagedCardScanFailure(error.cause, {
+                    ...error.scan,
+                    queueWaitMs,
+                    elapsedMs: Date.now() - startedAt,
+                });
+            }
             if (error instanceof CodecksOperationError)
             {
                 throw new CodecksOperationError(error.category, error.message, {
@@ -7516,20 +7551,27 @@ const semanticTitleFilterRejection = (error: unknown): boolean =>
 {
     // Only a server-declared rejection of this narrow filter can widen discovery.
     // Transport, auth, rate, cancellation, timeout, and queue errors stay blocking.
-    if (error instanceof CodecksOperationError) return false;
-    const message = toErrorMessage(error);
+    const rootError = error instanceof PagedCardScanFailure ? error.cause : error;
+    if (rootError instanceof CodecksOperationError) return false;
+    const message = toErrorMessage(rootError);
     return /^Codecks API semantic error:/i.test(message)
         && /\btitle\b/i.test(message)
         && /\b(?:contains|filter|operator)\b/i.test(message)
         && /\b(?:unsupported|unavailable|invalid|not allowed|rejected)\b/i.test(message);
 };
 
-const scanStageMetadata = (stage: "title_contains" | "account_fallback", scans: PagedCardScanResult[], probesAttempted?: number) => ({
+const scanStageMetadata = (stage: "title_contains" | "account_fallback", scans: PagedCardScanResult[], probesAttempted?: number, semanticRejectedProbes = 0, semanticRejectedRequests = 0) => ({
     stage,
     ...(probesAttempted === undefined ? {} : { probesAttempted }),
+    ...(semanticRejectedProbes > 0 ? {
+        semanticRejectedProbes,
+        semanticRejectedRequests,
+    } : {}),
     complete: scans.every((scan) => scan.complete),
     scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
     requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
+    queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
+    elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
 });
 
 const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number, policy: DuplicatePolicy) =>
@@ -7541,22 +7583,37 @@ const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], d
     };
 
     const titles = [...new Set(records.map((record) => normalizeDuplicateTitle(record.title)))];
-    let titleScans: PagedCardScanResult[] = [];
+    const titleScans: PagedCardScanResult[] = [];
+    let titleProbesAttempted = 0;
+    let semanticRejectedProbes = 0;
+    let semanticRejectedRequests = 0;
     let fallbackScan: PagedCardScanResult | null = null;
     let fallback: string | null = null;
     if (titles.length <= BULK_CREATE_TITLE_REQUEST_BUDGET)
     {
-        try
+        // At most four probes run sequentially. This avoids unaccountable work if a
+        // server-declared title-filter rejection requires the account fallback.
+        for (const title of titles)
         {
-            titleScans = await Promise.all(titles.map((title) => fetchPagedCards({
-                filters: { title: { op: "contains", value: title } }, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500),
-            })));
-        }
-        catch (error)
-        {
-            if (!semanticTitleFilterRejection(error)) throw error;
-            fallback = "title_contains_semantically_rejected";
-            titleScans = [];
+            titleProbesAttempted += 1;
+            try
+            {
+                titleScans.push(await fetchPagedCards({
+                    filters: { title: { op: "contains", value: title } }, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500),
+                }));
+            }
+            catch (error)
+            {
+                if (!semanticTitleFilterRejection(error)) throw error instanceof PagedCardScanFailure ? error.cause : error;
+                if (error instanceof PagedCardScanFailure)
+                {
+                    titleScans.push(error.scan);
+                    semanticRejectedRequests += error.scan.requestsAttempted;
+                }
+                semanticRejectedProbes += 1;
+                fallback = "title_contains_semantically_rejected";
+                break;
+            }
         }
     }
     else fallback = "title_request_budget_exceeded";
@@ -7578,7 +7635,7 @@ const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], d
     const complete = fallbackScan ? fallbackScan.complete : titleScans.every((scan) => scan.complete);
     const incompleteOnlyByBound = !complete && !!fallbackScan && fallbackScan.scanLimitReached;
     const stages = [
-        ...(titleScans.length > 0 ? [scanStageMetadata("title_contains", titleScans, titles.length)] : []),
+        ...(titleScans.length > 0 ? [scanStageMetadata("title_contains", titleScans, titleProbesAttempted, semanticRejectedProbes, semanticRejectedRequests)] : []),
         ...(fallbackScan ? [scanStageMetadata("account_fallback", [fallbackScan])] : []),
     ];
     return {
@@ -7592,6 +7649,10 @@ const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], d
             requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
             queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
             elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
+            ...(semanticRejectedProbes > 0 ? {
+                semanticRejectedProbes,
+                semanticRejectedRequests,
+            } : {}),
             bounds,
             stages,
             fallback,

@@ -91,10 +91,10 @@ const measure = async (count: number, dryRun: boolean, options: Json): Promise<M
 };
 
 const expectedDefaultApply = new Map([
-  [1, { loggedInUser: 1, duplicateScans: 1, creates: 1, identityReads: 0, serializedBytes: 1566 }],
-  [4, { loggedInUser: 1, duplicateScans: 4, creates: 4, identityReads: 0, serializedBytes: 2496 }],
-  [34, { loggedInUser: 1, duplicateScans: 1, creates: 34, identityReads: 0, serializedBytes: 11946 }],
-  [100, { loggedInUser: 1, duplicateScans: 1, creates: 100, identityReads: 0, serializedBytes: 32543 }],
+  [1, { loggedInUser: 1, duplicateScans: 1, creates: 1, identityReads: 0, serializedBytes: 1620 }],
+  [4, { loggedInUser: 1, duplicateScans: 4, creates: 4, identityReads: 0, serializedBytes: 2550 }],
+  [34, { loggedInUser: 1, duplicateScans: 1, creates: 34, identityReads: 0, serializedBytes: 12000 }],
+  [100, { loggedInUser: 1, duplicateScans: 1, creates: 100, identityReads: 0, serializedBytes: 32600 }],
 ]);
 
 console.log("cards,historical_preview_scan,historical_apply_scan,historical_apply_identity_reads,default_apply_scan,default_apply_identity_reads,default_apply_bytes");
@@ -108,7 +108,7 @@ for (const count of [1, 4, 34, 100]) {
   assert.equal(defaultPreview.identityReads, 0, `${count}-card default preview must not verify identities`);
   assert.equal(defaultApply.identityReads, 0, `${count}-card default apply must not verify identities`);
   assert.deepEqual(defaultApply, expectedDefaultApply.get(count), `${count}-card compact defaults changed`);
-  assert.ok(defaultApply.serializedBytes <= (count === 4 ? 4200 : count === 34 ? 19000 : count === 100 ? 52000 : 1600), `${count}-card compact response exceeded budget`);
+  assert.ok(defaultApply.serializedBytes <= (count === 4 ? 4200 : count === 34 ? 19000 : count === 100 ? 52000 : 1650), `${count}-card compact response exceeded budget`);
   assert.equal(historicalApply.identityReads, count, `${count}-card opt-in identity verification bound changed`);
   console.log(`${count},${historicalPreview.duplicateScans},${historicalApply.duplicateScans},${historicalApply.identityReads},${defaultApply.duplicateScans},${defaultApply.identityReads},${defaultApply.serializedBytes}`);
 }
