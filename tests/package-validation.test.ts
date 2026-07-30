@@ -120,6 +120,34 @@ const mutationRuntimeSurface = [
 ].join("\n");
 assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm|tracker\.codecks|guidance\/codecks\/work|workflow preflight/i);
 
+// Bulk create is a generic Codecks import primitive, not a consumer-project coordinator.
+// Keep this scoped to its public/runtime guidance surfaces so ordinary Codecks milestone
+// metadata and Hero parent support elsewhere in the package remain valid.
+const bulkCreateCore = read("src/codecks-core.ts").match(/export const card_bulk_create[\s\S]*?(?=export const card_bulk_update)/)?.[0] ?? "";
+const bulkCreateRegistration = read("index.ts").match(/card_bulk_create:\s*\{[\s\S]*?(?=\n\s*card_bulk_update:)/)?.[0] ?? "";
+const bulkCreateLoader = read("src/codecks-tool-loading.ts").match(/\{ name: "codecks_card_bulk_create",[\s\S]*?(?=\n\s*\{ name:)/)?.[0] ?? "";
+const bulkCreateContractSurfaces = [
+  bulkCreateCore,
+  bulkCreateRegistration,
+  bulkCreateLoader,
+  readme.match(/^[^\n]*codecks_card_bulk_create[^\n]*$/gm)?.join("\n") ?? "",
+  read("skills/using-codecks/SKILL.md").match(/^[^\n]*bulk-create[^\n]*$/gim)?.join("\n") ?? "",
+].join("\\n");
+assert.ok(bulkCreateCore, "bulk-create core surface must be present");
+assert.ok(bulkCreateRegistration, "bulk-create registration contract must be present");
+assert.ok(bulkCreateLoader, "bulk-create loader guidance must be present");
+for (const [label, forbidden] of [
+  ["nor-planning", /nor[- ]planning/i],
+  ["Chapter-specific markers", /chapter[- ]specific|chapter marker/i],
+  ["Row IDs or slot markers", /\b(?:row|slot)[-_ ]?(?:id|marker)s?\b/i],
+  ["descendant-card registries", /descendant[- ]card registry|registry of descendant cards/i],
+  ["external manifest state", /external manifest state|manifest state from (?:the )?consumer/i],
+  ["approval state machines", /approval state machine|approval-state-machine/i],
+  ["project-specific anchor semantics", /project[- ]specific anchor|anchor semantics for (?:the )?project/i],
+] as const) {
+  assert.doesNotMatch(bulkCreateContractSurfaces, forbidden, `bulk-create surface must not introduce ${label}`);
+}
+
 assert.match(readme, /pi install npm:@aefree\/pi-codecks/);
 assert.match(readme, /`codecks_deck_get`/);
 assert.match(readme, /npm ci && npm test/);
