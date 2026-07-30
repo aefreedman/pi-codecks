@@ -12,32 +12,32 @@
   },
   "implementedConditions": {
     "all-active": {
-      "note": "Legacy 39-tool composition with safety-hardened active descriptions; the untouched comparison remains legacyBaseline above.",
-      "toolCount": 39,
-      "schemaChars": 14500,
-      "descriptionChars": 8429,
-      "promptSnippetChars": 1972,
-      "promptGuidelineChars": 13651,
-      "completeSerializedMetadataChars": 44158,
-      "reductionFromUntouchedPercent": -14.76
+      "note": "Current 40-tool all-active composition with operation-validation schemas and safety-hardened descriptions; the untouched pre-loader comparison remains legacyBaseline above.",
+      "toolCount": 40,
+      "schemaChars": 14832,
+      "descriptionChars": 10232,
+      "promptSnippetChars": 2006,
+      "promptGuidelineChars": 13931,
+      "completeSerializedMetadataChars": 46751,
+      "reductionFromUntouchedPercent": -21.5
     },
     "balanced": {
       "toolCount": 3,
       "schemaChars": 2293,
       "descriptionChars": 551,
       "promptSnippetChars": 218,
-      "promptGuidelineChars": 2585,
-      "completeSerializedMetadataChars": 6095,
-      "reductionPercent": 84.16
+      "promptGuidelineChars": 2752,
+      "completeSerializedMetadataChars": 6265,
+      "reductionPercent": 83.72
     },
     "loader-only": {
       "toolCount": 1,
       "schemaChars": 527,
       "descriptionChars": 195,
       "promptSnippetChars": 84,
-      "promptGuidelineChars": 1039,
-      "completeSerializedMetadataChars": 1999,
-      "reductionPercent": 94.8
+      "promptGuidelineChars": 1206,
+      "completeSerializedMetadataChars": 2169,
+      "reductionPercent": 94.36
     }
   }
 }

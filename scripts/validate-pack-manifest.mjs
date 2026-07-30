@@ -13,6 +13,7 @@ const requiredFiles = [
   "index.ts",
   "package.json",
   "prompts/codecks-inbox.md",
+  "references/cg-changelog/codecks-workflow.md",
   "skills/codecks-velocity-reporting/SKILL.md",
   "skills/using-codecks/SKILL.md",
   "src/codecks-core.ts",
@@ -21,7 +22,7 @@ const requiredFiles = [
 ];
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);
-const allowedPrefixes = ["docs/", "prompts/", "skills/", "src/"];
+const allowedPrefixes = ["docs/", "prompts/", "references/", "skills/", "src/"];
 const forbiddenPathPatterns = [
   { label: "test source", pattern: /^tests\// },
   { label: "packaging script", pattern: /^scripts\// },
@@ -57,9 +58,7 @@ for (const file of files) {
     errors.push(`file is outside the public allow-list: ${file}`);
   }
   for (const { label, pattern } of forbiddenPathPatterns) {
-    if (pattern.test(file)) {
-      errors.push(`${label} must not be packed: ${file}`);
-    }
+    if (pattern.test(file)) errors.push(`${label} must not be packed: ${file}`);
   }
 
   const absolutePath = path.join(packageRoot, ...file.split("/"));

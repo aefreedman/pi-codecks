@@ -158,6 +158,8 @@ const testDirectShortCodeReturnsStructuredCard = async (tools: ToolModule): Prom
     const card = data.card as AnyRecord;
     assert.equal(card.cardId, CARD_ID);
     assert.equal(card.shortCode, CARD_REF);
+    assert.equal(card.cardRef, CARD_REF);
+    assert.equal(card.accountSeqRef, `seq:${CARD_SEQ}`);
     assert.equal(card.content, "Plain first line\n\nBody text");
     assert.equal(card.contentTrust, "external");
     assert.equal(card.cardType, "regular");
@@ -281,6 +283,20 @@ const testZeroAccountSeqIsPreserved = async (tools: ToolModule): Promise<void> =
   });
 };
 
+const testBareNumericNotFoundSuggestsExplicitSequence = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch((query) => {
+    const cardsRelation = getAccountRelation(query, "cards");
+    assert.ok(cardsRelation, `expected short-code account sequence query: ${JSON.stringify(query)}`);
+    return jsonResponse({ data: buildSearchPayload([], cardsRelation.key) });
+  }, async () => {
+    const result = await tools.card_get.execute({ cardId: 2481 });
+    const error = getError(String(result));
+    assert.equal(error.category, "not_found");
+    assert.equal(error.suggestedCardRef, "seq:2481");
+    assert.match(String(error.recoveryHint), /bare numeric.*short codes.*seq:2481/i);
+  });
+};
+
 const testValidationRequiresCardIdOrTitle = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get should not call the API when required inputs are missing");
@@ -299,6 +315,7 @@ await testTitleLookupSingleFetchesDetail(tools);
 await testSemanticApiErrorsReturnApiError(tools);
 await testCardMapFallbackDoesNotBecomeCard(tools);
 await testZeroAccountSeqIsPreserved(tools);
+await testBareNumericNotFoundSuggestsExplicitSequence(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");

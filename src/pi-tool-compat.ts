@@ -51,6 +51,7 @@ export const tool = Object.assign(
       enum: (values: readonly unknown[]) => createSchemaNode("enum", [...values]),
       union: (values: readonly unknown[]) => createSchemaNode("union", [...values]),
       array: (inner: unknown) => createSchemaNode("array", undefined, inner),
+      object: (properties: Record<string, unknown>) => createSchemaNode("object", undefined, properties),
     },
   },
 );

@@ -10,6 +10,30 @@ and this project follows semantic versioning for public package releases.
 ### Added
 
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
+- Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
+- Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
+- Added reusable `cardRef` and `accountSeqRef` fields to structured card results plus explicit `seq:` recovery guidance for numeric not-found lookups.
+- Added `codecks_deck_get` for structured Deck-description reads, read-versus-update capability routing, and a registered public Codecks tool-contract reference.
+- Added fail-closed mutation-text validation for Unicode replacement characters and unpaired surrogates.
+
+### Fixed
+
+- Bulk-create identity verification now makes one non-retrying exact read, reports only compared identity components plus neutral observations, retains compatibility persistence only for verified identities, and exposes bounded outcomes in compact and text results.
+- Bulk-create discovery now preserves aggregate title-probe and fallback accounting, distinguishes logical title probes from paginated requests, and returns no-create detailed parent-scoped required previews while keeping required apply blocked.
+- Bulk creates preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses without treating a generic outer dispatch action ID as a card ID.
+- Keep the optional package-reference integration disabled when Pi's CommonJS-compatible TypeScript loader reports `MODULE_NOT_FOUND` for the absent reader runtime, without hiding missing dependencies inside an installed runtime.
+
+### Changed
+
+- Removed the `tracker.codecks` workflow provider, inline workflow guidance, UUID-only workflow target parsing, and workflow credential/preflight integration. Codecks skills and direct tool metadata continue to handle public short references, untrusted external data, explicit mutation intent, and operation validation without a workflow dependency.
+- Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.
+- Non-idempotent mutations no longer transparently retry ambiguous failures; read-only retries remain. Attachment sources are physically canonicalized, strictly workspace-contained, tracked by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.
+- Bulk create/update records are now strict and reject unsupported fields before requests; bulk preview and apply share normalized payloads that expose all mutable fields and visible target names.
+- Bulk create now deduplicates normalized titles and uses a bounded title-first duplicate probe with conservative accessible-account fallback. Dry-run defaults to `duplicatePolicy=required`; apply defaults to `best_effort` for scan-limit incompleteness, while `required` remains available and `skip` is explicit. Parent-local required matching remains unavailable.
+- Bulk-create identity verification is now opt-in (`verification=identity`); the default performs zero post-create reads. Identity read outcomes label checked fields and do not change dispatch certainty or retry a create.
+- Bulk-create dry-runs retain detailed response schema v1 by default. Apply now defaults to compact schema v2 results with correlation/status/certainty, returned references/card IDs, aggregate discovery metadata, and bounded warnings; explicit `outputMode=detailed` retains normalized and dispatch diagnostics.
+- Broad account scans now have bounded concurrency and queue depth, with stable caller-cancel, rate-queue cancel, timeout, rate-limit, and queue-full diagnostics plus request/queue/elapsed metadata.
+- Sequential bulk mutations now distinguish failed, indeterminate, and definitely-unsent records, stop after ambiguous writes, expose correlation/action keys, and label normalized request data separately from dispatch-returned and persisted-verification data.
 
 ## [0.8.0] - 2026-07-25
 

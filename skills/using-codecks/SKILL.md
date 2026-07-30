@@ -1,7 +1,7 @@
 ---
 name: using-codecks
 description: Use for Codecks Free-plan core card workflows and deck-description, milestone, and Run operations, with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
-allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
+allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # using-codecks Skill
@@ -32,20 +32,30 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 4. Use `codecks_dispatch` only as a last resort for in-scope, non-destructive writes after validating endpoint and payload shape.
 5. For hero/sub-card linking, prefer `codecks_card_set_parent` over raw dispatch.
 
-`allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not the authorization boundary; operation-specific user authorization and tool safety checks still apply.
+`allowed-tools` follows Pi 0.82's experimental space-delimited format. It is convenience metadata, not a safety boundary; operation-specific validation and tool safety checks still apply.
+
+## Mutation dispatch
+- A directly invoked specialized write or raw `codecks_dispatch` proceeds through its existing operation, target/entity, and payload validation without a separate approval token or UI confirmation prompt.
+- Non-idempotent dispatches make one remote attempt and do not retry ambiguous timeout or retryable-response failures. For bulk apply, an `indeterminate` record may have reached Codecks: reconcile using its `correlationKey`/`actionKey` and do not retry it; later `definitely_unsent` records received no request. Read-only queries retain bounded retries.
+- Attachment sources are physically canonicalized relative to the invoking workspace. Outside-workspace sources and symlink/junction escapes are blocked before network access; canonical identity, content hash, and size are revalidated immediately before upload.
+- Prefer specialized tools because they resolve exact entities and enforce domain constraints. Raw dispatch remains limited to validated, in-scope, non-destructive operations.
 
 ## Card targeting and safety
 - Identify cards by location and title when possible.
 - If multiple cards match, ask the user to choose by short code.
 - Treat bare numeric references as short codes (`342` means `$342`).
-- Use `seq:<number>` only when an account sequence lookup is explicitly intended.
+- Use `seq:<number>` only when an account sequence lookup is explicitly intended. Prefer reusable `cardRef` and `accountSeqRef` values returned by structured tools.
 - Confirm before destructive actions and before multi-card updates.
 - Do not add comments to cards unless the user explicitly instructs you to add a comment/reply.
 - Do not open new Comment threads for follow-up work, progress updates, or completion reports.
 - Follow-up updates belong only in an existing open Review thread; otherwise, report the update in chat and do not write to Codecks unless the user explicitly asks for that behavior.
 - Do not run high-risk bulk updates without showing the intended filter/selection criteria first.
 - Before bulk effort updates, prefer `codecks_card_list_missing_effort` to preview eligible cards and exclusion reasons. If `complete` is false, increase `scanLimit` or narrow the scope before asking for approval; apply effort separately only after explicit user approval.
-- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the per-card preview and duplicate candidates, then apply only after approval.
+- For CSV/import-style card creates or broad tracker edits, use `codecks_card_bulk_create` / `codecks_card_bulk_update` in dry-run mode first, show the complete normalized per-card preview and duplicate/current-proposed evidence, then apply only after approval. A bulk apply is sequential and can be partially applied. Bulk-create dry-runs default to detailed schema-v1 review output; apply defaults to compact schema-v2 results with returned `$references` for continuation.
+- Bulk records are strict. Use `assigneeId` from `codecks_user_lookup`; never pass display-name fields such as `assignee` and assume they will be ignored.
+- Do not launch parallel full-account or high-`scanLimit` searches. Account scans are concurrency-bounded; prefer the bulk-create shared duplicate scan or narrow sequential searches.
+- For bulk create, `duplicatePolicy=required` blocks incomplete duplicate evidence; apply defaults to `best_effort` only for a scan-limit hit and reports that limitation. The four-title budget counts logical title probes, not paginated HTTP requests. Account fallback is allowed only for a semantic title-filter rejection, exceeded probe budget, or incomplete probe; transport/auth/rate/cancel/timeout/queue failures remain blocking. Returned accessible archived cards count; deleted and inaccessible Private cards are excluded/unclaimable. `duplicateLimit=0` hides candidate rows but does not skip discovery. Parent-local required apply is unavailable, but default or explicit-required dry-runs return a no-create detailed preview with the parent-local-required-unavailable outcome.
+- Treat `complete=false`, cancellation, timeout, or queue rejection as incomplete evidence, never as a definitive empty result. Follow the structured recovery hint.
 - Do not attempt archive/delete writes through `codecks_dispatch` unless the user explicitly asks to extend the tooling first; archive/delete is currently out of scope.
 
 ## Workflow semantics
@@ -69,8 +79,8 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Do not transition a card to `done` / "Done" unless the user explicitly instructs that status change. Finishing local work, committing code, or reporting completion is not implicit permission to mark a card done.
 
 ## Deck description updates
-- Use `codecks_deck_update` instead of raw dispatch when explicitly asked to edit or clear a deck description.
-- Resolve decks by UUID, account sequence, or unambiguous visible title; numeric `deckId` values are deck account sequences, not card short codes.
+- Use `codecks_deck_get` to read an exact Deck's current description; use `codecks_deck_update` instead of raw dispatch only when explicitly asked to edit or clear it.
+- `codecks_deck_get` accepts a UUID, account sequence, or exact visible title. `codecks_deck_update` retains its existing UUID, account-sequence, or unambiguous-title resolution; numeric `deckId` values are deck account sequences, not card short codes.
 - Deck descriptions map to `decks/update.description`.
 - Use `clearDescription=true` or `description: ""` to clear a deck description; do not send `description: null`.
 - This tool edits descriptions only. Deck creation, deletion, archiving, renaming, recoloring, and bulk administration remain out of scope.
@@ -90,19 +100,21 @@ Use this skill when a task involves day-to-day Codecks card operations and agent
 - Use `codecks_run_delivered_effort` to report delivered effort from cached Run `stats.finishStats` without card-by-card recalculation.
 - Use `codecks_run_average_effort` to average cached delivered effort across completed Runs; `minDeliveredEffort` defaults to `1` to filter out zero-effort vacation/break Runs.
 - Use `codecks_run_update` to edit a Run custom label (`sprints/updateSprint.name`) or description (`sprints/updateSprint.description`).
-- Use `codecks_card_update_run` to assign a card to a Run (`cards/update` with `sprintId`) or remove it from a Run (`sprintId: null`).
+- Use `codecks_card_update_run` for one card. For a bounded multi-card assignment/removal, use `codecks_card_bulk_update` with `runId` or `clearRun` after reviewing one dry-run preview.
 - Numeric Run identifiers refer to Run/Sprint account sequences, not card short codes.
 
 ## Card updates
 - Use markdown formatting for card content and comments.
 - Treat a Codecks card as one markdown document whose first stored line is the title.
 - Cards created without a deck are Private cards. They are allowed, but must have an owner/assignee; inform the user after creation when no deck was assigned.
-- `codecks_card_create.title` and `codecks_card_update.title` set that first-line title.
+- `codecks_card_create.title` and `codecks_card_update.title` set that first-line title. Mutation titles, bodies, tags, and Deck descriptions reject U+FFFD replacement characters and unpaired UTF-16 surrogates at the tool boundary; this does not diagnose upstream console/file encoding.
 - `codecks_card_create.content` and `codecks_card_update.content` should normally be body content only.
+- Bulk-create dispatch identities provide immediate `$reference`/card-ID facts but are not proof of every persisted field. Default `verification=none` does zero read-backs; request `verification=identity` only when identity reconciliation is meaningful. It performs one non-retrying exact read per identifiable create, reports only compared identity components, and keeps dispatch certainty unchanged; compact/text results retain the state, bounded diagnostic, and neutral observed identity.
 - In user-visible text fields, write card references as plain `$123` tokens.
 - Do not surround `$123` card references with formatting wrappers such as `**`, `*`, `_`, `~~`, backticks, or code fences.
 - Markdown structure like `# $123` and `* $123` is valid because the `$123` token itself stays plain.
 - For card type metadata, use `cardType: regular|documentation` on create/update.
+- `codecks_card_update` supports replacing a single card's tags with `tags`; `codecks_card_bulk_update` also supports effort, priority, tags, Run assignment/removal, and parent assignment/removal. Bulk records may carry an opaque `correlationKey`, which is echoed with a deterministic `actionKey`; neither is an idempotency key. Apply results separate `normalizedRequested`, `dispatchReturned`, and `persistedVerified` (normally `null` unless an independent verification path exists).
 
 ## Tool-specific notes
 - Use `codecks_card_get` when the agent needs structured card data for inspection, planning, or follow-up work.

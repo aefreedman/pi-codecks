@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
-import { basename, dirname, extname, isAbsolute, resolve } from "path";
+import { basename, dirname, extname, isAbsolute, relative, resolve } from "path";
 import { buildBiweeklyPeriods, buildWeeklyPeriods, escapeCsv, summarizeVelocityPeriods, type VelocityPeriod, type VelocityRun } from "./velocity-report";
 
 type CodecksConfig = {
@@ -49,6 +50,93 @@ const RATE_WINDOW_MS = (() =>
     return Math.max(1000, Math.min(15000, value));
 })();
 const requestTimestamps: number[] = [];
+const ACCOUNT_SCAN_CONCURRENCY = 2;
+const ACCOUNT_SCAN_MAX_QUEUE = 8;
+let activeAccountScans = 0;
+const accountScanWaiters: Array<{ resolve: (queueWaitMs: number) => void; reject: (error: Error) => void; queuedAt: number; signal?: AbortSignal; onAbort?: () => void }> = [];
+
+class CodecksOperationError extends Error
+{
+    constructor(
+        readonly category: "caller_aborted" | "rate_limit_queue_aborted" | "request_timeout" | "rate_limited" | "scan_queue_full",
+        message: string,
+        readonly details: Record<string, unknown> = {},
+    )
+    {
+        super(message);
+        this.name = "CodecksOperationError";
+    }
+}
+
+const acquireAccountScanSlot = async (): Promise<number> =>
+{
+    const signal = getActiveAbortSignal();
+    if (signal?.aborted)
+    {
+        throw new CodecksOperationError("caller_aborted", "Account scan cancelled by caller before it started.", {
+            queueWaitMs: 0,
+            requestsAttempted: 0,
+            recoveryHint: "Retry the narrow search sequentially if it is still needed.",
+        });
+    }
+    if (activeAccountScans < ACCOUNT_SCAN_CONCURRENCY)
+    {
+        activeAccountScans += 1;
+        return 0;
+    }
+    if (accountScanWaiters.length >= ACCOUNT_SCAN_MAX_QUEUE)
+    {
+        throw new CodecksOperationError("scan_queue_full", "Account scan queue is full; broad parallel search fan-out was rejected.", {
+            queueDepth: accountScanWaiters.length,
+            concurrencyLimit: ACCOUNT_SCAN_CONCURRENCY,
+            requestsAttempted: 0,
+            recoveryHint: "Use one shared-scope bulk preview or run narrow searches sequentially.",
+        });
+    }
+
+    return new Promise<number>((resolve, reject) =>
+    {
+        const waiter = { resolve, reject, queuedAt: Date.now(), signal } as typeof accountScanWaiters[number];
+        waiter.onAbort = () =>
+        {
+            const index = accountScanWaiters.indexOf(waiter);
+            if (index >= 0) accountScanWaiters.splice(index, 1);
+            reject(new CodecksOperationError("caller_aborted", "Account scan cancelled by caller while waiting in the scan queue.", {
+                queueWaitMs: Date.now() - waiter.queuedAt,
+                requestsAttempted: 0,
+                recoveryHint: "Retry the narrow search sequentially if it is still needed.",
+            }));
+        };
+        signal?.addEventListener("abort", waiter.onAbort, { once: true });
+        accountScanWaiters.push(waiter);
+    });
+};
+
+const releaseAccountScanSlot = (): void =>
+{
+    const waiter = accountScanWaiters.shift();
+    if (!waiter)
+    {
+        activeAccountScans = Math.max(0, activeAccountScans - 1);
+        return;
+    }
+    waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+    waiter.resolve(Date.now() - waiter.queuedAt);
+};
+
+const withAccountScanSlot = async <T>(fn: (queueWaitMs: number) => Promise<T>): Promise<T> =>
+{
+    const queueWaitMs = await acquireAccountScanSlot();
+    try
+    {
+        return await fn(queueWaitMs);
+    }
+    finally
+    {
+        releaseAccountScanSlot();
+    }
+};
+
 const ALLOW_OUT_OF_SCOPE_DISPATCH = /^(1|true|yes)$/i.test(process.env.CODECKS_ALLOW_OUT_OF_SCOPE_DISPATCH ?? "");
 const RETRY_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRY_ATTEMPTS = (() =>
@@ -103,17 +191,22 @@ const getDispatchPolicyMessage = (path: string): string | null =>
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
+const workspaceRootStorage = new AsyncLocalStorage<string | undefined>();
 
 const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.getStore();
+const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 
-export const runWithAbortSignal = async <T>(signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> =>
-    abortSignalStorage.run(signal, fn);
+export const runWithAbortSignal = async <T>(
+    signal: AbortSignal | undefined,
+    fn: () => Promise<T>,
+    workspaceRoot?: string,
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, fn));
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) =>
 {
     if (signal?.aborted)
     {
-        reject(new Error("Operation aborted."));
+        reject(new CodecksOperationError("caller_aborted", "Operation cancelled by caller."));
         return;
     }
 
@@ -126,7 +219,7 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((
     const onAbort = () =>
     {
         clearTimeout(timeout);
-        reject(new Error("Operation aborted."));
+        reject(new CodecksOperationError("caller_aborted", "Operation cancelled by caller."));
     };
 
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -149,7 +242,22 @@ const enforceRateLimit = async (): Promise<void> =>
         }
 
         const waitMs = Math.max(0, RATE_WINDOW_MS - (now - requestTimestamps[0]) + 5);
-        await sleep(waitMs, getActiveAbortSignal());
+        const waitStartedAt = Date.now();
+        try
+        {
+            await sleep(waitMs, getActiveAbortSignal());
+        }
+        catch (error)
+        {
+            if (error instanceof CodecksOperationError && error.category === "caller_aborted")
+            {
+                throw new CodecksOperationError("rate_limit_queue_aborted", "Operation cancelled while waiting for the Codecks request-rate queue.", {
+                    queueWaitMs: Date.now() - waitStartedAt,
+                    recoveryHint: "Retry sequentially with a narrower scope; do not fan out broad searches.",
+                });
+            }
+            throw error;
+        }
     }
 };
 
@@ -639,6 +747,11 @@ type ErrorCategory =
     | "out_of_scope"
     | "forbidden"
     | "disabled_by_org"
+    | "caller_aborted"
+    | "rate_limit_queue_aborted"
+    | "request_timeout"
+    | "rate_limited"
+    | "scan_queue_full"
     | "api_error";
 
 const toStructuredErrorResult = (
@@ -670,28 +783,6 @@ const toStructuredErrorResult = (
     };
 
     return `## ${action}\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
-};
-
-const parseStructuredToolResult = (value: unknown): Record<string, unknown> | undefined =>
-{
-    const text = String(value ?? "");
-    const match = text.match(/```json\s*([\s\S]*?)\s*```/i);
-    if (!match)
-    {
-        return undefined;
-    }
-
-    try
-    {
-        const parsed = JSON.parse(match[1]) as unknown;
-        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-            ? parsed as Record<string, unknown>
-            : undefined;
-    }
-    catch
-    {
-        return undefined;
-    }
 };
 
 const toErrorMessage = (error: unknown): string =>
@@ -760,6 +851,31 @@ const sanitizeErrorPayload = (payload: unknown): string =>
 
 const classifyApiErrorCategory = (message: string): ErrorCategory =>
 {
+    if (/caller_aborted|cancelled by caller|request aborted/i.test(message))
+    {
+        return "caller_aborted";
+    }
+
+    if (/rate_limit_queue_aborted|request-rate queue/i.test(message))
+    {
+        return "rate_limit_queue_aborted";
+    }
+
+    if (/request_timeout|timed out/i.test(message))
+    {
+        return "request_timeout";
+    }
+
+    if (/scan_queue_full|scan queue is full/i.test(message))
+    {
+        return "scan_queue_full";
+    }
+
+    if (/\b429\b|rate limit/i.test(message))
+    {
+        return "rate_limited";
+    }
+
     if (/\b403\b|forbidden/i.test(message))
     {
         return "forbidden";
@@ -777,6 +893,10 @@ const classifyApiErrorCategory = (message: string): ErrorCategory =>
 
     return "api_error";
 };
+
+const getOperationErrorData = (error: unknown): Record<string, unknown> => error instanceof CodecksOperationError
+    ? { ...error.details, recoveryHint: error.details.recoveryHint ?? "Retry sequentially with a narrower scope." }
+    : {};
 
 const truncateStructuredValue = (
     value: unknown,
@@ -1356,6 +1476,45 @@ const normalizeCardBodyInput = (value: string): string =>
     return normalizeCardReferencesForUserText(value);
 };
 
+type MutationTextError = { field: string; kind: "replacement_character" | "unpaired_surrogate"; utf16Offset: number; codePointOffset: number };
+
+const findMutationTextError = (field: string, value: unknown): MutationTextError | undefined =>
+{
+    if (typeof value !== "string") return undefined;
+    let codePointOffset = 0;
+    for (let utf16Offset = 0; utf16Offset < value.length; )
+    {
+        const codeUnit = value.charCodeAt(utf16Offset);
+        if (codeUnit === 0xfffd)
+        {
+            return { field, kind: "replacement_character", utf16Offset, codePointOffset };
+        }
+        if (codeUnit >= 0xd800 && codeUnit <= 0xdbff)
+        {
+            const next = value.charCodeAt(utf16Offset + 1);
+            if (!(next >= 0xdc00 && next <= 0xdfff))
+            {
+                return { field, kind: "unpaired_surrogate", utf16Offset, codePointOffset };
+            }
+            utf16Offset += 2;
+            codePointOffset += 1;
+            continue;
+        }
+        if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
+        {
+            return { field, kind: "unpaired_surrogate", utf16Offset, codePointOffset };
+        }
+        utf16Offset += 1;
+        codePointOffset += 1;
+    }
+    return undefined;
+};
+
+const validateMutationText = (values: Array<[string, unknown]>): string[] => values
+    .map(([field, value]) => findMutationTextError(field, value))
+    .filter((value): value is MutationTextError => value !== undefined)
+    .map((error) => `${error.field} contains ${error.kind === "replacement_character" ? "Unicode replacement character U+FFFD" : "an unpaired UTF-16 surrogate"} at UTF-16 offset ${error.utf16Offset} (code-point offset ${error.codePointOffset}).`);
+
 const resolveCardDocument = (title: string | undefined, content: string | undefined): { titleLine: string; body: string } =>
 {
     const normalizedTitle = title !== undefined ? normalizeCardTitleInput(title) : "";
@@ -1581,6 +1740,12 @@ const normalizeCardReferencesForUserText = (value: string): string =>
 
 export const __test = {
     normalizeCardReferencesForUserText,
+    parseCardIdentifier: (value: string | number | undefined) => parseCardIdentifier(value),
+    buildReusableCardRefs: (value?: number) => buildReusableCardRefs(value),
+    classifyApiErrorCategory: (value: string) => classifyApiErrorCategory(value),
+    validateMutationText,
+    snapshotAttachmentSource,
+    assertUnchangedAttachmentSource,
 };
 
 const normalizeUserId = (value: string): string => value.trim().toLowerCase();
@@ -1833,6 +1998,15 @@ const formatShortCode = (value?: number): string =>
     return code ? `$${code}` : "";
 };
 
+const buildReusableCardRefs = (accountSeq?: number): { cardRef: string | null; accountSeqRef: string | null } =>
+{
+    const shortCode = formatShortCode(accountSeq);
+    return {
+        cardRef: shortCode || null,
+        accountSeqRef: accountSeq !== undefined ? `seq:${accountSeq}` : null,
+    };
+};
+
 const formatCardUrl = (shortCode?: string): string =>
 {
     if (!shortCode)
@@ -1872,10 +2046,88 @@ type SignedUploadInfo = {
     publicUrl: string;
 };
 
-const resolveFilePath = (filePath: string): string =>
+type AttachmentSourceSnapshot = Readonly<{
+    requestedPath: string;
+    canonicalPath: string;
+    workspacePath: string;
+    size: number;
+    sha256: string;
+    buffer: Buffer;
+}>;
+
+const isPathWithin = (parent: string, candidate: string): boolean =>
 {
-    return isAbsolute(filePath) ? filePath : resolve(process.cwd(), filePath);
+    const relation = relative(parent, candidate);
+    return relation === "" || (!relation.startsWith("..") && !isAbsolute(relation));
 };
+
+async function snapshotAttachmentSource(filePath: string, workspaceRoot: string): Promise<AttachmentSourceSnapshot>
+{
+    const requestedPath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceRoot, filePath);
+    const workspacePath = await fs.realpath(resolve(workspaceRoot));
+    let canonicalPath: string;
+    try
+    {
+        canonicalPath = await fs.realpath(requestedPath);
+    }
+    catch (error)
+    {
+        throw new Error(`Attachment source cannot be resolved: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const lexicalInside = isPathWithin(resolve(workspaceRoot), requestedPath);
+    const canonicalInside = isPathWithin(workspacePath, canonicalPath);
+    if (lexicalInside && !canonicalInside)
+    {
+        throw new Error(`Attachment source rejected (attachment_symlink_escape): '${requestedPath}' resolves outside workspace '${workspacePath}'.`);
+    }
+    if (!canonicalInside)
+    {
+        throw new Error(`Attachment source rejected (attachment_outside_workspace): '${canonicalPath}' is outside workspace '${workspacePath}'.`);
+    }
+
+    const handle = await fs.open(canonicalPath, "r");
+    try
+    {
+        const before = await handle.stat();
+        if (!before.isFile())
+        {
+            throw new Error(`Attachment source must be a regular file: '${canonicalPath}'.`);
+        }
+        const buffer = await handle.readFile();
+        const after = await handle.stat();
+        const canonicalAfterRead = await fs.realpath(requestedPath);
+        if (canonicalAfterRead !== canonicalPath
+            || before.dev !== after.dev
+            || before.ino !== after.ino
+            || before.size !== after.size
+            || before.mtimeMs !== after.mtimeMs
+            || buffer.byteLength !== after.size)
+        {
+            throw new Error("Attachment source changed while it was being inspected; no upload was attempted.");
+        }
+        return Object.freeze({
+            requestedPath,
+            canonicalPath,
+            workspacePath,
+            size: after.size,
+            sha256: createHash("sha256").update(buffer).digest("hex"),
+            buffer,
+        });
+    }
+    finally
+    {
+        await handle.close();
+    }
+}
+
+function assertUnchangedAttachmentSource(before: AttachmentSourceSnapshot, after: AttachmentSourceSnapshot): void
+{
+    if (before.canonicalPath !== after.canonicalPath || before.size !== after.size || before.sha256 !== after.sha256)
+    {
+        throw new Error("Attachment source identity or content changed after inspection; no upload was attempted. Re-run with the current file.");
+    }
+}
 
 const detectContentType = (filePath: string, override?: string): string =>
 {
@@ -1895,10 +2147,11 @@ const detectContentType = (filePath: string, override?: string): string =>
     return map[ext] ?? "application/octet-stream";
 };
 
-const requestSignedUpload = async (fileName: string): Promise<SignedUploadInfo> =>
+const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
     const config = getConfig();
     const signal = getActiveAbortSignal();
+    const fileName = basename(source.canonicalPath);
     await enforceRateLimit();
 
     const response = await fetch(`${config.baseUrl}/s3/sign?objectName=${encodeURIComponent(fileName)}`, {
@@ -1951,17 +2204,11 @@ const requestSignedUpload = async (fileName: string): Promise<SignedUploadInfo> 
 
 const uploadFileToSignedUrl = async (
     signed: SignedUploadInfo,
-    filePath: string,
+    source: AttachmentSourceSnapshot,
     contentType: string,
 ): Promise<{ fileName: string; size: number; type: string; url: string }> =>
 {
-    const resolvedPath = resolveFilePath(filePath);
-    const [buffer, stats] = await Promise.all([
-        fs.readFile(resolvedPath),
-        fs.stat(resolvedPath),
-    ]);
-
-    const fileName = basename(resolvedPath);
+    const fileName = basename(source.canonicalPath);
     const formData = new FormData();
 
     for (const [key, value] of Object.entries(signed.fields))
@@ -1970,7 +2217,7 @@ const uploadFileToSignedUrl = async (
     }
 
     formData.append("Content-Type", contentType);
-    const blob = new Blob([buffer], { type: contentType });
+    const blob = new Blob([source.buffer], { type: contentType });
     formData.append("file", blob, fileName);
 
     const response = await fetch(signed.signedUrl, {
@@ -1988,7 +2235,7 @@ const uploadFileToSignedUrl = async (
 
     return {
         fileName,
-        size: stats.size,
+        size: source.size,
         type: contentType,
         url: signed.publicUrl,
     };
@@ -2026,6 +2273,25 @@ const fetchCardById = async (
     };
 
     const payload = await runQuery(query);
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const cardMap = getEntityMap(data, "card");
+    const lookupKey = `card(${idLiteral})`;
+    return cardMap[String(cardId)]
+        ?? resolveFromMap(data ? data[lookupKey] : undefined, cardMap)
+        ?? (data ? (data.card as CodecksEntity | undefined) : undefined);
+};
+
+const fetchCardByAccountSeqExactlyOnce = async (seq: number, fields: Array<string | Record<string, unknown>>): Promise<CodecksEntity | undefined> =>
+{
+    const query = { _root: [{ account: [{ [relationQuery("cards", { accountSeq: [seq] })]: fields }] }] };
+    return extractCardsFromPayload(await runExactReadQuery(query), "cards")[0];
+};
+
+const fetchCardByIdExactlyOnce = async (cardId: string, fields: Array<string | Record<string, unknown>>): Promise<CodecksEntity | undefined> =>
+{
+    const idLiteral = formatIdForQuery(cardId);
+    const query = { [`card(${idLiteral})`]: fields };
+    const payload = await runExactReadQuery(query);
     const data = unwrapData(payload) as Record<string, unknown> | undefined;
     const cardMap = getEntityMap(data, "card");
     const lookupKey = `card(${idLiteral})`;
@@ -2898,13 +3164,34 @@ const formatRootSemanticError = (errors: unknown[]): string =>
     return `Codecks API semantic error: ${messages.join("; ") || "Codecks returned a nonempty root errors array."}`;
 };
 
-const requestJson = async (path: string, init: RequestInit, config: CodecksConfig): Promise<unknown> =>
+type CodecksRequestRetryPolicy = "read-only" | "exact-read" | "non-idempotent-mutation";
+
+const requestJson = async (
+    path: string,
+    init: RequestInit,
+    config: CodecksConfig,
+    retryPolicy: CodecksRequestRetryPolicy,
+): Promise<unknown> =>
 {
     const externalSignal = getActiveAbortSignal();
 
     for (let attempt = 0; ; attempt += 1)
     {
-        await enforceRateLimit();
+        try
+        {
+            await enforceRateLimit();
+        }
+        catch (error)
+        {
+            if (error instanceof CodecksOperationError)
+            {
+                throw new CodecksOperationError(error.category, error.message, {
+                    ...error.details,
+                    requestsAttempted: attempt,
+                });
+            }
+            throw error;
+        }
 
         const controller = new AbortController();
         const onAbort = () => controller.abort(externalSignal?.reason);
@@ -2939,11 +3226,14 @@ const requestJson = async (path: string, init: RequestInit, config: CodecksConfi
             externalSignal?.removeEventListener("abort", onAbort);
             if (externalSignal?.aborted)
             {
-                throw new Error("Codecks API request aborted.");
+                throw new CodecksOperationError("caller_aborted", "Codecks API request cancelled by caller.", {
+                    requestsAttempted: attempt + 1,
+                    recoveryHint: "Retry the narrow operation sequentially if it is still needed.",
+                });
             }
             const message = toErrorMessage(error);
             const timedOut = message.toLowerCase().includes("abort") || message.toLowerCase().includes("timeout");
-            const shouldRetryTimeout = timedOut && attempt < MAX_RETRY_ATTEMPTS;
+            const shouldRetryTimeout = retryPolicy === "read-only" && timedOut && attempt < MAX_RETRY_ATTEMPTS;
             if (shouldRetryTimeout)
             {
                 await sleep(RETRY_BASE_DELAY_MS + Math.floor(Math.random() * RETRY_JITTER_MS), externalSignal);
@@ -2952,7 +3242,11 @@ const requestJson = async (path: string, init: RequestInit, config: CodecksConfi
 
             if (timedOut)
             {
-                throw new Error(`Codecks API request timed out after ${REQUEST_TIMEOUT_MS}ms.`);
+                throw new CodecksOperationError("request_timeout", `Codecks API request timed out after ${REQUEST_TIMEOUT_MS}ms.`, {
+                    timeoutMs: REQUEST_TIMEOUT_MS,
+                    requestsAttempted: attempt + 1,
+                    recoveryHint: "Narrow the scope or lower scanLimit before retrying sequentially.",
+                });
             }
 
             throw error;
@@ -2988,7 +3282,9 @@ const requestJson = async (path: string, init: RequestInit, config: CodecksConfi
             return payload;
         }
 
-        const shouldRetry = RETRY_STATUS_CODES.has(response.status) && attempt < MAX_RETRY_ATTEMPTS;
+        const shouldRetry = retryPolicy === "read-only"
+            && RETRY_STATUS_CODES.has(response.status)
+            && attempt < MAX_RETRY_ATTEMPTS;
         if (shouldRetry)
         {
             await sleep(computeRetryDelayMs(attempt, response), externalSignal);
@@ -2996,7 +3292,15 @@ const requestJson = async (path: string, init: RequestInit, config: CodecksConfi
         }
 
         const details = sanitizeErrorPayload(payload);
-        throw new Error(`Codecks API error ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`);
+        const message = `Codecks API error ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
+        if (response.status === 429)
+        {
+            throw new CodecksOperationError("rate_limited", message, {
+                requestsAttempted: attempt + 1,
+                recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
+            });
+        }
+        throw new Error(message);
     }
 };
 
@@ -3006,16 +3310,30 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
-    }, config);
+    }, config, "read-only");
 };
 
-const runDispatch = async (path: string, payload: Record<string, unknown>): Promise<unknown> =>
+// Identity verification is diagnostic, so it must make one physical request rather
+// than inheriting normal read retries.
+const runExactReadQuery = async (query: Record<string, unknown>): Promise<unknown> =>
+{
+    const config = getConfig();
+    return requestJson("/", {
+        method: "POST",
+        body: JSON.stringify({ query }),
+    }, config, "exact-read");
+};
+
+const runDispatch = async (
+    path: string,
+    payload: Record<string, unknown>,
+): Promise<unknown> =>
 {
     const config = getConfig();
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
-    }, config);
+    }, config, "non-idempotent-mutation");
 };
 
 const cardSummaryFields = [
@@ -3054,6 +3372,7 @@ const deckDetailFields = [
     "accountSeq",
     "title",
     "description",
+    "isDeleted",
 ];
 
 const milestoneDetailFields = [
@@ -3302,17 +3621,12 @@ const resolveDeck = async (value: string | number | undefined): Promise<LookupRe
         return { kind: "resolved", id: toIdValue(value), label: String(value) };
     }
 
-    if (isUuidLike(raw))
-    {
-        return { kind: "resolved", id: raw, label: raw };
-    }
-
     const query = {
         _root: [
             {
                 account: [
                     {
-                        decks: ["id", "title", "accountSeq"],
+                        decks: ["id", "title", "accountSeq", "isDeleted"],
                     },
                 ],
             },
@@ -3320,7 +3634,16 @@ const resolveDeck = async (value: string | number | undefined): Promise<LookupRe
     };
 
     const payload = await runQuery(query);
-    const decks = extractEntitiesFromPayload(payload, "decks", "deck");
+    const decks = extractEntitiesFromPayload(payload, "decks", "deck")
+        .filter((entry) => entry.isDeleted !== true && String(entry.isDeleted ?? "").toLowerCase() !== "true");
+    if (isUuidLike(raw))
+    {
+        const deck = decks.find((entry) => String(entry.id ?? "") === raw);
+        return deck?.id !== undefined
+            ? { kind: "resolved", id: deck.id as string | number, label: String(deck.title ?? deck.name ?? raw) }
+            : { kind: "missing", label: "deck" };
+    }
+
     return resolveByNameWithCaseFallback(
         decks.map((deck) => ({
             id: deck.id as string | number | undefined,
@@ -3483,17 +3806,12 @@ const resolveMilestone = async (value: string | number | undefined): Promise<Loo
         return { kind: "resolved", id: toIdValue(value), label: String(value) };
     }
 
-    if (isUuidLike(raw))
-    {
-        return { kind: "resolved", id: raw, label: raw };
-    }
-
     const query = {
         _root: [
             {
                 account: [
                     {
-                        milestones: ["id", "name", "accountSeq"],
+                        milestones: ["id", "name", "accountSeq", "isDeleted"],
                     },
                 ],
             },
@@ -3501,7 +3819,16 @@ const resolveMilestone = async (value: string | number | undefined): Promise<Loo
     };
 
     const payload = await runQuery(query);
-    const milestones = extractEntitiesFromPayload(payload, "milestones", "milestone");
+    const milestones = extractEntitiesFromPayload(payload, "milestones", "milestone")
+        .filter((entry) => entry.isDeleted !== true && String(entry.isDeleted ?? "").toLowerCase() !== "true");
+    if (isUuidLike(raw))
+    {
+        const milestone = milestones.find((entry) => String(entry.id ?? "") === raw);
+        return milestone?.id !== undefined
+            ? { kind: "resolved", id: milestone.id as string | number, label: String(milestone.name ?? milestone.title ?? raw) }
+            : { kind: "missing", label: "milestone" };
+    }
+
     return resolveByNameWithCaseFallback(
         milestones.map((milestone) => ({
             id: milestone.id as string | number | undefined,
@@ -4571,10 +4898,11 @@ const getCardMatchedFields = (card: CodecksEntity, context?: CardSearchRenderCon
     return fields.size > 0 ? Array.from(fields) : undefined;
 };
 
-const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRenderContext): Record<string, unknown> =>
+const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRenderContext, detailed = false): Record<string, unknown> =>
 {
     const deck = card.deck as CodecksEntity | undefined;
     const milestone = card.milestone as CodecksEntity | undefined;
+    const parentCard = card.parentCard as CodecksEntity | undefined;
 
     const childCount = getCardChildCountInfo(card);
     const hasEffort = hasOwn(card, "effort");
@@ -4584,6 +4912,7 @@ const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRen
         cardId: card.cardId,
         accountSeq: card.accountSeq,
         shortCode: formatShortCode(card.accountSeq as number | undefined),
+        ...buildReusableCardRefs(card.accountSeq as number | undefined),
         title: card.title,
         status: card.status,
         derivedStatus: card.derivedStatus,
@@ -4607,6 +4936,11 @@ const normalizeCardSearchSummary = (card: CodecksEntity, context?: CardSearchRen
         assignee: (card.assignee as CodecksEntity | undefined)?.name
             ?? (card.assignee as CodecksEntity | undefined)?.fullName,
         tags: formatTags(card.masterTags),
+        ...(detailed ? {
+            content: card.content ?? "",
+            parentReference: formatShortCode(parentCard?.accountSeq as number | undefined) || null,
+            archived: card.visibility === "archived" || card.visibility === "deleted",
+        } : {}),
         ...(matchedFields ? { matchedFields } : {}),
     };
 };
@@ -4659,20 +4993,37 @@ type CardSearchResult = {
     pageSize?: number;
     complete?: boolean;
     scanLimitReached?: boolean;
+    requestsAttempted?: number;
+    queueWaitMs?: number;
+    elapsedMs?: number;
 };
 
-const fetchPagedCards = async (args: {
+type PagedCardScanResult = { cards: CodecksEntity[]; scannedCards: number; complete: boolean; scanLimitReached: boolean; requestsAttempted: number; queueWaitMs: number; elapsedMs: number };
+
+// A failed page still represents an attempted logical scan and may have returned
+// earlier pages. Keep that evidence so semantic title-filter fallback is auditable.
+class PagedCardScanFailure extends Error
+{
+    constructor(readonly cause: unknown, readonly scan: PagedCardScanResult)
+    {
+        super(toErrorMessage(cause));
+        this.name = "PagedCardScanFailure";
+    }
+}
+
+const fetchPagedCardsWithoutSlot = async (args: {
     filters: Record<string, unknown>;
     fields: Array<string | Record<string, unknown>>;
     scanLimit: number;
     pageSize: number;
-}): Promise<{ cards: CodecksEntity[]; scannedCards: number; complete: boolean; scanLimitReached: boolean }> =>
+}): Promise<Omit<PagedCardScanResult, "queueWaitMs" | "elapsedMs">> =>
 {
     const cards: CodecksEntity[] = [];
     const seenCardIds = new Set<string>();
     let scannedCards = 0;
     let offset = 0;
     let complete = false;
+    let requestsAttempted = 0;
 
     while (scannedCards < args.scanLimit)
     {
@@ -4683,17 +5034,34 @@ const fetchPagedCards = async (args: {
             $limit: requestedPageSize,
             $offset: offset,
         };
-        const payload = await runQuery({
-            _root: [
-                {
-                    account: [
-                        {
-                            [relationQuery("cards", pageFilters)]: args.fields,
-                        },
-                    ],
-                },
-            ],
-        });
+        requestsAttempted += 1;
+        let payload: unknown;
+        try
+        {
+            payload = await runQuery({
+                _root: [
+                    {
+                        account: [
+                            {
+                                [relationQuery("cards", pageFilters)]: args.fields,
+                            },
+                        ],
+                    },
+                ],
+            });
+        }
+        catch (error)
+        {
+            throw new PagedCardScanFailure(error, {
+                cards,
+                scannedCards,
+                complete: false,
+                scanLimitReached: false,
+                requestsAttempted,
+                queueWaitMs: 0,
+                elapsedMs: 0,
+            });
+        }
         const account = getAccount(payload);
         const serverRows = normalizeCollection(getRelation(account, "cards") as unknown[] | undefined);
         const rowCount = serverRows.length;
@@ -4726,7 +5094,46 @@ const fetchPagedCards = async (args: {
         scannedCards,
         complete,
         scanLimitReached: !complete && scannedCards >= args.scanLimit,
+        requestsAttempted,
     };
+};
+
+const fetchPagedCards = async (args: {
+    filters: Record<string, unknown>;
+    fields: Array<string | Record<string, unknown>>;
+    scanLimit: number;
+    pageSize: number;
+}): Promise<PagedCardScanResult> =>
+{
+    const startedAt = Date.now();
+    return withAccountScanSlot(async (queueWaitMs) =>
+    {
+        try
+        {
+            const result = await fetchPagedCardsWithoutSlot(args);
+            return { ...result, queueWaitMs, elapsedMs: Date.now() - startedAt };
+        }
+        catch (error)
+        {
+            if (error instanceof PagedCardScanFailure)
+            {
+                throw new PagedCardScanFailure(error.cause, {
+                    ...error.scan,
+                    queueWaitMs,
+                    elapsedMs: Date.now() - startedAt,
+                });
+            }
+            if (error instanceof CodecksOperationError)
+            {
+                throw new CodecksOperationError(error.category, error.message, {
+                    ...error.details,
+                    queueWaitMs,
+                    elapsedMs: Date.now() - startedAt,
+                });
+            }
+            throw error;
+        }
+    });
 };
 
 const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResult> =>
@@ -4977,6 +5384,9 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResul
         pageSize,
         complete: fetched.complete,
         scanLimitReached: fetched.scanLimitReached,
+        requestsAttempted: fetched.requestsAttempted,
+        queueWaitMs: fetched.queueWaitMs,
+        elapsedMs: fetched.elapsedMs,
     };
 };
 
@@ -5103,7 +5513,13 @@ export const card_search = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-search", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(
+                format,
+                "card-search",
+                error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                toErrorMessage(error),
+                getOperationErrorData(error),
+            );
         }
 
         if (result.error)
@@ -5148,7 +5564,12 @@ export const card_search = tool({
                 location: args.location ?? null,
                 deck: args.deck ?? null,
                 milestone: args.milestone ?? null,
-                includeDone: args.includeDone ?? null,
+                includeArchived: args.includeArchived ?? false,
+                includeDone: args.includeDone ?? false,
+                limit: args.limit ?? 20,
+                scanLimit: args.scanLimit ?? 3000,
+                pageSize: args.pageSize ?? 500,
+                outputMode,
             };
             const lines = [
                 "## Card Search Results",
@@ -5171,6 +5592,9 @@ export const card_search = tool({
                     pageSize: result.pageSize ?? args.pageSize ?? null,
                     complete: result.complete ?? true,
                     scanLimitReached: result.scanLimitReached ?? false,
+                    requestsAttempted: result.requestsAttempted ?? null,
+                    queueWaitMs: result.queueWaitMs ?? 0,
+                    elapsedMs: result.elapsedMs ?? null,
                     outputMode,
                     cards: [],
                     criteria,
@@ -5198,6 +5622,21 @@ export const card_search = tool({
             ...(outputMode === "counts" ? sampleCards : detailCards).map((card, index) => `${index + 1}. ${formatCardLine(card)}`),
         ].filter((line): line is string => line !== undefined);
 
+        const criteria = {
+            title: args.title ?? null,
+            text: args.text ?? null,
+            searchIn: args.searchIn ?? null,
+            cardCode: args.cardCode ?? inferredCode ?? null,
+            location: args.location ?? null,
+            deck: args.deck ?? null,
+            milestone: args.milestone ?? null,
+            includeArchived: args.includeArchived ?? false,
+            includeDone: args.includeDone ?? false,
+            limit: args.limit ?? 20,
+            scanLimit: args.scanLimit ?? 3000,
+            pageSize: args.pageSize ?? 500,
+            outputMode,
+        };
         const baseData: Record<string, unknown> = {
             matches: rawMatches,
             rawMatches,
@@ -5210,6 +5649,10 @@ export const card_search = tool({
             pageSize: result.pageSize ?? args.pageSize ?? null,
             complete: result.complete ?? true,
             scanLimitReached: result.scanLimitReached ?? false,
+            requestsAttempted: result.requestsAttempted ?? null,
+            queueWaitMs: result.queueWaitMs ?? 0,
+            elapsedMs: result.elapsedMs ?? null,
+            criteria,
             facets: outputMode === "counts" || truncated ? buildCardSearchFacets(matchedCards) : undefined,
         };
 
@@ -5219,7 +5662,7 @@ export const card_search = tool({
         }
         else
         {
-            baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext));
+            baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext, outputMode === "detailed"));
         }
 
         return toStructuredResult(
@@ -5755,6 +6198,7 @@ const normalizeRelatedCardSummary = (entity: CodecksEntity | undefined): Record<
         cardId: entity.cardId ?? null,
         accountSeq: accountSeq ?? null,
         shortCode: shortCode || null,
+        ...buildReusableCardRefs(accountSeq),
         url: shortCode ? formatCardUrl(shortCode) : null,
         title: entity.title ?? null,
         status: entity.status ?? null,
@@ -5780,6 +6224,7 @@ const normalizeCardGetData = (
         cardId: card.cardId ?? null,
         accountSeq: accountSeq ?? null,
         shortCode: shortCode || null,
+        ...buildReusableCardRefs(accountSeq),
         url: shortCode ? formatCardUrl(shortCode) : null,
         title: card.title ?? null,
         content: card.content ?? "",
@@ -5811,6 +6256,7 @@ const normalizeCardCandidate = (card: CodecksEntity): Record<string, unknown> =>
         cardId: card.cardId ?? null,
         accountSeq: accountSeq ?? null,
         shortCode: shortCode || null,
+        ...buildReusableCardRefs(accountSeq),
         title: card.title ?? null,
         status: card.status ?? null,
         cardType: resolveCardType(card),
@@ -5839,6 +6285,8 @@ export const card_get = tool({
     {
         const format = args.format ?? "json";
         const parsedId = parseCardIdentifier(args.cardId);
+        const requestedId = args.cardId !== undefined ? String(args.cardId).trim() : "";
+        const bareNumericLookup = /^\d+$/.test(requestedId);
         let cardId = parsedId.cardId ?? args.cardId;
         let accountSeq = parsedId.accountSeq;
 
@@ -5901,8 +6349,12 @@ export const card_get = tool({
             const detail = await fetchCardDetailForGet({ cardId, accountSeq });
             if (!detail.card)
             {
-                return toStructuredErrorResult(format, "card-get", "not_found", "Card not found.", {
+                const seqHint = bareNumericLookup
+                    ? `Bare numeric identifiers are short codes. If ${requestedId} came from accountSeq, retry with seq:${requestedId}.`
+                    : undefined;
+                return toStructuredErrorResult(format, "card-get", "not_found", seqHint ? `Card not found. ${seqHint}` : "Card not found.", {
                     cardId: args.cardId ?? cardId ?? null,
+                    ...(seqHint ? { recoveryHint: seqHint, suggestedCardRef: `seq:${requestedId}` } : {}),
                 });
             }
 
@@ -5944,6 +6396,8 @@ export const card_get_formatted = tool({
     {
         const format = args.format ?? "text";
         const parsedId = parseCardIdentifier(args.cardId);
+        const requestedId = args.cardId !== undefined ? String(args.cardId).trim() : "";
+        const bareNumericLookup = /^\d+$/.test(requestedId);
         let cardId = parsedId.cardId ?? args.cardId;
         let accountSeq = parsedId.accountSeq;
         let cardCode = parsedId.cardCode;
@@ -6041,7 +6495,9 @@ export const card_get_formatted = tool({
 
         if (!card)
         {
-            return "Card not found.";
+            return bareNumericLookup
+                ? `Card not found. Bare numeric identifiers are short codes; if ${requestedId} came from accountSeq, retry with seq:${requestedId}.`
+                : "Card not found.";
         }
 
         const shortCode = resolvedSeqValue !== undefined ? formatShortCode(resolvedSeqValue) : "";
@@ -6280,6 +6736,7 @@ export const card_get_formatted = tool({
                     cardId: card.cardId,
                     accountSeq: card.accountSeq,
                     shortCode,
+                    ...buildReusableCardRefs(resolvedSeqValue),
                     url,
                     title: resolvedTitle || card.title,
                     status: card.status,
@@ -6579,6 +7036,42 @@ export const card_get_vision_board = tool({
     },
 });
 
+type CardCreatePayloadOptions = {
+    assigneeId: string | number;
+    content: string;
+    putOnHand: boolean;
+    deckId: string | number | null;
+    milestoneId: string | number | null;
+    effort: number | null;
+    priority: string | null;
+    userId: string | number | undefined;
+    parentCardId: string | null;
+    isDoc?: boolean;
+};
+
+const buildCardCreatePayload = (options: CardCreatePayloadOptions): Record<string, unknown> =>
+{
+    const payload: Record<string, unknown> = {
+        assigneeId: options.assigneeId,
+        content: options.content,
+        putOnHand: options.putOnHand,
+        deckId: options.deckId === null ? null : String(options.deckId),
+        milestoneId: options.milestoneId === null ? null : String(options.milestoneId),
+        masterTags: [],
+        attachments: [],
+        effort: options.effort,
+        priority: options.priority,
+        childCards: [],
+        userId: options.userId,
+        parentCardId: options.parentCardId,
+    };
+    if (options.isDoc !== undefined)
+    {
+        payload.isDoc = options.isDoc;
+    }
+    return payload;
+};
+
 export const card_create = tool({
     description: "Create a Codecks card in a deck or milestone.",
     args: {
@@ -6598,6 +7091,15 @@ export const card_create = tool({
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([
+            ["title", args.title],
+            ["content", args.content],
+            ...(args.tags ?? []).map((tag, index) => [`tags[${index}]`, tag] as [string, unknown]),
+        ]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "card-create", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         const document = resolveCardDocument(args.title, args.content);
         const content = buildCardContent(document.titleLine, document.body);
         const normalizedTags = normalizeCreateTags(args.tags);
@@ -6701,24 +7203,18 @@ export const card_create = tool({
 
         const createsPrivateCard = !deckId && !parentCardId;
 
-        const payload: Record<string, unknown> = {
+        const payload = buildCardCreatePayload({
             assigneeId,
             content: contentWithTags,
             putOnHand: args.putOnHand ?? false,
             deckId,
             milestoneId,
-            masterTags: [],
-            attachments: [],
             effort: args.effort ?? null,
-            priority: normalizedPriority ? normalizedPriority.code : null,
-            childCards: [],
+            priority: normalizedPriority?.code ?? null,
             userId: user.id,
             parentCardId: parentCardId ?? null,
-        };
-        if (normalizedCardType)
-        {
-            payload.isDoc = normalizedCardType.isDoc;
-        }
+            isDoc: normalizedCardType?.isDoc,
+        });
 
         let response: unknown;
         try
@@ -6812,6 +7308,7 @@ export const card_create = tool({
                 title: resolvedTitle || "(untitled)",
                 cardId: createdId || null,
                 shortCode: shortCode || null,
+                ...buildReusableCardRefs(createdSeq),
                 url: url || null,
                 cardType: createdCardType,
                 parentCardId: parentCardId ?? null,
@@ -6828,6 +7325,7 @@ export const card_create = tool({
 });
 
 type BulkCreateRecord = {
+    correlationKey?: string;
     title?: string;
     content?: string;
     cardType?: string;
@@ -6842,6 +7340,7 @@ type BulkCreateRecord = {
 };
 
 type BulkUpdateRecord = {
+    correlationKey?: string;
     cardId?: string | number;
     title?: string;
     content?: string;
@@ -6849,65 +7348,552 @@ type BulkUpdateRecord = {
     deck?: string | number;
     milestone?: string | number;
     assigneeId?: string | number;
+    effort?: number | null;
+    priority?: string;
+    tags?: string[];
+    runId?: string | number;
+    clearRun?: boolean;
+    parentCardId?: string | number;
+    clearParent?: boolean;
     mode?: "replace" | "append" | "prepend";
 };
 
-const getStructuredOk = (result: unknown): boolean => parseStructuredToolResult(result)?.ok === true;
-
-const getStructuredData = (result: unknown): Record<string, unknown> | undefined =>
-{
-    const payload = parseStructuredToolResult(result);
-    const data = payload?.data;
-    return data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : undefined;
+type NormalizedBulkCreateRecord = {
+    index: number;
+    correlationKey: string | null;
+    title: string;
+    content: string;
+    cardType: CardTypeValue;
+    deck: { id: string | number; name: string } | null;
+    milestone: { id: string | number; name: string } | null;
+    assignee: { id: string | number; name: string };
+    effort: number | null;
+    priority: { code: string | null; label: string };
+    tags: string[];
+    bodyHashtags: string[];
+    putOnHand: boolean;
+    parent: { cardId: string; cardRef: string | null; title: string } | null;
+    payload: Record<string, unknown>;
 };
 
-const getStructuredError = (result: unknown): Record<string, unknown> | undefined =>
-{
-    const payload = parseStructuredToolResult(result);
-    const error = payload?.error;
-    return error && typeof error === "object" && !Array.isArray(error) ? error as Record<string, unknown> : undefined;
+type NormalizedBulkUpdateRecord = {
+    index: number;
+    correlationKey: string | null;
+    target: { cardId: string; accountSeq: number | null; cardRef: string | null; accountSeqRef: string | null; title: string };
+    updatedFields: string[];
+    mode: "replace" | "append" | "prepend";
+    current: Record<string, unknown>;
+    proposed: Record<string, unknown>;
+    payload: Record<string, unknown>;
 };
 
-const recordTitle = (record: BulkCreateRecord): string => resolveCardDocument(record.title, record.content).titleLine;
+const BULK_CREATE_FIELDS = new Set(["correlationKey", "title", "content", "cardType", "deck", "milestone", "effort", "priority", "assigneeId", "putOnHand", "parentCardId", "tags"]);
+const BULK_UPDATE_FIELDS = new Set(["correlationKey", "cardId", "title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent", "mode"]);
+const BULK_UPDATE_VALUE_FIELDS = ["title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent"];
 
-const buildBulkScope = (record: BulkCreateRecord, defaults: BulkCreateRecord): { deck?: string | number; milestone?: string | number } => ({
-    deck: record.deck ?? defaults.deck,
-    milestone: record.milestone ?? defaults.milestone,
+const validateStrictBulkRecords = (records: unknown[], kind: "create" | "update"): string[] =>
+{
+    const errors: string[] = [];
+    const allowed = kind === "create" ? BULK_CREATE_FIELDS : BULK_UPDATE_FIELDS;
+    const path = kind === "create" ? "cards" : "updates";
+    records.forEach((value, index) =>
+    {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+        {
+            errors.push(`${path}[${index}] must be an object.`);
+            return;
+        }
+        const record = value as Record<string, unknown>;
+        for (const field of Object.keys(record))
+        {
+            if (!allowed.has(field))
+            {
+                errors.push(field === "assignee"
+                    ? `${path}[${index}].assignee is unsupported; use assigneeId from codecks_user_lookup.`
+                    : `${path}[${index}].${field} is unsupported.`);
+            }
+        }
+        if (record.correlationKey !== undefined && (typeof record.correlationKey !== "string" || record.correlationKey.length === 0 || record.correlationKey.length > 200))
+        {
+            errors.push(`${path}[${index}].correlationKey must be a non-empty string of at most 200 characters.`);
+        }
+        errors.push(...validateMutationText([
+            [`${path}[${index}].title`, record.title],
+            [`${path}[${index}].content`, record.content],
+            ...((Array.isArray(record.tags) ? record.tags : []).map((tag, tagIndex) => [`${path}[${index}].tags[${tagIndex}]`, tag] as [string, unknown])),
+        ]));
+        if (kind === "create" && !buildCardContent(resolveCardDocument(record.title as string | undefined, record.content as string | undefined).titleLine, resolveCardDocument(record.title as string | undefined, record.content as string | undefined).body).trim())
+        {
+            errors.push(`cards[${index}] requires title and/or content.`);
+        }
+        if (kind === "update")
+        {
+            if (record.cardId === undefined || String(record.cardId).trim() === "") errors.push(`updates[${index}].cardId is required.`);
+            if (!BULK_UPDATE_VALUE_FIELDS.some((field) => record[field] !== undefined)) errors.push(`updates[${index}] is a no-op; provide at least one supported update field.`);
+            if (record.clearRun === true && record.runId !== undefined) errors.push(`updates[${index}] cannot combine clearRun=true with runId.`);
+            if (record.clearParent === true && record.parentCardId !== undefined) errors.push(`updates[${index}] cannot combine clearParent=true with parentCardId.`);
+        }
+    });
+    return errors;
+};
+
+const resolveBulkAssignee = async (value: string | number | undefined): Promise<{ id: string | number; name: string }> =>
+{
+    const id = await resolveAssigneeId(value);
+    const users = await fetchUsersByIds([String(id)]);
+    const user = users[normalizeUserId(String(id))];
+    return { id, name: String(user?.fullName ?? user?.name ?? id) };
+};
+
+const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: BulkCreateRecord, index: number, loggedInUser: CodecksUser): Promise<NormalizedBulkCreateRecord> =>
+{
+    const document = resolveCardDocument(record.title, record.content);
+    const tags = normalizeCreateTags(record.tags);
+    const bodyHashtags = buildBodyHashtagTokens(tags);
+    const content = appendBodyHashtagsToCardContent(buildCardContent(document.titleLine, document.body), bodyHashtags);
+    const cardType = record.cardType === undefined ? { value: "regular" as CardTypeValue, isDoc: false } : normalizeCardTypeInput(record.cardType);
+    if (!cardType) throw new Error(`cards[${index}].cardType must be regular or documentation.`);
+
+    let deck: NormalizedBulkCreateRecord["deck"] = null;
+    const deckValue = blankToUndefined(record.deck ?? defaults.deck);
+    if (deckValue !== undefined)
+    {
+        const result = await resolveDeck(deckValue);
+        if (result.kind !== "resolved") throw new Error(`cards[${index}].deck: ${renderLookupMessage(result, String(deckValue))}`);
+        deck = { id: String(result.id), name: result.label };
+    }
+
+    let milestone: NormalizedBulkCreateRecord["milestone"] = null;
+    const milestoneValue = blankToUndefined(record.milestone ?? defaults.milestone);
+    if (milestoneValue !== undefined)
+    {
+        const result = await resolveMilestone(milestoneValue);
+        if (result.kind !== "resolved") throw new Error(`cards[${index}].milestone: ${renderLookupMessage(result, String(milestoneValue))}`);
+        milestone = { id: String(result.id), name: result.label };
+    }
+
+    const explicitAssignee = blankToUndefined(record.assigneeId);
+    const defaultAssigneeId = loggedInUser.id ?? getFallbackAssigneeId();
+    if (explicitAssignee === undefined && defaultAssigneeId === undefined)
+    {
+        throw new Error(`cards[${index}] could not resolve a default assignee; provide assigneeId from codecks_user_lookup.`);
+    }
+    const assignee: { id: string | number; name: string } = explicitAssignee !== undefined
+        ? await resolveBulkAssignee(explicitAssignee)
+        : { id: defaultAssigneeId!, name: String(loggedInUser.fullName ?? loggedInUser.name ?? defaultAssigneeId) };
+    const priority = record.priority === undefined ? { code: null, label: "None" } : normalizePriorityInput(record.priority);
+    if (!priority) throw new Error(`cards[${index}].priority must be none, low, medium, high, a, b, or c.`);
+
+    let parent: NormalizedBulkCreateRecord["parent"] = null;
+    const parentValue = blankToUndefined(record.parentCardId ?? defaults.parentCardId);
+    if (parentValue !== undefined)
+    {
+        const result = await resolveCardForUpdate(parentValue);
+        if (!result) throw new Error(`cards[${index}].parentCardId was not found.`);
+        parent = { cardId: result.cardId, cardRef: result.shortCode || null, title: result.title || "(untitled)" };
+    }
+
+    const putOnHand = record.putOnHand ?? false;
+    return {
+        index,
+        correlationKey: record.correlationKey ?? null,
+        title: document.titleLine || "(untitled)",
+        content,
+        cardType: cardType.value,
+        deck,
+        milestone,
+        assignee,
+        effort: record.effort ?? null,
+        priority,
+        tags,
+        bodyHashtags,
+        putOnHand,
+        parent,
+        payload: buildCardCreatePayload({
+            assigneeId: assignee.id,
+            content,
+            putOnHand,
+            deckId: deck?.id ?? null,
+            milestoneId: milestone?.id ?? null,
+            effort: record.effort ?? null,
+            priority: priority.code,
+            userId: loggedInUser.id,
+            parentCardId: parent?.cardId ?? null,
+            isDoc: record.cardType === undefined ? undefined : cardType.isDoc,
+        }),
+    };
+};
+
+const relationEntityId = (value: unknown): string | null =>
+{
+    if (value && typeof value === "object") return String((value as CodecksEntity).id ?? (value as CodecksEntity).cardId ?? "") || null;
+    return value === undefined || value === null ? null : String(value);
+};
+
+type DuplicatePolicy = "required" | "best_effort" | "skip";
+type BulkCreateOutputMode = "compact" | "detailed";
+type BulkCreateVerification = "none" | "identity";
+
+// Title-contains is the narrow, portable discovery primitive. Four logical title
+// probes are allowed; each probe can paginate and therefore use multiple HTTP requests.
+// Larger title sets use one bounded account fallback.
+const BULK_CREATE_TITLE_REQUEST_BUDGET = 4;
+const normalizeDuplicateTitle = (title: string): string => title.trim().toLocaleLowerCase();
+const recordMatchesDuplicate = (card: CodecksEntity, record: NormalizedBulkCreateRecord): boolean =>
+    normalizeDuplicateTitle(String(card.title ?? "")) === normalizeDuplicateTitle(record.title)
+    && (!record.deck || relationEntityId(card.deck) === String(record.deck.id))
+    && (!record.milestone || relationEntityId(card.milestone) === String(record.milestone.id));
+
+const emptyDuplicateCandidates = (records: NormalizedBulkCreateRecord[]): Map<number, Record<string, unknown>[]> =>
+    new Map(records.map((record) => [record.index, []]));
+
+const semanticTitleFilterRejection = (error: unknown): boolean =>
+{
+    // Only a server-declared rejection of this narrow filter can widen discovery.
+    // Transport, auth, rate, cancellation, timeout, and queue errors stay blocking.
+    const rootError = error instanceof PagedCardScanFailure ? error.cause : error;
+    if (rootError instanceof CodecksOperationError) return false;
+    const message = toErrorMessage(rootError);
+    return /^Codecks API semantic error:/i.test(message)
+        && /\btitle\b/i.test(message)
+        && /\b(?:contains|filter|operator)\b/i.test(message)
+        && /\b(?:unsupported|unavailable|invalid|not allowed|rejected)\b/i.test(message);
+};
+
+const scanStageMetadata = (stage: "title_contains" | "account_fallback", scans: PagedCardScanResult[], probesAttempted?: number, semanticRejectedProbes = 0, semanticRejectedRequests = 0) => ({
+    stage,
+    ...(probesAttempted === undefined ? {} : { probesAttempted }),
+    ...(semanticRejectedProbes > 0 ? {
+        semanticRejectedProbes,
+        semanticRejectedRequests,
+    } : {}),
+    complete: scans.every((scan) => scan.complete),
+    scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
+    requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
+    queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
+    elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
 });
 
-const findPotentialDuplicateCards = async (title: string, scope: { deck?: string | number; milestone?: string | number }, limit: number): Promise<Record<string, unknown>[]> =>
+const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number, policy: DuplicatePolicy) =>
 {
-    if (!title.trim())
+    const bounds = { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) };
+    if (policy === "skip") return {
+        candidates: emptyDuplicateCandidates(records),
+        metadata: { strategy: "skipped", credentialVisibleScope: "not_scanned", complete: false, scanned: 0, scanLimit, requestsAttempted: 0, queueWaitMs: 0, elapsedMs: 0, bounds, stages: [], fallback: null, policyOutcome: "skipped_by_request" },
+    };
+
+    const titles = [...new Set(records.map((record) => normalizeDuplicateTitle(record.title)))];
+    const titleScans: PagedCardScanResult[] = [];
+    let titleProbesAttempted = 0;
+    let semanticRejectedProbes = 0;
+    let semanticRejectedRequests = 0;
+    let fallbackScan: PagedCardScanResult | null = null;
+    let fallback: string | null = null;
+    if (titles.length <= BULK_CREATE_TITLE_REQUEST_BUDGET)
     {
-        return [];
+        // At most four probes run sequentially. This avoids unaccountable work if a
+        // server-declared title-filter rejection requires the account fallback.
+        for (const title of titles)
+        {
+            titleProbesAttempted += 1;
+            try
+            {
+                titleScans.push(await fetchPagedCards({
+                    filters: { title: { op: "contains", value: title } }, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500),
+                }));
+            }
+            catch (error)
+            {
+                if (!semanticTitleFilterRejection(error)) throw error instanceof PagedCardScanFailure ? error.cause : error;
+                if (error instanceof PagedCardScanFailure)
+                {
+                    titleScans.push(error.scan);
+                    semanticRejectedRequests += error.scan.requestsAttempted;
+                }
+                semanticRejectedProbes += 1;
+                fallback = "title_contains_semantically_rejected";
+                break;
+            }
+        }
+    }
+    else fallback = "title_request_budget_exceeded";
+
+    if (titleScans.length === 0 || titleScans.some((scan) => !scan.complete))
+    {
+        fallback ??= "title_scan_incomplete";
+        fallbackScan = await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) });
     }
 
-    const result = await fetchCardMatches({
-        title,
-        location: scope.deck !== undefined ? "deck" : (scope.milestone !== undefined ? "milestone" : "any"),
-        deck: scope.deck,
-        milestone: scope.milestone,
-        includeArchived: false,
-        limit,
-    });
-    if (result.error || !result.cards)
+    const scans = [...titleScans, ...(fallbackScan ? [fallbackScan] : [])];
+    // Accessible archived cards are valid duplicate evidence; deleted cards are not.
+    // Inaccessible Private cards cannot be returned by this credential-visible scan.
+    const cards = scans.flatMap((scan) => scan.cards)
+        .filter((card) => String(card.visibility ?? "").toLowerCase() !== "deleted");
+    const candidates = emptyDuplicateCandidates(records);
+    if (duplicateLimit > 0) for (const record of records) candidates.set(record.index, cards
+        .filter((card) => recordMatchesDuplicate(card, record)).slice(0, duplicateLimit).map((card) => normalizeCardSearchSummary(card)));
+    const complete = fallbackScan ? fallbackScan.complete : titleScans.every((scan) => scan.complete);
+    const incompleteOnlyByBound = !complete && !!fallbackScan && fallbackScan.scanLimitReached;
+    const stages = [
+        ...(titleScans.length > 0 ? [scanStageMetadata("title_contains", titleScans, titleProbesAttempted, semanticRejectedProbes, semanticRejectedRequests)] : []),
+        ...(fallbackScan ? [scanStageMetadata("account_fallback", [fallbackScan])] : []),
+    ];
+    return {
+        candidates,
+        metadata: {
+            strategy: fallbackScan ? "account_fallback" : "title_contains",
+            credentialVisibleScope: "cards accessible to the configured credential at scan time (including archived cards when returned; excluding deleted and inaccessible Private cards)",
+            complete,
+            scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
+            scanLimit,
+            requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
+            queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
+            elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
+            ...(semanticRejectedProbes > 0 ? {
+                semanticRejectedProbes,
+                semanticRejectedRequests,
+            } : {}),
+            bounds,
+            stages,
+            fallback,
+            policyOutcome: complete ? "complete" : (incompleteOnlyByBound ? "incomplete_scan_limit" : "incomplete"),
+        },
+    };
+};
+
+const normalizedMutationFingerprint = (value: Record<string, unknown>): string =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+const actionKeyFor = (operation: "create" | "update", index: number, payload: Record<string, unknown>): string =>
+{
+    const { sessionId: _sessionId, ...stablePayload } = payload;
+    return `${operation}:${index}:${normalizedMutationFingerprint(stablePayload).slice(0, 24)}`;
+};
+
+type DispatchCardIdentity = {
+    cardId: string | null;
+    accountSeq: number | null;
+    title: string | null;
+};
+
+const parseCardAccountSeq = (value: unknown): number | null =>
+{
+    if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+    if (typeof value === "string" && /^\d+$/.test(value))
     {
-        return [];
+        const parsed = Number(value);
+        return Number.isSafeInteger(parsed) ? parsed : null;
     }
-    return result.cards
-        .filter((card) => String(card.title ?? "").trim().toLowerCase() === title.trim().toLowerCase())
-        .map((card) => normalizeCardSearchSummary(card));
+    return null;
+};
+
+// Dispatch responses vary between { card }, { payload: { card } }, and { payload }.
+// Nested card/payload records are authoritative; a generic outer `id` may be
+// an action ID and is therefore never interpreted as a card identity.
+const extractDispatchCardIdentity = (response: unknown): DispatchCardIdentity =>
+{
+    const data = unwrapData(response);
+    const candidates: Array<{ value: Record<string, unknown>; allowGenericId: boolean }> = [];
+    if (isRecord(data))
+    {
+        if (isRecord(data.card)) candidates.push({ value: data.card, allowGenericId: true });
+        if (isRecord(data.payload))
+        {
+            if (isRecord(data.payload.card)) candidates.push({ value: data.payload.card, allowGenericId: true });
+            candidates.push({ value: data.payload, allowGenericId: true });
+        }
+        candidates.push({ value: data, allowGenericId: false });
+    }
+
+    for (const { value: candidate, allowGenericId } of candidates)
+    {
+        const rawCardId = candidate.cardId ?? (allowGenericId ? candidate.id : undefined);
+        const cardId = rawCardId === undefined || rawCardId === null || String(rawCardId).trim() === ""
+            ? null
+            : String(rawCardId);
+        const accountSeq = parseCardAccountSeq(candidate.accountSeq);
+        if (cardId || accountSeq !== null)
+        {
+            return {
+                cardId,
+                accountSeq,
+                title: typeof candidate.title === "string" ? candidate.title : null,
+            };
+        }
+    }
+    return { cardId: null, accountSeq: null, title: null };
+};
+
+const publicCardIdentity = (identity: Pick<DispatchCardIdentity, "cardId" | "accountSeq">) =>
+{
+    const accountSeq = identity.accountSeq ?? undefined;
+    return {
+        cardId: identity.cardId,
+        accountSeq: identity.accountSeq,
+        shortCode: formatShortCode(accountSeq) || null,
+        ...buildReusableCardRefs(accountSeq),
+    };
+};
+
+const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<{ state: "identity_verified" | "not_found" | "mismatch"; observed?: Record<string, unknown>; checkedFields: string[] }> =>
+{
+    const card = identity.accountSeq !== null
+        ? await fetchCardByAccountSeqExactlyOnce(identity.accountSeq, ["cardId", "accountSeq", "title"])
+        : identity.cardId
+            ? await fetchCardByIdExactlyOnce(identity.cardId, ["cardId", "accountSeq", "title"])
+            : undefined;
+    // No persisted entity means no identity component was compared.
+    if (!card) return { state: "not_found", checkedFields: [] };
+
+    const persistedIdentity: DispatchCardIdentity = {
+        cardId: card.cardId === undefined || card.cardId === null ? null : String(card.cardId),
+        accountSeq: parseCardAccountSeq(card.accountSeq),
+        title: typeof card.title === "string" ? card.title : null,
+    };
+    const checkedFields: string[] = [];
+    if (identity.cardId) checkedFields.push("cardId");
+    if (identity.accountSeq !== null) checkedFields.push("accountSeq");
+    const observed = { ...publicCardIdentity(persistedIdentity), title: persistedIdentity.title };
+    const mismatch = (identity.cardId !== null && persistedIdentity.cardId !== identity.cardId)
+        || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq);
+    return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields };
+};
+
+const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
+{
+    const normalizedRequested = {
+        title: record.title,
+        content: record.content,
+        contentMode: "replace",
+        cardType: record.cardType,
+        deck: record.deck,
+        milestone: record.milestone,
+        assignee: record.assignee,
+        effort: record.effort,
+        priority: record.priority,
+        tags: record.tags,
+        bodyHashtags: record.bodyHashtags,
+        putOnHand: record.putOnHand,
+        handState: record.putOnHand ? "on_hand" : "off_hand",
+        parent: record.parent,
+        run: null,
+        privateCard: !record.deck && !record.parent,
+    } as Record<string, unknown>;
+    return {
+        index: record.index,
+        operation: "create",
+        correlationKey: record.correlationKey,
+        actionKey: actionKeyFor("create", record.index, record.payload),
+        normalizedRequested,
+        normalizedRequestedFingerprint: normalizedMutationFingerprint(normalizedRequested),
+        dispatchReturned: null,
+        persistedVerified: null,
+        verificationState: "not_performed",
+        ...normalizedRequested,
+        duplicateCandidates,
+    };
+};
+
+const compactBulkCreateRecord = (entry: Record<string, unknown>): Record<string, unknown> =>
+{
+    const result: Record<string, unknown> = {
+        index: entry.index,
+        correlationKey: entry.correlationKey,
+        status: entry.status,
+        certainty: entry.certainty,
+    };
+    const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
+    if (identity?.cardRef) result.cardRef = identity.cardRef;
+    if (identity?.cardId) result.cardId = identity.cardId;
+    if (identity?.accountSeqRef) result.accountSeqRef = identity.accountSeqRef;
+    if (entry.status === "indeterminate") result.actionKey = entry.actionKey;
+    if (entry.verificationState) result.verificationState = entry.verificationState;
+    if (Array.isArray(entry.verificationCheckedFields)) result.verificationCheckedFields = entry.verificationCheckedFields;
+    if (entry.verificationObservedIdentity) result.verificationObservedIdentity = entry.verificationObservedIdentity;
+    if (entry.verificationWarning) result.verificationWarning = String(entry.verificationWarning).slice(0, 240);
+    if (entry.verificationError && isRecord(entry.verificationError)) result.verificationError = {
+        category: entry.verificationError.category,
+        message: String(entry.verificationError.message ?? "Verification read failed.").slice(0, 240),
+    };
+    if (entry.error) result.error = entry.error;
+    if (entry.reconciliation) result.reconciliation = entry.reconciliation;
+    return result;
+};
+
+const boundedBulkWarnings = (metadata: Record<string, unknown>, policy: DuplicatePolicy): string[] =>
+{
+    const warnings: string[] = [];
+    if (policy === "skip") warnings.push("Duplicate discovery was skipped by explicit request.");
+    else if (metadata.complete === false) warnings.push("Duplicate discovery is incomplete; no-match rows are not definitive evidence.");
+    if (metadata.policyOutcome === "parent_local_required_unavailable") warnings.push("Parent-local duplicate matching is unavailable; this is a preview only and no create was dispatched.");
+    if (typeof metadata.fallback === "string" && metadata.fallback !== "parent_local_required_unavailable") warnings.push(`Duplicate discovery used account fallback: ${metadata.fallback}.`);
+    return warnings.slice(0, 3);
+};
+
+const preflightOutcomeRecords = (records: unknown[], operation: "create" | "update", errors: Array<{ index?: number; message: string }> = []) =>
+{
+    const byIndex = new Map<number, string[]>();
+    for (const error of errors)
+    {
+        const index = error.index ?? Number(error.message.match(/\[(\d+)\]/)?.[1]);
+        if (Number.isInteger(index)) byIndex.set(index, [...(byIndex.get(index) ?? []), error.message]);
+    }
+    return records.map((record, index) =>
+    {
+        const input = isRecord(record) ? record : {};
+        const messages = byIndex.get(index) ?? [];
+        return {
+            index,
+            operation,
+            correlationKey: typeof input.correlationKey === "string" ? input.correlationKey : null,
+            actionKey: null,
+            status: messages.length > 0 ? "failed" : "definitely_unsent",
+            certainty: messages.length > 0 ? "definitely_rejected" : "definitely_unsent",
+            ...(messages.length > 0 ? { error: { category: "validation_error", message: messages.join(" ") } } : {}),
+        };
+    });
+};
+
+const classifyMutationOutcome = (error: unknown): "failed" | "indeterminate" =>
+{
+    if (error instanceof CodecksOperationError && ["request_timeout", "caller_aborted"].includes(error.category)) return "indeterminate";
+    const message = toErrorMessage(error);
+    return /\b(?:5\d\d|timeout|timed out|network|socket|connection|econn|epipe|fetch failed)\b/i.test(message)
+        ? "indeterminate"
+        : "failed";
+};
+
+const markDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number): void =>
+{
+    for (const entry of results)
+    {
+        if (Number(entry.index) > afterIndex && entry.status === "ready")
+        {
+            entry.status = "definitely_unsent";
+            entry.certainty = "definitely_unsent";
+            entry.reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made." };
+        }
+    }
 };
 
 export const card_bulk_create = tool({
     description: "Preview or create multiple Codecks cards with duplicate detection and per-card status results.",
     args: {
-        cards: tool.schema.array(tool.schema.any()).min(1).max(100).describe("Cards to create. Each item may include title, content, deck, milestone, parentCardId, effort, priority, assigneeId, tags, cardType, putOnHand."),
+        cards: tool.schema.array(tool.schema.object({
+            correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
+            deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
+            effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
+            putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional(),
+        })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default deck name or ID for cards without a deck."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default milestone name or ID for cards without a milestone."),
         parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default parent Hero card for cards without a parentCardId."),
         dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
         duplicateLimit: tool.schema.number().min(0).max(20).optional().describe("Maximum duplicate candidates to record per card. Defaults to 5."),
+        duplicateScanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum rows per bounded duplicate-discovery relation. Defaults to 3000."),
+        duplicatePolicy: tool.schema.enum(["required", "best_effort", "skip"]).optional().describe("Duplicate evidence policy. Dry-run defaults to required; apply defaults to best_effort. skip performs no discovery."),
+        verification: tool.schema.enum(["none", "identity"]).optional().describe("Post-create verification. none (default) performs zero reads; identity makes at most one exact read for each identifiable create."),
+        outputMode: tool.schema.enum(["compact", "detailed"]).optional().describe("Structured result detail. Dry-run defaults to detailed (schema v1); apply defaults to compact (schema v2)."),
         continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
         format: outputFormatArg,
     },
@@ -6915,91 +7901,444 @@ export const card_bulk_create = tool({
     {
         const format = args.format ?? "text";
         const dryRun = args.dryRun !== false;
-        const duplicateLimit = args.duplicateLimit ?? 5;
         const continueOnError = args.continueOnError !== false;
-        const records = (args.cards as BulkCreateRecord[]).map((record) => ({ ...record }));
+        const duplicatePolicy: DuplicatePolicy = (args.duplicatePolicy as DuplicatePolicy | undefined) ?? (dryRun ? "required" : "best_effort");
+        const verification: BulkCreateVerification = (args.verification as BulkCreateVerification | undefined) ?? "none";
+        const outputMode: BulkCreateOutputMode = (args.outputMode as BulkCreateOutputMode | undefined) ?? (dryRun ? "detailed" : "compact");
+        const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : [];
+        const structuralErrors = validateStrictBulkRecords(rawRecords, "create");
+        if (structuralErrors.length > 0)
+        {
+            const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
+            return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), {
+                indexedErrors: structuralErrors,
+                invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
+                requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "create", indexedErrors),
+            });
+        }
+
         const defaults: BulkCreateRecord = {
             deck: blankToUndefined(args.deck),
             milestone: blankToUndefined(args.milestone),
             parentCardId: blankToUndefined(args.parentCardId),
         };
-        const results: Record<string, unknown>[] = [];
-
-        for (let index = 0; index < records.length; index += 1)
+        const normalized: NormalizedBulkCreateRecord[] = [];
+        const normalizationErrors: Array<{ index: number; message: string }> = [];
+        let loggedInUser: CodecksUser;
+        try
         {
-            const record = records[index];
-            const title = recordTitle(record);
-            const scope = buildBulkScope(record, defaults);
-            const duplicateCandidates = await findPotentialDuplicateCards(title, scope, duplicateLimit);
-            const planned = {
-                index,
-                title: title || "(untitled)",
-                deck: record.deck ?? defaults.deck ?? null,
-                milestone: record.milestone ?? defaults.milestone ?? null,
-                parentCardId: record.parentCardId ?? defaults.parentCardId ?? null,
-                duplicateCandidates,
-            };
-
-            if (dryRun)
+            loggedInUser = await fetchLoggedInUser();
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
+        for (let index = 0; index < rawRecords.length; index += 1)
+        {
+            try
             {
-                results.push({ ...planned, status: duplicateCandidates.length > 0 ? "duplicate_candidate" : "ready" });
-                continue;
+                normalized.push(await normalizeBulkCreateRecord(rawRecords[index] as BulkCreateRecord, defaults, index, loggedInUser));
             }
-
-            const createArgs = {
-                ...record,
-                deck: record.deck ?? defaults.deck,
-                milestone: record.milestone ?? defaults.milestone,
-                parentCardId: record.parentCardId ?? defaults.parentCardId,
-                format: "json" as OutputFormat,
-            };
-            const createResult = await card_create.execute(createArgs);
-            if (getStructuredOk(createResult))
+            catch (error)
             {
-                results.push({ ...planned, status: "created", created: getStructuredData(createResult) ?? null });
-                continue;
+                normalizationErrors.push({ index, message: toErrorMessage(error) });
             }
+        }
+        if (normalizationErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map((entry) => entry.message).join(" "), {
+                indexedErrors: normalizationErrors,
+                invalidRecordCount: normalizationErrors.length,
+                requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "create", normalizationErrors),
+            });
+        }
 
-            const error = getStructuredError(createResult) ?? { message: String(createResult) };
-            results.push({ ...planned, status: "failed", error });
-            if (!continueOnError)
+        const parentScopedRequiredUnavailable = duplicatePolicy === "required" && normalized.some((record) => record.parent);
+        if (parentScopedRequiredUnavailable && !dryRun)
+        {
+            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "duplicatePolicy=required is unavailable for parent-scoped creates until parent-local duplicate matching is supported.", {
+                duplicatePolicy,
+                requestsAttempted: 0,
+                recoveryHint: "Use duplicatePolicy=best_effort after reviewing a dry-run, or omit parentCardId for an account-visible required check.",
+            });
+        }
+
+        let duplicateScan: Awaited<ReturnType<typeof scanBulkCreateDuplicates>>;
+        if (parentScopedRequiredUnavailable)
+        {
+            const scanLimit = args.duplicateScanLimit ?? 3000;
+            duplicateScan = {
+                candidates: emptyDuplicateCandidates(normalized),
+                metadata: {
+                    strategy: "parent_local_unavailable",
+                    credentialVisibleScope: "not_scanned",
+                    complete: false,
+                    scanned: 0,
+                    scanLimit,
+                    requestsAttempted: 0,
+                    queueWaitMs: 0,
+                    elapsedMs: 0,
+                    bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) },
+                    stages: [],
+                    fallback: "parent_local_required_unavailable",
+                    policyOutcome: "parent_local_required_unavailable",
+                },
+            };
+        }
+        else try
+        {
+            duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000, duplicatePolicy);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(
+                format,
+                "card-bulk-create",
+                error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                toErrorMessage(error),
+                getOperationErrorData(error),
+            );
+        }
+
+        if (!parentScopedRequiredUnavailable) duplicateScan.metadata.policyOutcome = duplicatePolicy === "skip"
+            ? "skipped_by_request"
+            : duplicateScan.metadata.complete
+                ? "complete"
+                : duplicatePolicy === "required"
+                    ? (dryRun ? "required_incomplete_review" : "required_blocked")
+                    : (dryRun ? "best_effort_incomplete_review" : "best_effort_proceeded");
+
+        if (!duplicateScan.metadata.complete && !dryRun && duplicatePolicy === "required")
+        {
+            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "Duplicate discovery is incomplete under duplicatePolicy=required; no creates were dispatched.", {
+                scan: duplicateScan.metadata,
+                duplicatePolicy,
+                recoveryHint: "Increase duplicateScanLimit or use duplicatePolicy=best_effort only after reviewing the incomplete evidence.",
+            });
+        }
+
+        const results: Record<string, unknown>[] = normalized.map((record) =>
+        {
+            const candidates = duplicateScan.candidates.get(record.index) ?? [];
+            return {
+                ...publicBulkCreateRecord(record, candidates),
+                status: duplicatePolicy === "skip" || duplicateScan.metadata.complete
+                    ? (candidates.length > 0 ? "duplicate_candidate" : "ready")
+                    : "scan_incomplete",
+                certainty: "not_dispatched",
+                verificationState: dryRun ? "not_applicable" : (verification === "none" ? "not_requested" : "not_identifiable"),
+                ...(verification === "identity" ? { verificationCheckedFields: [] } : {}),
+            };
+        });
+
+        if (!dryRun)
+        {
+            for (const record of normalized)
             {
-                break;
+                try
+                {
+                    const response = unwrapData(await runDispatch("cards/create", record.payload));
+                    const dispatchIdentity = extractDispatchCardIdentity(response);
+                    results[record.index].status = "created";
+                    results[record.index].certainty = "dispatch_returned";
+                    results[record.index].dispatchReturned = truncateStructuredValue(response ?? null).value;
+                    // `created` is retained for compatibility; `dispatchIdentity` makes its source explicit.
+                    results[record.index].dispatchIdentity = publicCardIdentity(dispatchIdentity);
+                    results[record.index].created = {
+                        ...publicCardIdentity(dispatchIdentity),
+                        title: dispatchIdentity.title,
+                    };
+                    if (verification === "identity")
+                    {
+                        if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
+                        {
+                            try
+                            {
+                                const identityCheck = await verifyCreatedCard(dispatchIdentity);
+                                results[record.index].verificationState = identityCheck.state;
+                                results[record.index].verificationCheckedFields = identityCheck.checkedFields;
+                                if (identityCheck.state === "not_found") results[record.index].verificationWarning = "Identity was not found after one read; this can be eventual-consistency delay, not a failed create.";
+                                if (identityCheck.observed) results[record.index].verificationObservedIdentity = identityCheck.observed;
+                                if (identityCheck.state === "identity_verified" && identityCheck.observed) results[record.index].persistedVerified = identityCheck.observed;
+                            }
+                            catch (error)
+                            {
+                                results[record.index].verificationState = "read_failed";
+                                results[record.index].verificationError = {
+                                    category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                                    message: toErrorMessage(error),
+                                    ...getOperationErrorData(error),
+                                };
+                            }
+                        }
+                        else
+                        {
+                            results[record.index].verificationState = "not_identifiable";
+                        }
+                    }
+                }
+                catch (error)
+                {
+                    const outcome = classifyMutationOutcome(error);
+                    results[record.index].status = outcome;
+                    results[record.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
+                    results[record.index].error = {
+                        category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                        message: toErrorMessage(error),
+                        ...getOperationErrorData(error),
+                        retried: false,
+                    };
+                    if (outcome === "indeterminate")
+                    {
+                        results[record.index].reconciliation = { actionKey: results[record.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
+                        markDefinitelyUnsent(results, record.index);
+                        break;
+                    }
+                    if (!continueOnError)
+                    {
+                        markDefinitelyUnsent(results, record.index);
+                        break;
+                    }
+                }
             }
         }
 
         const created = results.filter((entry) => entry.status === "created").length;
         const failed = results.filter((entry) => entry.status === "failed").length;
-        const duplicateCandidates = results.filter((entry) => entry.status === "duplicate_candidate").length;
+        const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
+        const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
+        const duplicateCandidates = results.filter((entry) => Array.isArray(entry.duplicateCandidates) && entry.duplicateCandidates.length > 0).length;
         const lines = [
             "## Bulk Card Create",
             "",
             `Mode: ${dryRun ? "dry-run" : "apply"}`,
-            `Records: ${records.length}`,
+            `Records: ${rawRecords.length}`,
             `Created: ${created}`,
             `Failed: ${failed}`,
+            `Indeterminate: ${indeterminate}`,
+            `Definitely Unsent: ${definitelyUnsent}`,
             `Duplicate Candidates: ${duplicateCandidates}`,
+            `Discovery: ${duplicateScan.metadata.strategy}; ${duplicateScan.metadata.complete ? "complete" : "incomplete"}; ${duplicateScan.metadata.scanned} rows; ${duplicateScan.metadata.requestsAttempted} request(s); policy ${duplicatePolicy}`,
             "",
-            ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.title}`),
+            ...results.map((entry) => {
+                const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
+                const reference = identity?.cardRef ? ` ${identity.cardRef}` : "";
+                const cardId = identity?.cardId ? ` (${identity.cardId})` : "";
+                const detail = entry.status === "indeterminate"
+                    ? ` — reconcile; action ${entry.actionKey}`
+                    : entry.error && isRecord(entry.error) ? ` — ${String(entry.error.message ?? "error")}` : "";
+                const verificationState = entry.verificationState ? `; verification ${entry.verificationState}` : "";
+                const checkedFields = Array.isArray(entry.verificationCheckedFields) && entry.verificationCheckedFields.length > 0
+                    ? ` (${entry.verificationCheckedFields.join(", ")})` : "";
+                const verificationObserved = isRecord(entry.verificationObservedIdentity)
+                    ? `; observed ${String(entry.verificationObservedIdentity.cardRef ?? entry.verificationObservedIdentity.cardId ?? "identity")}` : "";
+                const verificationDetail = entry.verificationWarning
+                    ? `; ${String(entry.verificationWarning).slice(0, 240)}`
+                    : isRecord(entry.verificationError) ? `; verification read error: ${String(entry.verificationError.message ?? "failed").slice(0, 240)}` : "";
+                return `- #${Number(entry.index) + 1}${entry.correlationKey ? ` [${entry.correlationKey}]` : ""} ${entry.status}/${entry.certainty}${reference}${cardId}${verificationState}${checkedFields}${verificationObserved}${detail}${verificationDetail}`;
+            }),
         ];
-
-        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), {
+        const warnings = boundedBulkWarnings(duplicateScan.metadata, duplicatePolicy);
+        const detailedData = {
+            responseSchemaVersion: 1,
             dryRun,
-            count: records.length,
+            outputMode: "detailed",
+            duplicatePolicy,
+            verification,
+            count: rawRecords.length,
             created,
             failed,
+            indeterminate,
+            definitelyUnsent,
+            invalidRecordCount: 0,
             duplicateCandidates,
+            complete: duplicateScan.metadata.complete,
+            scan: duplicateScan.metadata,
             results,
-        });
+        };
+        const compactData = {
+            responseSchemaVersion: 2,
+            dryRun,
+            outputMode: "compact",
+            duplicatePolicy,
+            verification,
+            count: rawRecords.length,
+            created,
+            failed,
+            indeterminate,
+            definitelyUnsent,
+            duplicateCandidates,
+            duplicateDiscovery: duplicateScan.metadata,
+            results: results.map(compactBulkCreateRecord),
+        };
+        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), outputMode === "detailed" ? detailedData : compactData, warnings);
     },
 });
 
+const fetchBulkUpdateCard = async (value: string | number): Promise<CodecksEntity | undefined> =>
+{
+    const parsed = parseCardIdentifier(value);
+    return parsed.accountSeq !== undefined
+        ? fetchCardByAccountSeq(parsed.accountSeq, [...cardDetailFields, "sprintId"])
+        : parsed.cardId ? fetchCardById(parsed.cardId, [...cardDetailFields, "sprintId"]) : undefined;
+};
+
+type BulkUpdateNormalizationContext = {
+    cards: Map<string, Promise<CodecksEntity | undefined>>;
+    runs: Map<string, Promise<RunLookupResult | null>>;
+};
+
+const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number, context: BulkUpdateNormalizationContext): Promise<NormalizedBulkUpdateRecord> =>
+{
+    const cardKey = String(record.cardId);
+    const cardPromise = context.cards.get(cardKey) ?? fetchBulkUpdateCard(record.cardId!);
+    context.cards.set(cardKey, cardPromise);
+    const card = await cardPromise;
+    if (!card?.cardId) throw new Error(`updates[${index}].cardId was not found.`);
+    const accountSeq = typeof card.accountSeq === "number" ? card.accountSeq : undefined;
+    const mode = record.mode ?? "replace";
+    const payload: Record<string, unknown> = { sessionId: generateSessionId(), id: card.cardId };
+    const current: Record<string, unknown> = {
+        title: card.title ?? null,
+        content: card.content ?? "",
+        cardType: resolveCardType(card),
+        deck: (card.deck as CodecksEntity | undefined)?.title ?? null,
+        deckId: relationEntityId(card.deck),
+        milestone: (card.milestone as CodecksEntity | undefined)?.name ?? (card.milestone as CodecksEntity | undefined)?.title ?? null,
+        milestoneId: relationEntityId(card.milestone),
+        assignee: (card.assignee as CodecksEntity | undefined)?.fullName ?? (card.assignee as CodecksEntity | undefined)?.name ?? null,
+        assigneeId: relationEntityId(card.assignee),
+        effort: card.effort ?? null,
+        priority: formatPriorityLabel(card.priority),
+        tags: formatTags(card.masterTags),
+        runId: card.sprintId ?? null,
+        parentCardId: relationEntityId(card.parentCard),
+    };
+    const proposed: Record<string, unknown> = {};
+
+    const parts = splitCardContent(String(card.content ?? ""), String(card.title ?? ""));
+    const title = record.title !== undefined ? normalizeCardTitleInput(record.title) : parts.titleLine;
+    let body = parts.body;
+    if (record.content !== undefined)
+    {
+        const incoming = removeDuplicateBodyTitle(title, normalizeCardBodyInput(record.content));
+        body = mode === "append" ? [body, incoming].filter(Boolean).join("\n\n")
+            : mode === "prepend" ? [incoming, body].filter(Boolean).join("\n\n") : incoming;
+    }
+    if (record.title !== undefined || record.content !== undefined)
+    {
+        payload.title = title;
+        payload.content = buildCardContent(title, removeDuplicateBodyTitle(title, body));
+        proposed.title = title;
+        proposed.content = payload.content;
+    }
+    if (record.cardType !== undefined)
+    {
+        const value = normalizeCardTypeInput(record.cardType);
+        if (!value) throw new Error(`updates[${index}].cardType must be regular or documentation.`);
+        payload.isDoc = value.isDoc;
+        proposed.cardType = value.value;
+    }
+    if (record.deck !== undefined)
+    {
+        const value = await resolveDeck(record.deck);
+        if (value.kind !== "resolved") throw new Error(`updates[${index}].deck: ${renderLookupMessage(value, String(record.deck))}`);
+        payload.deckId = value.id;
+        proposed.deck = { id: value.id, name: value.label };
+    }
+    if (record.milestone !== undefined)
+    {
+        const value = await resolveMilestone(record.milestone);
+        if (value.kind !== "resolved") throw new Error(`updates[${index}].milestone: ${renderLookupMessage(value, String(record.milestone))}`);
+        payload.milestoneId = value.id;
+        proposed.milestone = { id: value.id, name: value.label };
+    }
+    if (record.assigneeId !== undefined)
+    {
+        const value = await resolveBulkAssignee(record.assigneeId);
+        payload.assigneeId = value.id;
+        proposed.assignee = value;
+    }
+    if (record.effort !== undefined)
+    {
+        payload.effort = record.effort;
+        proposed.effort = record.effort;
+    }
+    if (record.priority !== undefined)
+    {
+        const value = normalizePriorityInput(record.priority);
+        if (!value) throw new Error(`updates[${index}].priority must be none, low, medium, high, a, b, or c.`);
+        payload.priority = value.code;
+        proposed.priority = value;
+    }
+    if (record.tags !== undefined)
+    {
+        const value = normalizeCreateTags(record.tags);
+        payload.masterTags = value;
+        proposed.tags = value;
+    }
+    if (record.clearRun === true)
+    {
+        payload.sprintId = null;
+        proposed.run = null;
+    }
+    else if (record.runId !== undefined)
+    {
+        const runKey = String(record.runId);
+        const runPromise = context.runs.get(runKey) ?? resolveRunForUpdate(record.runId);
+        context.runs.set(runKey, runPromise);
+        const value = await runPromise;
+        if (!value) throw new Error(`updates[${index}].runId was not found.`);
+        payload.sprintId = value.runId;
+        proposed.run = { id: value.runId, accountSeq: value.accountSeq ?? null, name: value.label };
+    }
+    if (record.clearParent === true)
+    {
+        payload.parentCardId = null;
+        proposed.parent = null;
+    }
+    else if (record.parentCardId !== undefined)
+    {
+        const value = await resolveCardForUpdate(record.parentCardId);
+        if (!value) throw new Error(`updates[${index}].parentCardId was not found.`);
+        if (value.cardId === String(card.cardId)) throw new Error(`updates[${index}] cannot set a card as its own parent.`);
+        payload.parentCardId = value.cardId;
+        proposed.parent = { cardId: value.cardId, cardRef: value.shortCode || null, title: value.title || "(untitled)" };
+    }
+
+    return {
+        index,
+        correlationKey: record.correlationKey ?? null,
+        target: {
+            cardId: String(card.cardId),
+            accountSeq: accountSeq ?? null,
+            cardRef: formatShortCode(accountSeq) || null,
+            accountSeqRef: accountSeq !== undefined ? `seq:${accountSeq}` : null,
+            title: String(card.title ?? "(untitled)"),
+        },
+        updatedFields: Object.keys(payload).filter((field) => !["sessionId", "id"].includes(field)),
+        mode,
+        current,
+        proposed,
+        payload,
+    };
+};
+
 export const card_bulk_update = tool({
-    description: "Preview or apply multiple Codecks card updates with per-card status results.",
+    description: "Preview or apply strict bounded updates including effort, priority, tags, Run, and parent changes.",
     args: {
-        updates: tool.schema.array(tool.schema.any()).min(1).max(100).describe("Updates to apply. Each item needs cardId and at least one update field supported by card_update."),
-        dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
-        continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
+        updates: tool.schema.array(tool.schema.object({
+            correlationKey: tool.schema.string().min(1).max(200).optional(), cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]),
+            title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
+            deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
+            assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(),
+            tags: tool.schema.array(tool.schema.string()).optional(), runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearRun: tool.schema.boolean().optional(),
+            parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearParent: tool.schema.boolean().optional(), mode: tool.schema.enum(["replace", "append", "prepend"]).optional(),
+        })).min(1).max(100),
+        dryRun: tool.schema.boolean().optional(),
+        continueOnError: tool.schema.boolean().optional(),
         format: outputFormatArg,
     },
     async execute(args)
@@ -7007,65 +8346,162 @@ export const card_bulk_update = tool({
         const format = args.format ?? "text";
         const dryRun = args.dryRun !== false;
         const continueOnError = args.continueOnError !== false;
-        const records = args.updates as BulkUpdateRecord[];
-        const results: Record<string, unknown>[] = [];
-
-        for (let index = 0; index < records.length; index += 1)
+        const rawRecords = Array.isArray(args.updates) ? args.updates as unknown[] : [];
+        const structuralErrors = validateStrictBulkRecords(rawRecords, "update");
+        if (structuralErrors.length > 0)
         {
-            const record = records[index];
-            const updatedFields = ["title", "content", "cardType", "deck", "milestone", "assigneeId"]
-                .filter((field) => (record as Record<string, unknown>)[field] !== undefined);
-            const planned = { index, cardId: record.cardId ?? null, updatedFields, mode: record.mode ?? "replace" };
-            if (record.cardId === undefined || updatedFields.length === 0)
-            {
-                results.push({ ...planned, status: "invalid", error: "Each update needs cardId and at least one update field." });
-                if (!continueOnError) break;
-                continue;
-            }
+            const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
+            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", structuralErrors.join(" "), {
+                indexedErrors: structuralErrors,
+                invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
+                requestsAttempted: 0,
+                results: preflightOutcomeRecords(rawRecords, "update", indexedErrors),
+            });
+        }
 
-            if (dryRun)
+        const normalized: NormalizedBulkUpdateRecord[] = [];
+        const results: Record<string, unknown>[] = [];
+        const normalizationContext: BulkUpdateNormalizationContext = { cards: new Map(), runs: new Map() };
+        for (let index = 0; index < rawRecords.length; index += 1)
+        {
+            try
             {
-                results.push({ ...planned, status: "ready" });
-                continue;
+                const value = await normalizeBulkUpdateRecord(rawRecords[index] as BulkUpdateRecord, index, normalizationContext);
+                normalized.push(value);
+                const normalizedRequested = { target: value.target, updatedFields: value.updatedFields, contentMode: value.mode, ...value.proposed } as Record<string, unknown>;
+                results[index] = {
+                    index,
+                    operation: "update",
+                    correlationKey: value.correlationKey,
+                    actionKey: actionKeyFor("update", index, value.payload),
+                    normalizedRequested,
+                    normalizedRequestedFingerprint: normalizedMutationFingerprint(normalizedRequested),
+                    dispatchReturned: null,
+                    persistedVerified: null,
+                    verificationState: dryRun ? "not_applicable" : "not_performed",
+                    target: value.target,
+                    updatedFields: value.updatedFields,
+                    contentMode: value.mode,
+                    current: value.current,
+                    proposed: value.proposed,
+                    status: "ready",
+                    certainty: "not_dispatched",
+                };
             }
-
-            const updateResult = await card_update.execute({ ...record, format: "json" });
-            if (getStructuredOk(updateResult))
+            catch (error)
             {
-                results.push({ ...planned, status: "updated", updated: getStructuredData(updateResult) ?? null });
-                continue;
+                results[index] = {
+                    index,
+                    cardId: (rawRecords[index] as BulkUpdateRecord).cardId ?? null,
+                    status: "invalid",
+                    error: { category: classifyApiErrorCategory(toErrorMessage(error)), message: toErrorMessage(error) },
+                };
             }
+        }
 
-            const error = getStructuredError(updateResult) ?? { message: String(updateResult) };
-            results.push({ ...planned, status: "failed", error });
-            if (!continueOnError)
+        const invalidRecordCount = results.filter((entry) => entry.status === "invalid").length;
+        if (!dryRun && invalidRecordCount > 0)
+        {
+            for (const entry of results)
             {
-                break;
+                if (entry.status === "ready")
+                {
+                    entry.status = "definitely_unsent";
+                    entry.certainty = "definitely_unsent";
+                }
+                else if (entry.status === "invalid")
+                {
+                    entry.status = "failed";
+                    entry.certainty = "definitely_rejected";
+                }
+            }
+            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", "Batch normalization failed; no mutations were dispatched.", {
+                invalidRecordCount,
+                applied: 0,
+                failed: invalidRecordCount,
+                requestsAttempted: 0,
+                results,
+            });
+        }
+
+        if (!dryRun)
+        {
+            for (const value of normalized)
+            {
+                try
+                {
+                    const response = unwrapData(await runDispatch("cards/update", value.payload));
+                    results[value.index].status = "updated";
+                    results[value.index].certainty = "dispatch_returned";
+                    results[value.index].dispatchReturned = truncateStructuredValue(response).value;
+                }
+                catch (error)
+                {
+                    const outcome = classifyMutationOutcome(error);
+                    results[value.index].status = outcome;
+                    results[value.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
+                    results[value.index].error = {
+                        category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                        message: toErrorMessage(error),
+                        ...getOperationErrorData(error),
+                        retried: false,
+                    };
+                    if (outcome === "indeterminate")
+                    {
+                        results[value.index].reconciliation = { actionKey: results[value.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
+                        markDefinitelyUnsent(results, value.index);
+                        break;
+                    }
+                    if (!continueOnError)
+                    {
+                        markDefinitelyUnsent(results, value.index);
+                        break;
+                    }
+                }
             }
         }
 
         const updated = results.filter((entry) => entry.status === "updated").length;
         const failed = results.filter((entry) => entry.status === "failed" || entry.status === "invalid").length;
+        const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
+        const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
+        const pending = results.filter((entry) => entry.status === "ready").length;
         const lines = [
             "## Bulk Card Update",
             "",
             `Mode: ${dryRun ? "dry-run" : "apply"}`,
-            `Records: ${records.length}`,
+            `Records: ${rawRecords.length}`,
             `Updated: ${updated}`,
-            `Failed: ${failed}`,
+            `Failed/Invalid: ${failed}`,
+            `Indeterminate: ${indeterminate}`,
+            `Definitely Unsent: ${definitelyUnsent}`,
             "",
-            ...results.map((entry) => `- #${Number(entry.index) + 1} ${entry.status}: ${entry.cardId ?? "(missing cardId)"}`),
+            ...results.map((entry) => {
+                const target = entry.target as NormalizedBulkUpdateRecord["target"] | undefined;
+                return `- #${Number(entry.index) + 1} ${entry.status}: ${target?.cardRef ?? target?.cardId ?? entry.cardId ?? "(missing)"} ${target?.title ?? ""} — ${(entry.updatedFields as string[] | undefined)?.join(", ") ?? "invalid"}`;
+            }),
         ];
-
         return toStructuredResult(format, "card-bulk-update", lines.join("\n"), {
+            responseSchemaVersion: 1,
             dryRun,
-            count: records.length,
+            count: rawRecords.length,
+            complete: dryRun ? results.length === rawRecords.length : pending === 0,
+            normalizationComplete: results.length === rawRecords.length,
+            applyComplete: dryRun ? null : pending === 0,
+            invalidRecordCount,
             updated,
+            applied: updated,
             failed,
+            indeterminate,
+            definitelyUnsent,
+            pending,
+            continueOnError,
+            ambiguousMutationsRetried: false,
             results,
         });
     },
 });
+
 
 export const card_set_parent = tool({
     description: "Set or clear a card's Hero parent (sub-card relationship).",
@@ -7140,6 +8576,7 @@ export const card_set_parent = tool({
                 child: {
                     cardId: childResolved.cardId,
                     shortCode: childResolved.shortCode || null,
+                    cardRef: childResolved.shortCode || null,
                     url: childUrl || null,
                     title: childResolved.title || "(untitled)",
                 },
@@ -7147,12 +8584,84 @@ export const card_set_parent = tool({
                     ? {
                         cardId: parentResolved.cardId,
                         shortCode: parentResolved.shortCode || null,
+                        cardRef: parentResolved.shortCode || null,
                         url: parentUrl || null,
                         title: parentResolved.title || "(untitled)",
                     }
                     : null,
             },
         );
+    },
+});
+
+const resolveDeckForGet = async (value: string | number): Promise<DeckLookupResult> =>
+{
+    const accountSeq = parseDeckAccountSeq(value);
+    const raw = String(value).trim();
+    const decks = accountSeq === undefined ? await fetchAccountDecks() : await fetchDecksByAccountSeq(accountSeq);
+    const matches = accountSeq !== undefined
+        ? decks
+        : isUuidLike(raw)
+            ? decks.filter((deck) => getDeckId(deck) === raw)
+            : decks.filter((deck) => getDeckLabel(deck) === raw || getDeckLabel(deck).toLowerCase() === raw.toLowerCase());
+    if (matches.length === 0) return { kind: "missing", label: "deck" };
+    if (matches.length > 1) return {
+        kind: "ambiguous",
+        label: "deck",
+        candidates: matches.map((deck) => ({ id: getDeckId(deck), title: getDeckLabel(deck), accountSeq: getDeckAccountSeq(deck) })),
+    };
+    const deck = matches[0]!;
+    return { kind: "resolved", id: getDeckId(deck), label: getDeckLabel(deck), deck, accountSeq: getDeckAccountSeq(deck) };
+};
+
+export const deck_get = tool({
+    description: "Fetch one Codecks Deck and its current description by immutable ID, account sequence, or exact visible title.",
+    args: {
+        deckId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck immutable ID, account sequence, or exact visible title."),
+        title: tool.schema.string().optional().describe("Alias for deckId when matching an exact visible Deck title."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "json";
+        const lookupValue = blankToUndefined(args.deckId) ?? blankToUndefined(args.title);
+        if (lookupValue === undefined)
+        {
+            return toStructuredErrorResult(format, "deck-get", "validation_error", "Provide deckId, account sequence, or exact title.");
+        }
+        try
+        {
+            const result = await resolveDeckForGet(lookupValue);
+            if (result.kind !== "resolved")
+            {
+                return toStructuredErrorResult(format, "deck-get", result.kind === "ambiguous" ? "ambiguous_match" : "not_found", renderLookupMessage(result, String(lookupValue)));
+            }
+            const deck = result.deck;
+            const data = {
+                deckId: result.id,
+                accountSeq: result.accountSeq ?? null,
+                title: result.label,
+                description: typeof deck.description === "string" ? deck.description : "",
+                isDeleted: deck.isDeleted === true,
+                status: typeof deck.status === "string" ? deck.status : null,
+            };
+            const text = [
+                "## Codecks Deck",
+                "",
+                `- Deck: #${data.accountSeq ?? "?"} ${data.title}`,
+                `- ID: ${data.deckId}`,
+                `- Deleted: ${data.isDeleted ? "yes" : "no"}`,
+                "",
+                "Description",
+                "-----------",
+                data.description || "(empty)",
+            ].join("\n");
+            return toStructuredResult(format, "deck-get", text, data);
+        }
+        catch (error)
+        {
+            return toStructuredErrorResult(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+        }
     },
 });
 
@@ -7167,6 +8676,11 @@ export const deck_update = tool({
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([["description", args.description]]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "deck-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         const hasDescription = args.description !== undefined;
         const shouldClearDescription = args.clearDescription === true;
         if (!hasDescription && !shouldClearDescription)
@@ -8315,6 +9829,7 @@ export const card_update_run = tool({
             {
                 cardId: card.cardId,
                 shortCode: card.shortCode || null,
+                cardRef: card.shortCode || null,
                 runId: run?.runId ?? null,
                 sprintId: run?.runId ?? null,
                 runAccountSeq: run?.accountSeq ?? null,
@@ -8358,11 +9873,15 @@ export const card_add_attachment = tool({
             return toStructuredErrorResult(format, "card-add-attachment", "validation_error", "Card ID is required.");
         }
 
-        const resolvedPath = resolveFilePath(args.filePath);
-        const fileName = basename(resolvedPath);
-        const contentType = detectContentType(resolvedPath, args.contentType);
-        const signed = await requestSignedUpload(fileName);
-        const uploaded = await uploadFileToSignedUrl(signed, resolvedPath, contentType);
+        const workspaceRoot = getActiveWorkspaceRoot();
+        const source = await snapshotAttachmentSource(args.filePath, workspaceRoot);
+        const contentType = detectContentType(source.canonicalPath, args.contentType);
+        const signed = await requestSignedUpload(source);
+        // Re-resolve and re-hash immediately before the upload attempt. The bytes
+        // uploaded are exactly the bytes from this second, validated snapshot.
+        const uploadSource = await snapshotAttachmentSource(args.filePath, workspaceRoot);
+        assertUnchangedAttachmentSource(source, uploadSource);
+        const uploaded = await uploadFileToSignedUrl(signed, uploadSource, contentType);
         const user = await fetchLoggedInUser();
 
         try
@@ -8424,12 +9943,22 @@ export const card_update = tool({
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID."),
         assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Assignee ID."),
+        tags: tool.schema.array(tool.schema.string()).optional().describe("Replacement list of card tags."),
         mode: tool.schema.enum(["replace", "append", "prepend"]).optional().describe("How to apply content updates."),
         format: outputFormatArg,
     },
     async execute(args)
     {
         const format = args.format ?? "text";
+        const textErrors = validateMutationText([
+            ["title", args.title],
+            ["content", args.content],
+            ...(args.tags ?? []).map((tag, index) => [`tags[${index}]`, tag] as [string, unknown]),
+        ]);
+        if (textErrors.length > 0)
+        {
+            return toStructuredErrorResult(format, "card-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+        }
         if (
             args.title === undefined
             && args.content === undefined
@@ -8437,13 +9966,14 @@ export const card_update = tool({
             && args.deck === undefined
             && args.milestone === undefined
             && args.assigneeId === undefined
+            && args.tags === undefined
         )
         {
             return toStructuredErrorResult(
                 format,
                 "card-update",
                 "validation_error",
-                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId).",
+                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId, tags).",
             );
         }
 
@@ -8572,6 +10102,11 @@ export const card_update = tool({
             }
         }
 
+        if (args.tags !== undefined)
+        {
+            payload.masterTags = normalizeCreateTags(args.tags);
+        }
+
         if ((args.title !== undefined || updatedContent !== undefined) && resolvedTitle)
         {
             payload.title = resolvedTitle;
@@ -8593,33 +10128,27 @@ export const card_update = tool({
                 format,
                 "card-update",
                 "validation_error",
-                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId).",
+                "Provide at least one field to update (title, content, cardType, deck, milestone, assigneeId, tags).",
             );
         }
 
+        let dispatchReturned: unknown;
         try
         {
-            await runDispatch("cards/update", payload);
+            dispatchReturned = unwrapData(await runDispatch("cards/update", payload));
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update", "api_error", toErrorMessage(error));
+            const outcome = classifyMutationOutcome(error);
+            return toStructuredErrorResult(format, "card-update", outcome === "indeterminate" ? "request_timeout" : "api_error", toErrorMessage(error), {
+                status: outcome,
+                certainty: outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected",
+                actionKey: actionKeyFor("update", 0, payload),
+                retry: outcome === "indeterminate" ? "do_not_retry" : "not_automatic",
+            });
         }
 
-        let refreshedCard: CodecksEntity | undefined;
-        try
-        {
-            refreshedCard = await fetchCardById(cardId);
-        }
-        catch
-        {
-            refreshedCard = undefined;
-        }
-
-        const resolvedCardType = resolveCardType(
-            refreshedCard
-            ?? (normalizedCardType ? { isDoc: normalizedCardType.isDoc } as CodecksEntity : current),
-        );
+        const resolvedCardType = normalizedCardType?.value ?? resolveCardType(current);
         const title = resolvedTitle ?? (current?.title ? String(current.title) : "");
         const url = shortCode ? formatCardUrl(shortCode) : "";
         const fieldsUpdated = [
@@ -8629,6 +10158,7 @@ export const card_update = tool({
             args.deck !== undefined ? "deck" : null,
             args.milestone !== undefined ? "milestone" : null,
             args.assigneeId !== undefined ? "assignee" : null,
+            args.tags !== undefined ? "tags" : null,
         ].filter(Boolean) as string[];
 
         const lines = [
@@ -8652,6 +10182,22 @@ export const card_update = tool({
             "card-update",
             lines.join("\n"),
             {
+                responseSchemaVersion: 1,
+                status: "updated",
+                certainty: "dispatch_returned",
+                actionKey: actionKeyFor("update", 0, payload),
+                normalizedRequested: {
+                    title: payload.title ?? null,
+                    content: payload.content ?? null,
+                    deckId: payload.deckId ?? null,
+                    milestoneId: payload.milestoneId ?? null,
+                    assigneeId: payload.assigneeId ?? null,
+                    tags: payload.masterTags ?? null,
+                    cardType: normalizedCardType?.value ?? null,
+                },
+                dispatchReturned: truncateStructuredValue(dispatchReturned).value,
+                persistedVerified: null,
+                verificationState: "not_performed",
                 title: title || "(untitled)",
                 cardId,
                 shortCode: shortCode || null,
