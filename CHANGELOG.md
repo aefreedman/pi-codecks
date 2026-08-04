@@ -5,10 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.9.0] - 2026-08-04
 
 ### Added
 
+- Added `codecks_velocity_observations_update` for atomic caller-owned caches of factual completed-Run snapshots and delivered-card observations, with organization validation, incremental overlap, explicit-window/full refresh modes, and completeness provenance.
+- Added cache-consuming velocity reports with calendar-delivered and Run-attributed measures, expanded transformation manifests, explicit gap/partial/exclusion policies (including exact deck exclusions for test/non-production cards), exact configuration resolution, provenance-rich CSV/Markdown artifacts, and sample-sufficiency metadata.
+- Added package typechecking and registered-tool coverage for workspace-contained cache, roster, and independent report paths.
 - Added `codecks_deck_update` for resolving decks by UUID, account sequence, or visible title and editing or clearing their descriptions through `decks/update`.
 - Added credential-free direct mutation-dispatch coverage for operation validation, no-prompt execution, one-attempt mutation behavior, read retry behavior, and attachment path/content controls.
 - Added bounded bulk updates for effort, priority, tags, Run assignment/removal, and parent assignment/removal with indexed current/proposed and partial-apply results.
@@ -18,6 +21,8 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Release publication now resumes safely when npm already contains the exact release `gitHead`, while mismatched immutable package identities still block.
+- Velocity reporting now preserves observed zero separately from missing Run statistics or card estimates, retains full allocation precision until presentation, includes delivered cards outside Runs, and rejects unsafe or aliased workspace paths.
 - Bulk-create identity verification now makes one non-retrying exact read, reports only compared identity components plus neutral observations, retains compatibility persistence only for verified identities, and exposes bounded outcomes in compact and text results.
 - Bulk-create discovery now preserves aggregate title-probe and fallback accounting, distinguishes logical title probes from paginated requests, and returns no-create detailed parent-scoped required previews while keeping required apply blocked.
 - Bulk creates preserve dispatch-returned card identifiers from `payload.id` / `payload.accountSeq` responses without treating a generic outer dispatch action ID as a card ID.
@@ -25,6 +30,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Changed
 
+- Refactored velocity reporting so Codecks retrieval updates a reusable team-neutral observation cache while report generation performs no network requests; `standard_velocity` now uses calendar-delivered effort and discloses every expanded transformation.
 - Removed the `tracker.codecks` workflow provider, inline workflow guidance, UUID-only workflow target parsing, and workflow credential/preflight integration. Codecks skills and direct tool metadata continue to handle public short references, untrusted external data, explicit mutation intent, and operation validation without a workflow dependency.
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.
 - Non-idempotent mutations no longer transparently retry ambiguous failures; read-only retries remain. Attachment sources are physically canonicalized, strictly workspace-contained, tracked by canonical identity/content hash/size, revalidated immediately before upload, and guarded against external and symlink/junction escapes.

@@ -37,7 +37,7 @@ Review these controls periodically and before granting access to additional coll
 ## Publish
 
 1. Create a GitHub Release from an annotated tag exactly matching `v<package-version>`.
-2. The publish workflow checks out the tag, installs locked dependencies, runs all credential-free tests and package checks, verifies the tag/version match, and fails if that exact package version already exists on npm.
+2. The publish workflow checks out the tag, installs locked dependencies, runs all credential-free tests and package checks, and verifies the tag/version identity. It skips publication only when npm already contains that version with the exact release `gitHead`; mismatches and uncertain registry reads fail closed.
 3. The protected `npm` environment approval gates `npm publish --access public --provenance` through trusted publishing.
 4. Verify the npm package page, provenance statement, package contents, and a fresh `pi install npm:@aefree/pi-codecks` installation.
 
@@ -45,4 +45,4 @@ The workflow never runs live Codecks tests and receives no Codecks credentials.
 
 ## Recovery
 
-Do not rerun publication for a version that npm already contains. Diagnose the workflow first. If published contents are unsafe, follow npm's incident guidance, rotate any exposed credential immediately, and prepare a corrected version rather than rewriting a published artifact.
+The workflow may be rerun after partial success: it skips an npm version only when the registry `gitHead` exactly matches the checked-out release commit. Stop on any mismatch or uncertain registry response; never move a published tag or overwrite an immutable package identity. If published contents are unsafe, follow npm's incident guidance, rotate any exposed credential immediately, and prepare a corrected version rather than rewriting a published artifact.

@@ -70,7 +70,10 @@ assertProperties("codecks_run_list", ["title", "includeDeleted", "includeComplet
 assertProperties("codecks_run_get", ["runId", "title", "format"]);
 assertProperties("codecks_run_delivered_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "includeCurrentStats", "format"]);
 assertProperties("codecks_run_average_effort", ["sprintConfig", "user", "userId", "completedRuns", "limit", "minDeliveredEffort", "excludeBelowEffort", "includeFilteredRuns", "format"]);
-assertProperties("codecks_velocity_report", ["sprintConfig", "user", "userId", "rosterPath", "fromDate", "toDate", "completedRuns", "excludeLabels", "csvPath", "summaryMarkdownPath", "format"]);
+assertProperties("codecks_velocity_observations_update", ["observationsPath", "refreshMode", "fromDate", "toDate", "overlapDays", "scanLimit", "pageSize", "format"]);
+assertRequired("codecks_velocity_observations_update", ["observationsPath"]);
+assertProperties("codecks_velocity_report", ["observationsPath", "preset", "measure", "sprintConfig", "excludeDecks", "user", "userId", "rosterPath", "team", "fromDate", "toDate", "excludeLabels", "additionalExcludeLabels", "dateExclusions", "gapPolicy", "partialPeriodPolicy", "biweekly", "biweeklyAnchor", "csvPath", "summaryMarkdownPath", "format"]);
+assertRequired("codecks_velocity_report", ["observationsPath"]);
 assertProperties("codecks_run_update", ["runId", "customLabel", "name", "clearCustomLabel", "description", "format"]);
 assertRequired("codecks_run_update", ["runId"]);
 assertProperties("codecks_deck_get", ["deckId", "title", "format"]);
@@ -198,7 +201,12 @@ assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive",
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).completedRuns, 8);
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).minDeliveredEffort, 2);
 assert.equal(prepare("codecks_run_average_effort", { sprint_config_name: "dive", run_count: 8, effort_threshold: 2, include_filtered_runs: false }).includeFilteredRuns, false);
-assert.equal(prepare("codecks_velocity_report", { sprint_config: "dive", roster_path: "roster.json", from_date: "2026-02-02", to_date: "2026-07-19", exclude_labels: ["vacation"], csv_path: "out.csv", summary_markdown_path: "out.md" }).sprintConfig, "dive");
+assert.equal(prepare("codecks_velocity_observations_update", { observations_path: "cache.json", refresh_mode: "date_window", overlap_days: 5 }).observationsPath, "cache.json");
+assert.equal(prepare("codecks_velocity_observations_update", { observations_path: "cache.json", refresh_mode: "date_window", overlap_days: 5 }).refreshMode, "date_window");
+assert.equal(prepare("codecks_velocity_observations_update", { observations_path: "cache.json", refresh_mode: "date_window", overlap_days: 5 }).overlapDays, 5);
+assert.equal(prepare("codecks_velocity_report", { observations_path: "cache.json", sprint_config: "dive", roster_path: "roster.json", from_date: "2026-02-02", to_date: "2026-07-19", exclude_labels: ["vacation"], csv_path: "out.csv", summary_markdown_path: "out.md" }).sprintConfig, "dive");
+assert.equal(prepare("codecks_velocity_report", { observations_path: "cache.json" }).observationsPath, "cache.json");
+assert.deepEqual(prepare("codecks_velocity_report", { exclude_decks: ["Test"] }).excludeDecks, ["Test"]);
 assert.equal(prepare("codecks_velocity_report", { roster_path: "roster.json" }).rosterPath, "roster.json");
 assert.equal(prepare("codecks_velocity_report", { from_date: "2026-02-02" }).fromDate, "2026-02-02");
 assert.equal(prepare("codecks_velocity_report", { to_date: "2026-07-19" }).toDate, "2026-07-19");

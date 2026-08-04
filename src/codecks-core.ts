@@ -2,8 +2,23 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
-import { basename, dirname, extname, isAbsolute, relative, resolve } from "path";
-import { buildBiweeklyPeriods, buildWeeklyPeriods, escapeCsv, summarizeVelocityPeriods, type VelocityPeriod, type VelocityRun } from "./velocity-report";
+import { basename, extname, isAbsolute, relative, resolve } from "path";
+import {
+    DEFAULT_OVERLAP_DAYS,
+    atomicWriteFile,
+    assertDistinctPaths,
+    buildVelocityCsv,
+    buildVelocityMarkdown,
+    buildVelocityReport,
+    createDeliveredCardObservation,
+    createRunObservation,
+    isIsoDate,
+    mergeObservationCache,
+    parseVelocityRosterText,
+    resolveWorkspacePath,
+    validateObservationCache,
+    type ObservationCache,
+} from "./velocity-observations";
 
 type CodecksConfig = {
     account: string;
@@ -752,6 +767,7 @@ type ErrorCategory =
     | "request_timeout"
     | "rate_limited"
     | "scan_queue_full"
+    | "file_error"
     | "api_error";
 
 const toStructuredErrorResult = (
@@ -2217,7 +2233,7 @@ const uploadFileToSignedUrl = async (
     }
 
     formData.append("Content-Type", contentType);
-    const blob = new Blob([source.buffer], { type: contentType });
+    const blob = new Blob([source.buffer as unknown as BlobPart], { type: contentType });
     formData.append("file", blob, fileName);
 
     const response = await fetch(signed.signedUrl, {
@@ -2622,6 +2638,12 @@ type RunDeliveredEffortEntry = {
     current?: RunDoneStats | null;
     source: string;
     warnings: string[];
+};
+
+const toTimestamp = (value: unknown): number =>
+{
+    const timestamp = new Date(String(value ?? "")).getTime();
+    return Number.isNaN(timestamp) ? 0 : timestamp;
 };
 
 const toNumberOrZero = (value: unknown): number =>
@@ -3516,6 +3538,13 @@ type DoneTransitionEvent = {
     title: string;
     fromStatus: string;
     toStatus: string;
+    effort?: number;
+    assigneeId?: string;
+    assigneeName?: string;
+    runId?: string;
+    deckId?: string;
+    deckTitle?: string;
+    deckAccountSeq?: number;
     changedBy?: {
         id?: string;
         name?: string;
@@ -4177,7 +4206,7 @@ const fetchDoneTransitionEvents = async (args: {
                                 "createdAt",
                                 "type",
                                 "data",
-                                { card: ["cardId", "accountSeq", "title", "status", "derivedStatus", "visibility"] },
+                                { card: ["cardId", "accountSeq", "title", "status", "derivedStatus", "visibility", "effort", "sprintId", { assignee: ["id", "name", "fullName"] }, { deck: ["id", "title", "accountSeq"] }] },
                                 { changer: ["id", "name", "fullName"] },
                             ],
                         },
@@ -4192,6 +4221,7 @@ const fetchDoneTransitionEvents = async (args: {
         const activityMap = getEntityMap(data, "activity");
         const cardMap = getEntityMap(data, "card");
         const userMap = getEntityMap(data, "user");
+        const deckMap = getEntityMap(data, "deck");
         const activityRefs = normalizeCollection(getRelation(account, "activities") as unknown[] | undefined);
         const activities = activityRefs
             .map((entry) => (typeof entry === "object" && entry ? entry as CodecksEntity : activityMap[String(entry)]))
@@ -4257,6 +4287,10 @@ const fetchDoneTransitionEvents = async (args: {
             const resolvedChanger = resolveFromMap(activity.changer, userMap)
                 ?? (typeof activity.changer === "object" && activity.changer ? activity.changer as CodecksEntity : undefined);
 
+            const resolvedAssignee = resolveFromMap(resolvedCard?.assignee, userMap)
+                ?? (typeof resolvedCard?.assignee === "object" && resolvedCard.assignee ? resolvedCard.assignee as CodecksEntity : undefined);
+            const resolvedDeck = resolveFromMap(resolvedCard?.deck, deckMap)
+                ?? (typeof resolvedCard?.deck === "object" && resolvedCard.deck ? resolvedCard.deck as CodecksEntity : undefined);
             events.push({
                 activityId: String(activity.id ?? ""),
                 doneAt: createdAt.toISOString(),
@@ -4266,6 +4300,12 @@ const fetchDoneTransitionEvents = async (args: {
                 title: String(resolvedCard?.title ?? "(untitled)"),
                 fromStatus: transition.fromStatus,
                 toStatus: transition.toStatus,
+                ...(typeof resolvedCard?.effort === "number" && Number.isFinite(resolvedCard.effort) ? { effort: resolvedCard.effort } : {}),
+                ...(resolvedAssignee?.id ? { assigneeId: String(resolvedAssignee.id), assigneeName: String(resolvedAssignee.fullName ?? resolvedAssignee.name ?? resolvedAssignee.id) } : {}),
+                ...(resolvedCard?.sprintId ? { runId: String(resolvedCard.sprintId) } : {}),
+                ...(resolvedDeck?.id ? { deckId: String(resolvedDeck.id) } : {}),
+                ...(resolvedDeck?.title ? { deckTitle: String(resolvedDeck.title) } : {}),
+                ...(typeof resolvedDeck?.accountSeq === "number" ? { deckAccountSeq: resolvedDeck.accountSeq } : {}),
                 changedBy: resolvedChanger
                     ? {
                         id: resolvedChanger.id ? String(resolvedChanger.id) : undefined,
@@ -7759,7 +7799,7 @@ const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<{ stat
     return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields };
 };
 
-const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>) =>
+const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>[]) =>
 {
     const normalizedRequested = {
         title: record.title,
@@ -9101,288 +9141,127 @@ const fetchDeliveredEffortEntries = async (args: {
 const summarizeDeliveredEntries = (entries: RunDeliveredEffortEntry[]): RunDoneStats =>
     entries.reduce((total, entry) => addDoneStats(total, entry.delivered), zeroDoneStats());
 
-type VelocityRosterMember = {
-    name: string;
-    userId: string;
-    fromDate?: string;
-    toDate?: string;
-};
-
-type VelocityReportSubject = {
-    name: string;
-    userId?: string;
-    rawRuns: Array<RunDeliveredEffortEntry & { includedInBaseline: boolean; exclusionReason?: string }>;
-    weekly: VelocityPeriod[];
-    biweekly: VelocityPeriod[];
-    summary: ReturnType<typeof summarizeVelocityPeriods>;
-};
-
-const DEFAULT_VELOCITY_EXCLUSION_LABELS = ["vacation", "holiday", "break", "leave"];
-
-const parseSimpleYamlVelocityRoster = (raw: string): unknown =>
-{
-    const members: Array<Record<string, string>> = [];
-    let current: Record<string, string> | undefined;
-    for (const sourceLine of raw.split(/\r?\n/))
-    {
-        const line = sourceLine.replace(/\s+#.*$/, "").trim();
-        if (!line || line === "members:") continue;
-        const item = line.match(/^-\s+([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
-        const property = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*)$/);
-        if (item)
-        {
-            current = { [item[1]]: item[2].replace(/^['"]|['"]$/g, "") };
-            members.push(current);
-            continue;
-        }
-        if (property && current)
-        {
-            current[property[1]] = property[2].replace(/^['"]|['"]$/g, "");
-            continue;
-        }
-        throw new Error("The YAML velocity roster supports only a members list with name, userId, fromDate, and toDate fields.");
-    }
-    return { members };
-};
-
-const parseVelocityRoster = async (rosterPath: unknown): Promise<VelocityRosterMember[]> =>
-{
-    if (typeof rosterPath !== "string" || !rosterPath.trim()) return [];
-    const resolvedPath = resolveFilePath(rosterPath);
-    const raw = await fs.readFile(resolvedPath, "utf8");
-    let parsed: unknown;
-    try
-    {
-        parsed = JSON.parse(raw);
-    }
-    catch
-    {
-        try
-        {
-            parsed = parseSimpleYamlVelocityRoster(raw);
-        }
-        catch
-        {
-            throw new Error("The velocity roster must be JSON or simple YAML: an array of members or an object with a members list.");
-        }
-    }
-
-    const members = Array.isArray(parsed) ? parsed : isRecord(parsed) && Array.isArray(parsed.members) ? parsed.members : null;
-    if (!members)
-    {
-        throw new Error("The velocity roster must be a JSON array or an object with a members array.");
-    }
-
-    return members.map((member, index) =>
-    {
-        if (!isRecord(member) || typeof member.name !== "string" || typeof member.userId !== "string" || !member.name.trim() || !member.userId.trim())
-        {
-            throw new Error(`Velocity roster member ${index + 1} requires non-empty name and userId values.`);
-        }
-        return {
-            name: member.name.trim(),
-            userId: member.userId.trim(),
-            ...(typeof member.fromDate === "string" ? { fromDate: member.fromDate } : {}),
-            ...(typeof member.toDate === "string" ? { toDate: member.toDate } : {}),
-        };
-    });
-};
-
-const isVelocityRunIncluded = (entry: RunDeliveredEffortEntry, fromDate: string | undefined, toDate: string | undefined, exclusions: string[]): { included: boolean; reason?: string } =>
-{
-    const startDate = typeof entry.startDate === "string" ? entry.startDate : "";
-    if (!startDate || (fromDate && startDate < fromDate) || (toDate && startDate > toDate)) return { included: false, reason: "outside date range" };
-    const label = entry.label.toLowerCase();
-    const matched = exclusions.find((pattern) => label.includes(pattern.toLowerCase()));
-    return matched ? { included: false, reason: `label matches '${matched}'` } : { included: true };
-};
-
-const createVelocitySubject = (
-    name: string,
-    userId: string | undefined,
-    entries: RunDeliveredEffortEntry[],
-    fromDate: string | undefined,
-    toDate: string | undefined,
-    exclusions: string[],
-): VelocityReportSubject =>
-{
-    const rawRuns = entries.map((entry) =>
-    {
-        const inclusion = isVelocityRunIncluded(entry, fromDate, toDate, exclusions);
-        return { ...entry, includedInBaseline: inclusion.included, ...(inclusion.reason ? { exclusionReason: inclusion.reason } : {}) };
-    }).filter((entry) => entry.exclusionReason !== "outside date range");
-    const weekly = buildWeeklyPeriods(rawRuns.filter((entry) => entry.includedInBaseline).map((entry): VelocityRun => ({
-        accountSeq: entry.accountSeq,
-        label: entry.label,
-        startDate: typeof entry.startDate === "string" ? entry.startDate : null,
-        endDate: typeof entry.endDate === "string" ? entry.endDate : null,
-        effort: entry.delivered.effort,
-    })));
-    return { name, userId, rawRuns, weekly, biweekly: buildBiweeklyPeriods(weekly), summary: summarizeVelocityPeriods(weekly) };
-};
-
-const buildVelocityCsv = (subjects: VelocityReportSubject[], sprintConfig: string, fromDate: string | undefined, toDate: string | undefined): string =>
-{
-    const rows: Array<Array<unknown>> = [["record_type", "configuration", "subject", "user_id", "period_start", "period_end", "period_label", "effort", "included_in_baseline", "exclusion_reason"]];
-    for (const subject of subjects)
-    {
-        for (const run of subject.rawRuns)
-        {
-            rows.push(["run", sprintConfig, subject.name, subject.userId ?? "", run.startDate ?? "", run.endDate ?? "", `#${run.accountSeq ?? "?"} ${run.label}`, run.delivered.effort, run.includedInBaseline ? "yes" : "no", run.exclusionReason ?? ""]);
-        }
-        for (const period of subject.weekly)
-        {
-            rows.push(["weekly", sprintConfig, subject.name, subject.userId ?? "", period.startDate, period.endDate, period.label, period.effort, "yes", ""]);
-        }
-        for (const period of subject.biweekly)
-        {
-            rows.push(["biweekly", sprintConfig, subject.name, subject.userId ?? "", period.startDate, period.endDate, period.label, period.effort, "yes", ""]);
-        }
-        const summary = subject.summary;
-        rows.push(["summary", sprintConfig, subject.name, subject.userId ?? "", fromDate ?? "", toDate ?? "", `sample weeks=${summary.sampleWeeks}; mean=${summary.mean}; p25=${summary.p25}; p50=${summary.p50}; p75=${summary.p75}; standard_deviation=${summary.sampleStandardDeviation}; variance=${summary.sampleVariance}`, summary.totalEffort, "yes", ""]);
-    }
-    return `${rows.map((row) => row.map(escapeCsv).join(",")).join("\n")}\n`;
-};
-
-const buildVelocityMarkdown = (subjects: VelocityReportSubject[], sprintConfig: string, fromDate: string | undefined, toDate: string | undefined, exclusions: string[]): string =>
-{
-    const lines = [
-        "# Codecks Velocity Report",
-        "",
-        `- Configuration: ${sprintConfig || "any"}`,
-        `- Run start-date range: ${fromDate ?? "all available"} to ${toDate ?? "last completed Run"}`,
-        `- Excluded label patterns: ${exclusions.join(", ") || "none"}`,
-        "- Weekly values are calendar-week normalized; multi-week Runs are allocated evenly by calendar day.",
-        "",
-    ];
-    for (const subject of subjects)
-    {
-        const summary = subject.summary;
-        lines.push(
-            `## ${subject.name}`,
-            "",
-            `- Excluded Runs: ${subject.rawRuns.filter((run) => !run.includedInBaseline).length}`,
-            "",
-            "| Sample weeks | Total effort | Mean | P25 | P50 | P75 | Standard deviation | Variance |",
-            "|---:|---:|---:|---:|---:|---:|---:|---:|",
-            `| ${summary.sampleWeeks} | ${summary.totalEffort} | ${summary.mean} | ${summary.p25} | ${summary.p50} | ${summary.p75} | ${summary.sampleStandardDeviation} | ${summary.sampleVariance} |`,
-            "",
-            "### Biweekly velocity",
-            "",
-            "| Period | Effort |",
-            "|---|---:|",
-            ...subject.biweekly.map((period) => `| ${period.label} | ${period.effort} |`),
-            "",
-        );
-    }
-    return `${lines.join("\n")}\n`;
-};
-
-export const velocity_report = tool({
-    description: "Build a statistically grounded Run velocity report with optional independent CSV and Markdown summary files.",
+export const velocity_observations_update = tool({
+    description: "Update a caller-owned factual Codecks velocity observation cache without calculating statistics.",
     args: {
-        sprintConfig: tool.schema.string().optional().describe("Optional Run/Sprint config name/id filter, for example 'dive'."),
-        user: tool.schema.string().optional().describe("Optional single user name. Ignored when rosterPath is supplied."),
-        userId: tool.schema.string().optional().describe("Optional exact single user id. Preferred over user name."),
-        rosterPath: tool.schema.string().optional().describe("Optional JSON or simple-YAML roster path. Use members with name, userId, and optional fromDate/toDate."),
-        fromDate: tool.schema.string().optional().describe("Include completed Runs starting on or after this ISO date (YYYY-MM-DD)."),
-        toDate: tool.schema.string().optional().describe("Include completed Runs starting on or before this ISO date (YYYY-MM-DD)."),
-        completedRuns: tool.schema.number().optional().describe("Completed Runs to inspect before date filtering. Defaults to 500."),
-        excludeLabels: tool.schema.array(tool.schema.string()).optional().describe("Case-insensitive Run-label substrings to exclude. Defaults to vacation, holiday, break, leave."),
-        csvPath: tool.schema.string().optional().describe("Optional path for normalized CSV output. Independent from summaryMarkdownPath."),
-        summaryMarkdownPath: tool.schema.string().optional().describe("Optional path for Markdown summary output. Independent from csvPath."),
+        observationsPath: tool.schema.string().describe("Caller-owned JSON cache path inside the active workspace."),
+        refreshMode: tool.schema.enum(["incremental", "date_window", "full"]).optional().describe("Defaults to incremental; a missing cache uses full refresh."),
+        fromDate: tool.schema.string().optional().describe("YYYY-MM-DD lower bound. Required for date_window."),
+        toDate: tool.schema.string().optional().describe("YYYY-MM-DD upper bound. Defaults to today."),
+        overlapDays: tool.schema.number().min(0).max(365).optional().describe("Incremental overlap; defaults to 10 days."),
+        scanLimit: tool.schema.number().min(50).max(10000).optional().describe("Maximum activities scanned."),
+        pageSize: tool.schema.number().min(25).max(500).optional().describe("Activities per request."),
         format: outputFormatArg,
     },
     async execute(args)
     {
         const format = args.format ?? "text";
-        const sprintConfig = String(args.sprintConfig ?? "").trim();
-        const fromDate = typeof args.fromDate === "string" && args.fromDate.trim() ? args.fromDate.trim() : undefined;
-        const toDate = typeof args.toDate === "string" && args.toDate.trim() ? args.toDate.trim() : undefined;
-        if ((fromDate && !/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) || (toDate && !/^\d{4}-\d{2}-\d{2}$/.test(toDate)))
-        {
-            return toStructuredErrorResult(format, "velocity-report", "validation_error", "fromDate and toDate must use YYYY-MM-DD.");
-        }
-        const exclusions = Array.isArray(args.excludeLabels) && args.excludeLabels.length > 0
-            ? args.excludeLabels.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim())
-            : DEFAULT_VELOCITY_EXCLUSION_LABELS;
-        const completedRuns = getCompletedRunLimit(args.completedRuns, 500);
+        if (typeof args.observationsPath !== "string" || !args.observationsPath.trim()) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "observationsPath is required.");
+        const requestedMode = String(args.refreshMode ?? "incremental");
+        if (!["incremental", "date_window", "full"].includes(requestedMode)) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "refreshMode must be incremental, date_window, or full.");
+        if (args.fromDate !== undefined && !isIsoDate(args.fromDate)) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "fromDate must be a real date in YYYY-MM-DD format.");
+        if (args.toDate !== undefined && !isIsoDate(args.toDate)) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "toDate must be a real date in YYYY-MM-DD format.");
+        if (requestedMode === "date_window" && args.fromDate === undefined) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "fromDate is required for date_window refresh mode.");
 
-        let roster: VelocityRosterMember[];
         try
         {
-            roster = await parseVelocityRoster(args.rosterPath);
+            const config = getConfig();
+            const path = await resolveWorkspacePath(getActiveWorkspaceRoot(), args.observationsPath, "output");
+            let existing: ObservationCache | undefined;
+            try { existing = validateObservationCache(JSON.parse(await fs.readFile(path, "utf8")), config.account); }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+            const mode = (!existing && requestedMode === "incremental" ? "full" : requestedMode) as "incremental" | "date_window" | "full";
+            const overlapDays = Math.max(0, Math.min(365, Math.floor(Number(args.overlapDays ?? DEFAULT_OVERLAP_DAYS))));
+            const to = typeof args.toDate === "string" ? args.toDate : new Date().toISOString().slice(0, 10);
+            const allRuns = await fetchAccountRuns(runSummaryFields);
+            const completedRuns = allRuns.filter((run) => !run.isDeleted && Boolean(run.completedAt));
+            const earliestRunStart = completedRuns.map((run) => String(run.startDate ?? "")).filter(isIsoDate).sort()[0];
+            const earliestIncompleteFrom = existing?.coverage.deliveredCards.filter((entry) => entry.status === "incomplete").map((entry) => entry.from).sort()[0];
+            const latestCoveredTo = existing?.coverage.deliveredCards.map((entry) => entry.to).sort().at(-1);
+            const incrementalFrom = earliestIncompleteFrom ?? (latestCoveredTo ? new Date(new Date(`${latestCoveredTo}T00:00:00.000Z`).getTime() - overlapDays * 86400000).toISOString().slice(0, 10) : undefined);
+            const from = typeof args.fromDate === "string" ? args.fromDate : mode === "incremental" && incrementalFrom ? incrementalFrom : earliestRunStart ?? to;
+            if (from > to) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "fromDate must not be after toDate.");
+
+            const runObservations = completedRuns
+                .filter((run) => { const completed = String(run.completedAt ?? "").slice(0, 10); return completed >= from && completed <= to; })
+                .map((run) => createRunObservation(run));
+            const scanLimit = Math.max(50, Math.min(10000, Math.floor(Number(args.scanLimit ?? 10000))));
+            const pageSize = Math.max(25, Math.min(500, Math.floor(Number(args.pageSize ?? 250))));
+            const fetched = await fetchDoneTransitionEvents({ sinceIso: `${from}T00:00:00.000Z`, until: new Date(`${to}T23:59:59.999Z`), scanLimit, pageSize });
+            const latestByCard = new Map<string, DoneTransitionEvent>();
+            for (const event of fetched.events) if (!latestByCard.has(event.cardId)) latestByCard.set(event.cardId, event);
+            const cardObservations = [...latestByCard.values()].map((event) => createDeliveredCardObservation(event as unknown as Record<string, unknown>));
+            const cache = mergeObservationCache({
+                existing, account: config.account, baseUrl: config.baseUrl, now: new Date().toISOString(), mode, overlapDays, from, to,
+                runs: runObservations, cards: cardObservations, scannedActivities: fetched.scannedActivities, scanLimit, scanLimitReached: fetched.scanLimitReached,
+                warnings: completedRuns.some((run) => !isIsoDate(run.startDate) || !isIsoDate(run.endDate) || String(run.startDate) > String(run.endDate)) ? ["Completed Runs with missing, malformed, or reversed dates were preserved; unusable report periods remain unavailable."] : [],
+            });
+            await atomicWriteFile(path, `${JSON.stringify(cache, null, 2)}\n`, getActiveWorkspaceRoot());
+            const lines = ["## Codecks Velocity Observation Cache Updated", "", `- Organization: ${config.account}`, `- Cache: ${path}`, `- Refresh: ${mode} (${from} to ${to}; overlap ${overlapDays} days)`, `- Run observations: ${runObservations.length}`, `- Delivered-card observations: ${cardObservations.length}`, `- Complete: ${cache.refresh.complete ? "yes" : "no"}`];
+            return toStructuredResult(format, "velocity-observations-update", lines.join("\n"), { observationsPath: path, cache }, cache.refresh.warnings);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "velocity-report", "validation_error", toErrorMessage(error));
+            const message = toErrorMessage(error);
+            const category = /workspace|path|file|cache|schema|organization/i.test(message) ? "file_error" : classifyApiErrorCategory(message);
+            return toStructuredErrorResult(format, "velocity-observations-update", category, message);
         }
+    },
+});
 
-        const latestStart = (left: string | undefined, right: string | undefined): string | undefined => !left ? right : !right ? left : left > right ? left : right;
-        const earliestEnd = (left: string | undefined, right: string | undefined): string | undefined => !left ? right : !right ? left : left < right ? left : right;
-        const requests = roster.length > 0
-            ? roster.map((member) => ({ name: member.name, userId: member.userId, fromDate: latestStart(member.fromDate, fromDate), toDate: earliestEnd(member.toDate, toDate) }))
-            : [{ name: typeof args.user === "string" && args.user.trim() ? args.user.trim() : typeof args.userId === "string" && args.userId.trim() ? args.userId.trim() : "Team", user: args.user, userId: args.userId, fromDate, toDate }];
-        const subjects: VelocityReportSubject[] = [];
-        const warnings: string[] = [];
-        for (const request of requests)
-        {
-            let result: Awaited<ReturnType<typeof fetchDeliveredEffortEntries>>;
-            try
-            {
-                result = await fetchDeliveredEffortEntries({ sprintConfig, user: request.user, userId: request.userId, completedRuns });
-            }
-            catch (error)
-            {
-                return toStructuredErrorResult(format, "velocity-report", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
-            }
-            if ("error" in result)
-            {
-                return toStructuredErrorResult(format, "velocity-report", result.candidates ? "ambiguous_match" : "not_found", result.error, { candidates: result.candidates });
-            }
-            warnings.push(...result.warnings);
-            subjects.push(createVelocitySubject(result.userLabel ?? request.name, result.userId ?? request.userId, result.entries, request.fromDate, request.toDate, exclusions));
-        }
-
-        const csv = buildVelocityCsv(subjects, sprintConfig, fromDate, toDate);
-        const markdown = buildVelocityMarkdown(subjects, sprintConfig, fromDate, toDate, exclusions);
-        const outputs: Record<string, string> = {};
+export const velocity_report = tool({
+    description: "Build a provenance-rich velocity report from an observation cache without querying Codecks.",
+    args: {
+        observationsPath: tool.schema.string().describe("Existing JSON observation cache path inside the workspace."),
+        preset: tool.schema.enum(["standard_velocity", "none"]).optional().describe("Named, manifest-expanded preset."),
+        measure: tool.schema.enum(["calendar_delivered", "run_attributed"]).optional().describe("Defaults to calendar_delivered."),
+        sprintConfig: tool.schema.string().optional().describe("Exact configuration id or unambiguous exact name."),
+        excludeDecks: tool.schema.array(tool.schema.string()).optional().describe("Stable deck ids or unambiguous exact deck titles to exclude from calendar-delivered reports."),
+        user: tool.schema.string().optional().describe("Single-subject display name."),
+        userId: tool.schema.string().optional().describe("Exact single-subject user id."),
+        rosterPath: tool.schema.string().optional().describe("Optional separate JSON/simple-YAML roster."),
+        team: tool.schema.string().optional().describe("Optional exact roster team."),
+        fromDate: tool.schema.string().optional().describe("YYYY-MM-DD report lower bound."),
+        toDate: tool.schema.string().optional().describe("YYYY-MM-DD report upper bound."),
+        excludeLabels: tool.schema.array(tool.schema.string()).optional().describe("Replacement Run-label exclusions; [] disables defaults."),
+        additionalExcludeLabels: tool.schema.array(tool.schema.string()).optional().describe("Additional Run-label exclusions."),
+        dateExclusions: tool.schema.array(tool.schema.any()).optional().describe("Explicit organization/team/person date exclusions."),
+        gapPolicy: tool.schema.enum(["include_zero", "show_exclude_from_statistics", "omit"]).optional().describe("Complete-gap policy."),
+        partialPeriodPolicy: tool.schema.enum(["show_exclude", "include"]).optional().describe("Partial-boundary statistics policy."),
+        biweekly: tool.schema.boolean().optional().describe("Include fixed biweekly periods."),
+        biweeklyAnchor: tool.schema.string().optional().describe("Monday anchor; defaults to 1970-01-05."),
+        csvPath: tool.schema.string().optional().describe("Independent CSV destination."),
+        summaryMarkdownPath: tool.schema.string().optional().describe("Independent Markdown destination."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        const format = args.format ?? "text";
+        if (typeof args.observationsPath !== "string" || !args.observationsPath.trim()) return toStructuredErrorResult(format, "velocity-report", "validation_error", "observationsPath is required; update it first with codecks_velocity_observations_update.");
         try
         {
-            if (typeof args.csvPath === "string" && args.csvPath.trim())
-            {
-                const path = resolveFilePath(args.csvPath);
-                await fs.mkdir(dirname(path), { recursive: true });
-                await fs.writeFile(path, csv, "utf8");
-                outputs.csvPath = path;
-            }
-            if (typeof args.summaryMarkdownPath === "string" && args.summaryMarkdownPath.trim())
-            {
-                const path = resolveFilePath(args.summaryMarkdownPath);
-                await fs.mkdir(dirname(path), { recursive: true });
-                await fs.writeFile(path, markdown, "utf8");
-                outputs.summaryMarkdownPath = path;
-            }
+            const workspace = getActiveWorkspaceRoot();
+            const observationsPath = await resolveWorkspacePath(workspace, args.observationsPath, "input");
+            const rosterPath = typeof args.rosterPath === "string" && args.rosterPath.trim() ? await resolveWorkspacePath(workspace, args.rosterPath, "input") : undefined;
+            const csvPath = typeof args.csvPath === "string" && args.csvPath.trim() ? await resolveWorkspacePath(workspace, args.csvPath, "output") : undefined;
+            const summaryMarkdownPath = typeof args.summaryMarkdownPath === "string" && args.summaryMarkdownPath.trim() ? await resolveWorkspacePath(workspace, args.summaryMarkdownPath, "output") : undefined;
+            assertDistinctPaths([{ label: "observationsPath", path: observationsPath }, { label: "rosterPath", path: rosterPath }, { label: "csvPath", path: csvPath }, { label: "summaryMarkdownPath", path: summaryMarkdownPath }]);
+            const cache = validateObservationCache(JSON.parse(await fs.readFile(observationsPath, "utf8")));
+            const roster = rosterPath ? parseVelocityRosterText(await fs.readFile(rosterPath, "utf8")) : undefined;
+            const report = buildVelocityReport(cache, { ...args, roster });
+            const outputs: Record<string, string> = {};
+            if (csvPath) { await atomicWriteFile(csvPath, buildVelocityCsv(report, cache), workspace); outputs.csvPath = csvPath; }
+            if (summaryMarkdownPath) { await atomicWriteFile(summaryMarkdownPath, buildVelocityMarkdown(report), workspace); outputs.summaryMarkdownPath = summaryMarkdownPath; }
+            report.outputs = outputs;
+            const lines = ["## Codecks Velocity Report", "", `- Observation cache: ${observationsPath}`, `- Measure: ${report.measure}`, `- Preset: ${report.preset} (${report.transformations.length} manifest entries)`, `- Date range: ${report.dateWindow.from} to ${report.dateWindow.to}`, `- Subjects: ${report.subjects.map((subject) => subject.name).join(", ")}`, `- CSV: ${outputs.csvPath ?? "not requested"}`, `- Markdown: ${outputs.summaryMarkdownPath ?? "not requested"}`, "", "| Subject | Sample weeks | Mean | P25 | P50 | P75 | Missing-data periods |", "|---|---:|---:|---:|---:|---:|---:|", ...report.subjects.map((subject) => `| ${subject.name.replaceAll("|", "\\|")} | ${subject.summary.sampleWeeks} | ${subject.summary.mean ?? "N/A"} | ${subject.summary.p25 ?? "N/A"} | ${subject.summary.p50 ?? "N/A"} | ${subject.summary.p75 ?? "N/A"} | ${subject.composition.missingData} |`)];
+            return toStructuredResult(format, "velocity-report", lines.join("\n"), report, report.warnings);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "velocity-report", "file_error", toErrorMessage(error));
+            const message = toErrorMessage(error);
+            const category = /configuration.*ambiguous/i.test(message) ? "ambiguous_match" : /path|file|cache|workspace|schema/i.test(message) ? "file_error" : "validation_error";
+            return toStructuredErrorResult(format, "velocity-report", category, message);
         }
-
-        const lines = [
-            "## Codecks Velocity Report",
-            "",
-            `- Configuration: ${sprintConfig || "any"}`,
-            `- Subjects: ${subjects.map((subject) => subject.name).join(", ")}`,
-            `- Run start-date range: ${fromDate ?? "all available"} to ${toDate ?? "last completed Run"}`,
-            `- CSV: ${outputs.csvPath ?? "not requested"}`,
-            `- Markdown summary: ${outputs.summaryMarkdownPath ?? "not requested"}`,
-            "",
-            "| Subject | Sample weeks | Mean | P25 | P50 | P75 | Standard deviation | Variance |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|",
-            ...subjects.map((subject) => `| ${subject.name} | ${subject.summary.sampleWeeks} | ${subject.summary.mean} | ${subject.summary.p25} | ${subject.summary.p50} | ${subject.summary.p75} | ${subject.summary.sampleStandardDeviation} | ${subject.summary.sampleVariance} |`),
-        ];
-        return toStructuredResult(format, "velocity-report", lines.join("\n"), { sprintConfig: sprintConfig || "any", fromDate: fromDate ?? null, toDate: toDate ?? null, exclusions, outputs, subjects }, warnings);
     },
 });
 
