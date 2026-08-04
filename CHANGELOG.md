@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.9.0] - 2026-08-04
 
 ### Added
 
@@ -21,6 +21,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Release publication now resumes safely when npm already contains the exact release `gitHead`, while mismatched immutable package identities still block.
 - Velocity reporting now preserves observed zero separately from missing Run statistics or card estimates, retains full allocation precision until presentation, includes delivered cards outside Runs, and rejects unsafe or aliased workspace paths.
 - Bulk-create identity verification now makes one non-retrying exact read, reports only compared identity components plus neutral observations, retains compatibility persistence only for verified identities, and exposes bounded outcomes in compact and text results.
 - Bulk-create discovery now preserves aggregate title-probe and fallback accounting, distinguishes logical title probes from paginated requests, and returns no-create detailed parent-scoped required previews while keeping required apply blocked.

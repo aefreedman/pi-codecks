@@ -49,7 +49,8 @@ jobs:
           npm run pack:dry-run
           npm publish --dry-run --access public --ignore-scripts
 
-      - name: Verify release tag and unpublished version
+      - name: Verify release identity and publication state
+        id: release_identity
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -57,17 +58,27 @@ jobs:
           package_name=$(node -p "require('./package.json').name")
           package_version=$(node -p "require('./package.json').version")
           expected_tag="v${package_version}"
+          expected_git_head=$(git rev-parse HEAD)
           if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
             echo "::error::Release tag must be ${expected_tag}; received ${RELEASE_TAG}."
             exit 1
           fi
 
+          metadata_file=$(mktemp)
           error_file=$(mktemp)
-          if npm view "${package_name}@${package_version}" version --json > /dev/null 2>"$error_file"; then
-            echo "::error::${package_name}@${package_version} already exists on npm."
-            rm -f "$error_file"
-            exit 1
+          if npm view "${package_name}@${package_version}" version gitHead --json >"$metadata_file" 2>"$error_file"; then
+            observed_version=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(d.version))" "$metadata_file")
+            observed_git_head=$(node -e "const d=JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(d.gitHead))" "$metadata_file")
+            rm -f "$metadata_file" "$error_file"
+            if [[ "$observed_version" != "$package_version" || "$observed_git_head" != "$expected_git_head" ]]; then
+              echo "::error::Existing npm identity does not match ${expected_tag}: version=${observed_version}, gitHead=${observed_git_head}, expectedGitHead=${expected_git_head}."
+              exit 1
+            fi
+            echo "publish_required=false" >> "$GITHUB_OUTPUT"
+            echo "${package_name}@${package_version} already exists with the exact release gitHead; publication is complete."
+            exit 0
           fi
+          rm -f "$metadata_file"
           if ! grep -q "E404" "$error_file"; then
             echo "::error::Unable to verify whether ${package_name}@${package_version} exists on npm."
             cat "$error_file"
@@ -75,7 +86,9 @@ jobs:
             exit 1
           fi
           rm -f "$error_file"
+          echo "publish_required=true" >> "$GITHUB_OUTPUT"
           echo "Release tag matches the package version and the version is not published."
 
       - name: Publish with provenance through npm trusted publishing
+        if: steps.release_identity.outputs.publish_required == 'true'
         run: npm publish --access public --provenance
