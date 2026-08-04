@@ -74,6 +74,7 @@ for (const workflow of workflows) {
     assert.match(match[1], /^[a-f0-9]{40}$/, `Action pin must be a full commit SHA: ${match[0]}`);
   }
 }
+assert.match(integrationWorkflow, /push:\s+branches:\s+- main/);
 assert.match(integrationWorkflow, /workflow_dispatch:/);
 assert.match(integrationWorkflow, /environment: codecks-integration/);
 assert.match(integrationWorkflow, /concurrency:/);
@@ -81,7 +82,7 @@ assert.match(integrationWorkflow, /if:\s+github\.ref == 'refs\/heads\/main'/);
 assert.match(integrationWorkflow, /ref:\s+refs\/heads\/main/);
 assert.match(integrationWorkflow, /timeout-minutes:/);
 assert.match(integrationWorkflow, /npm run test:integration/);
-assert.doesNotMatch(integrationWorkflow, /pull_request:|\bpush:/);
+assert.doesNotMatch(integrationWorkflow, /pull_request:/);
 assert.match(publishWorkflow, /release:/);
 assert.match(publishWorkflow, /environment: npm/);
 assert.match(publishWorkflow, /id-token: write/);
