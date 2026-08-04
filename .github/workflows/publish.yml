@@ -47,7 +47,6 @@ jobs:
           npm run pack:validate
           npm run pack:smoke
           npm run pack:dry-run
-          npm publish --dry-run --access public --ignore-scripts
 
       - name: Verify release identity and publication state
         id: release_identity
@@ -88,6 +87,10 @@ jobs:
           rm -f "$error_file"
           echo "publish_required=true" >> "$GITHUB_OUTPUT"
           echo "Release tag matches the package version and the version is not published."
+
+      - name: Dry-run unpublished package
+        if: steps.release_identity.outputs.publish_required == 'true'
+        run: npm publish --dry-run --access public --ignore-scripts
 
       - name: Publish with provenance through npm trusted publishing
         if: steps.release_identity.outputs.publish_required == 'true'
