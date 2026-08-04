@@ -30,6 +30,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Changed
 
+- Live Codecks integration now runs automatically after protected `main` updates with a dedicated limited CI identity and disposable deck; release publication retains GitHub Release creation as its single human intent gate while environment branch/tag policies replace redundant reviewer prompts.
 - Refactored velocity reporting so Codecks retrieval updates a reusable team-neutral observation cache while report generation performs no network requests; `standard_velocity` now uses calendar-delivered effort and discloses every expanded transformation.
 - Removed the `tracker.codecks` workflow provider, inline workflow guidance, UUID-only workflow target parsing, and workflow credential/preflight integration. Codecks skills and direct tool metadata continue to handle public short references, untrusted external data, explicit mutation intent, and operation validation without a workflow dependency.
 - Removed mutation approval tokens, authorization provenance, sink authorization state, and UI confirmation prompts. Directly invoked writes now proceed from existing operation/target/payload validation to dispatch without a separate approval step.

@@ -48,8 +48,8 @@ The integration script applies conservative request-rate and timeout bounds. A q
 
 `npm run test:all` runs unit checks and then invokes the integration command. Because absent credentials produce a local skip, `test:all` alone does not prove that live validation ran; inspect its reported outcome.
 
-## Manual GitHub workflow
+## Protected GitHub workflow
 
-The separate integration workflow is available only through manual dispatch from `main` and a protected `codecks-integration` environment. It checks out `main` explicitly, requires protected secrets for the account, token, and disposable fixture deck, and rejects non-default-branch dispatches before the secret-bearing job starts. Configure the environment with required reviewers and a deployment-branch policy limited to `main`; repository YAML is not a substitute for that external protection. Missing configuration fails before the test starts. Concurrency prevents two mutation runs from using the shared fixture at once.
+The separate integration workflow runs automatically after pushes to `main` and remains available through manual dispatch from `main`. It checks out `main` explicitly and uses a protected `codecks-integration` environment containing credentials for a dedicated limited CI user and disposable fixture deck. Configure the environment without a reviewer gate and retain its deployment-branch policy limited to `main`; repository YAML is not a substitute for that external protection. Missing configuration fails before the test starts. Concurrency prevents two mutation runs from using the shared fixture at once.
 
-Public CI and the publish workflow do not run this live workflow automatically.
+Public pull-request CI and the publish workflow do not receive Codecks credentials or run live validation. Before release, verify that the independent integration run for the exact `main` commit completed with mutation-enabled success.

@@ -1,6 +1,6 @@
 # Release Process
 
-`pi-codecks` uses npm trusted publishing with provenance. The GitHub `npm` environment should require maintainer approval, and the npm package must trust this repository's `.github/workflows/publish.yml` workflow. No long-lived `NPM_TOKEN` is used by the workflow.
+`pi-codecks` uses npm trusted publishing with provenance. Publishing begins only when a maintainer creates a GitHub Release from an annotated version tag; the GitHub `npm` environment adds the `v*` tag policy without a redundant reviewer gate. The npm package must trust this repository's `.github/workflows/publish.yml` workflow. No long-lived `NPM_TOKEN` is used by the workflow.
 
 ## Repository controls
 
@@ -8,8 +8,8 @@ Before relying on the workflows for release or live validation, verify the GitHu
 
 - `main` changes go through pull requests and required Public CI checks; force-pushes and deletion remain blocked.
 - Actions use read-only default permissions and reviewed commit-SHA pins; Dependabot proposes dependency and action-pin updates.
-- The `codecks-integration` environment requires approval and allows deployments only from `main`.
-- The `npm` environment requires approval and allows only the intended release-tag policy.
+- The `codecks-integration` environment uses a dedicated limited CI identity and disposable fixture deck, runs without a reviewer gate, and allows deployments only from `main`.
+- The `npm` environment runs without a reviewer gate and allows only the intended `v*` release-tag policy; manual GitHub Release creation remains the human publication-intent gate.
 - npm trusted publishing is bound to this repository, package, and `.github/workflows/publish.yml`.
 - Dependency alerts/security updates, private vulnerability reporting, secret scanning, and push protection are enabled when available.
 
@@ -31,14 +31,14 @@ Review these controls periodically and before granting access to additional coll
    ```
 
 4. Manually review the pack manifest and source for secrets, private API responses, private identifiers, machine-specific paths, local state, and generated archives.
-5. Run the separate live integration workflow against the protected disposable fixture scope when Codecks API behavior changed. Confirm the workflow reports mutation-enabled success; do not infer live success from a local skip or read-only result.
+5. Confirm the automatically dispatched live integration workflow for the exact candidate `main` commit reports mutation-enabled success against the protected disposable fixture scope. Use manual dispatch only for a deliberate rerun; do not infer live success from a local skip or read-only result.
 6. Commit the final release metadata only after review.
 
 ## Publish
 
 1. Create a GitHub Release from an annotated tag exactly matching `v<package-version>`.
 2. The publish workflow checks out the tag, installs locked dependencies, runs all credential-free tests and package checks, and verifies the tag/version identity. It skips publication only when npm already contains that version with the exact release `gitHead`; mismatches and uncertain registry reads fail closed.
-3. The protected `npm` environment approval gates `npm publish --access public --provenance` through trusted publishing.
+3. The `npm` environment's `v*` tag policy admits `npm publish --access public --provenance` through trusted publishing without another reviewer prompt.
 4. Verify the npm package page, provenance statement, package contents, and a fresh `pi install npm:@aefree/pi-codecks` installation.
 
 The workflow never runs live Codecks tests and receives no Codecks credentials.
