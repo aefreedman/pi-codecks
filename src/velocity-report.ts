@@ -16,34 +16,37 @@ export type VelocityPeriod = {
 export type VelocitySummary = {
     sampleWeeks: number;
     totalEffort: number;
-    mean: number;
-    p25: number;
-    p50: number;
-    p75: number;
-    sampleStandardDeviation: number;
-    sampleVariance: number;
-    lowOutlierBound: number;
-    highOutlierBound: number;
+    mean: number | null;
+    p25: number | null;
+    p50: number | null;
+    p75: number | null;
+    sampleStandardDeviation: number | null;
+    sampleVariance: number | null;
+    lowOutlierBound: number | null;
+    highOutlierBound: number | null;
+    statisticsAvailable: boolean;
+    varianceAvailable: boolean;
+    percentileMethod: "inclusive_linear_interpolation";
 };
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
 
-const toUtcDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
-const toIsoDate = (value: Date): string => value.toISOString().slice(0, 10);
-const addDays = (value: Date, days: number): Date => new Date(value.getTime() + days * DAY_MS);
+export const toUtcDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
+export const toIsoDate = (value: Date): string => value.toISOString().slice(0, 10);
+export const addDays = (value: Date, days: number): Date => new Date(value.getTime() + days * DAY_MS);
 
-const mondayOnOrBefore = (value: Date): Date => {
+export const mondayOnOrBefore = (value: Date): Date => {
     const offset = (value.getUTCDay() + 6) % 7;
     return addDays(value, -offset);
 };
 
-const round = (value: number, digits = 2): number => {
+export const roundForPresentation = (value: number, digits = 2): number => {
     const factor = 10 ** digits;
     return Math.round((value + Number.EPSILON) * factor) / factor;
 };
 
-const percentileInclusive = (values: number[], percentile: number): number => {
-    if (values.length === 0) return 0;
+const percentileInclusive = (values: number[], percentile: number): number | null => {
+    if (values.length === 0) return null;
     const sorted = [...values].sort((left, right) => left - right);
     if (sorted.length === 1) return sorted[0];
     const index = (sorted.length - 1) * percentile;
@@ -52,12 +55,17 @@ const percentileInclusive = (values: number[], percentile: number): number => {
     return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower);
 };
 
+/**
+ * Model Run-level effort evenly over inclusive calendar days. Values remain at
+ * full precision; callers round only when rendering artifacts.
+ */
 export const buildWeeklyPeriods = (runs: VelocityRun[]): VelocityPeriod[] => {
     const values = new Map<string, number>();
     for (const run of runs) {
         if (!run.startDate || !run.endDate) continue;
         const start = toUtcDate(run.startDate);
         const end = toUtcDate(run.endDate);
+        if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
         const dayCount = Math.floor((end.getTime() - start.getTime()) / DAY_MS) + 1;
         if (dayCount <= 0) continue;
 
@@ -72,24 +80,23 @@ export const buildWeeklyPeriods = (runs: VelocityRun[]): VelocityPeriod[] => {
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([startDate, effort]) => {
             const start = toUtcDate(startDate);
-            return {
-                startDate,
-                endDate: toIsoDate(addDays(start, 6)),
-                label: `${startDate} to ${toIsoDate(addDays(start, 6))}`,
-                effort: round(effort),
-            };
+            const endDate = toIsoDate(addDays(start, 6));
+            return { startDate, endDate, label: `${startDate} to ${endDate}`, effort };
         });
 };
 
-export const buildBiweeklyPeriods = (weeks: VelocityPeriod[]): VelocityPeriod[] => {
+export const buildBiweeklyPeriods = (weeks: VelocityPeriod[], anchorDate = "1970-01-05"): VelocityPeriod[] => {
+    const parsedAnchor = toUtcDate(anchorDate);
+    if (Number.isNaN(parsedAnchor.getTime()) || parsedAnchor.getUTCDay() !== 1) {
+        throw new Error("Biweekly anchor must be a valid Monday in YYYY-MM-DD format.");
+    }
     const values = new Map<string, number>();
     for (const week of weeks) {
         const start = toUtcDate(week.startDate);
-        const anchor = new Date(start);
-        const epoch = toUtcDate("1970-01-05").getTime();
-        const offset = Math.floor((start.getTime() - epoch) / DAY_MS);
-        anchor.setTime(start.getTime() - (offset % 14) * DAY_MS);
-        const key = toIsoDate(anchor);
+        const offset = Math.floor((start.getTime() - parsedAnchor.getTime()) / DAY_MS);
+        const normalizedOffset = ((offset % 14) + 14) % 14;
+        const bucketStart = addDays(start, -normalizedOffset);
+        const key = toIsoDate(bucketStart);
         values.set(key, (values.get(key) ?? 0) + week.effort);
     }
 
@@ -97,38 +104,37 @@ export const buildBiweeklyPeriods = (weeks: VelocityPeriod[]): VelocityPeriod[] 
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([startDate, effort]) => {
             const start = toUtcDate(startDate);
-            return {
-                startDate,
-                endDate: toIsoDate(addDays(start, 13)),
-                label: `${startDate} to ${toIsoDate(addDays(start, 13))}`,
-                effort: round(effort),
-            };
+            const endDate = toIsoDate(addDays(start, 13));
+            return { startDate, endDate, label: `${startDate} to ${endDate}`, effort };
         });
 };
 
 export const summarizeVelocityPeriods = (periods: VelocityPeriod[]): VelocitySummary => {
-    const values = periods.map((period) => period.effort);
+    const values = periods.map((period) => period.effort).filter(Number.isFinite);
     const sampleWeeks = values.length;
-    const totalEffort = round(values.reduce((total, value) => total + value, 0));
-    const mean = sampleWeeks > 0 ? totalEffort / sampleWeeks : 0;
-    const p25 = percentileInclusive(values, 0.25);
-    const p50 = percentileInclusive(values, 0.5);
-    const p75 = percentileInclusive(values, 0.75);
-    const sampleVariance = sampleWeeks > 1
-        ? values.reduce((total, value) => total + (value - mean) ** 2, 0) / (sampleWeeks - 1)
-        : 0;
-    const iqr = p75 - p25;
+    const totalEffortRaw = values.reduce((total, value) => total + value, 0);
+    const meanRaw = sampleWeeks > 0 ? totalEffortRaw / sampleWeeks : null;
+    const p25Raw = percentileInclusive(values, 0.25);
+    const p50Raw = percentileInclusive(values, 0.5);
+    const p75Raw = percentileInclusive(values, 0.75);
+    const sampleVarianceRaw = sampleWeeks > 1 && meanRaw !== null
+        ? values.reduce((total, value) => total + (value - meanRaw) ** 2, 0) / (sampleWeeks - 1)
+        : null;
+    const iqr = p25Raw !== null && p75Raw !== null ? p75Raw - p25Raw : null;
     return {
         sampleWeeks,
-        totalEffort,
-        mean: round(mean),
-        p25: round(p25),
-        p50: round(p50),
-        p75: round(p75),
-        sampleStandardDeviation: round(Math.sqrt(sampleVariance)),
-        sampleVariance: round(sampleVariance),
-        lowOutlierBound: round(p25 - 1.5 * iqr),
-        highOutlierBound: round(p75 + 1.5 * iqr),
+        totalEffort: roundForPresentation(totalEffortRaw),
+        mean: meanRaw === null ? null : roundForPresentation(meanRaw),
+        p25: p25Raw === null ? null : roundForPresentation(p25Raw),
+        p50: p50Raw === null ? null : roundForPresentation(p50Raw),
+        p75: p75Raw === null ? null : roundForPresentation(p75Raw),
+        sampleStandardDeviation: sampleVarianceRaw === null ? null : roundForPresentation(Math.sqrt(sampleVarianceRaw)),
+        sampleVariance: sampleVarianceRaw === null ? null : roundForPresentation(sampleVarianceRaw),
+        lowOutlierBound: iqr === null || p25Raw === null ? null : roundForPresentation(p25Raw - 1.5 * iqr),
+        highOutlierBound: iqr === null || p75Raw === null ? null : roundForPresentation(p75Raw + 1.5 * iqr),
+        statisticsAvailable: sampleWeeks > 0,
+        varianceAvailable: sampleWeeks > 1,
+        percentileMethod: "inclusive_linear_interpolation",
     };
 };
 

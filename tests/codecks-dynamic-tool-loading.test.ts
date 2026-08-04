@@ -59,11 +59,11 @@ function serializedActiveMetadataCharacters(harness: PiToolHarness): number {
 }
 
 async function main(): Promise<void> {
-  assert.equal(publicToolNames.length, 41, "the default surface must include 41 tools");
+  assert.equal(publicToolNames.length, 42, "the default surface must include 42 tools");
 
   await withMode(undefined, async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.equal(harness.registry.size, 42, "41 default Codecks tools plus the loader should be registered");
+    assert.equal(harness.registry.size, 43, "42 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
   });
@@ -101,6 +101,7 @@ async function main(): Promise<void> {
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_deck_get"] }).map((match) => match.name), ["codecks_deck_get"]);
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_deck_update"] }).map((match) => match.name), ["codecks_deck_update"]);
   assert.deepEqual(searchCodecksTools({ query: "find milestone by visible name" }).map((match) => match.name), ["codecks_milestone_list"]);
+  assert.deepEqual(searchCodecksTools({ query: "update velocity observation cache" }).map((match) => match.name), ["codecks_velocity_observations_update"]);
   assert.deepEqual(searchCodecksTools({ query: "velocity report" }).map((match) => match.name), ["codecks_velocity_report"]);
   assert.deepEqual(searchCodecksTools({ query: "retrieve cached completed Run statistics and calculate velocity percentiles mean P25 P50 P75, read-only" }).map((match) => match.name), ["codecks_velocity_report"]);
   assert.deepEqual(searchCodecksTools({ query: "reply with a follow up on the existing review" }).map((match) => match.name), ["codecks_card_list_resolvables", "codecks_card_reply_resolvable"], "follow-up uses the reviewed discovery/reply pair");

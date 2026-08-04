@@ -31,6 +31,7 @@ Registered default tools:
 - `codecks_run_get`
 - `codecks_run_delivered_effort`
 - `codecks_run_average_effort`
+- `codecks_velocity_observations_update`
 - `codecks_velocity_report`
 - `codecks_run_update`
 - `codecks_card_update_run`
@@ -84,6 +85,8 @@ Invalid values fall back to `balanced`. If Pi cannot prove that the effective lo
 A directly invoked Codecks mutation tool proceeds through its existing operation, target/entity, and payload validation to the dispatch sink. The package does not add approval-token parameters or UI confirmation prompts. Read-only queries retain bounded retries, but non-idempotent dispatches make one remote attempt and do not retry timeouts or retryable HTTP responses because their side effects are ambiguous. Raw `codecks_dispatch` retains its in-scope path and payload checks; specialized tools retain exact entity resolution and domain validation.
 
 Attachment sources are physically canonicalized relative to the invoking workspace and must remain inside it. Outside-workspace sources and symlink/junction escapes are rejected before network access. The package snapshots canonical source identity, content SHA-256, and size, then re-resolves and re-hashes the source immediately before upload so changed bytes are not sent. Attachment hashes are not exposed in tool results.
+
+Velocity cache, roster, CSV, and Markdown paths are also resolved against the active workspace. Traversal and symlink/junction escapes are rejected, cache/report destinations cannot alias one another, and observation-cache/report writes use atomic replacement.
 
 These controls cover registered Codecks tools and raw `codecks_dispatch`; they do not claim to police unrelated shell or third-party HTTP clients.
 
@@ -169,11 +172,24 @@ Codecks user-facing “Runs” use the underlying Sprint API model. Pi exposes R
 - `codecks_run_get` fetches one run by run id, sprint id, account sequence, or label search.
 - `codecks_run_delivered_effort` reports cached delivered effort from Run `stats.finishStats`, optionally scoped by sprint config and user, without querying every card.
 - `codecks_run_average_effort` averages cached delivered effort across completed Runs and supports low-effort filtering; `minDeliveredEffort` defaults to `1` to skip zero-effort vacation/break Runs.
-- `codecks_velocity_report` builds per-person or roster-based historical velocity reports from cached `stats.finishStats`. It calculates mean, P25, P50, P75, sample standard deviation, variance, and fixed biweekly totals. Its `csvPath` and `summaryMarkdownPath` outputs are independent. Use `rosterPath` with JSON or simple YAML containing `{ "name", "userId", "fromDate"?, "toDate"? }` entries (or a `members` list) to avoid inferring team membership from recent assignees. Multi-week Runs are evenly allocated across their calendar weeks, and label exclusions default to `vacation`, `holiday`, `break`, and `leave`.
+- `codecks_velocity_observations_update` queries Codecks and atomically updates a caller-owned, organization-scoped JSON observation cache. It preserves completed-Run snapshots and delivered-card facts as separate streams, including cards assigned to another Run or no Run. Incremental refresh uses a 10-day overlap by default; explicit date-window and full refresh modes are available.
+- `codecks_velocity_report` consumes that cache without making Codecks requests. `calendar_delivered` directly buckets cards by delivery date and is the `standard_velocity` capacity default; `run_attributed` uses completed-Run `stats.finishStats` and models multi-week effort evenly across calendar days. Every configuration selection, roster scope, exclusion, allocation, gap, partial-period decision, and aggregation appears in a transformation manifest. Independent `csvPath` and `summaryMarkdownPath` artifacts include factual and derived provenance.
 - `codecks_run_update` edits a run custom label via `sprints/updateSprint.name` and a run description via `sprints/updateSprint.description`.
 - `codecks_card_update_run` assigns a card to a run with `cards/update` `sprintId`, or removes it with `sprintId: null`.
 
 Numeric `runId` values refer to the Run/Sprint account sequence, not a card short code. Use the `Test` deck and explicit test run/card configuration for live mutation validation.
+
+### Velocity methodology
+
+The observation cache is factual and team-neutral. A separate JSON or simple-YAML roster maps stable user IDs to display names, optional teams, user-supplied membership dates, and explicit date exclusions. Missing assignee data is preserved and is not interpreted as non-participation or zero delivery.
+
+An explicit effort value of zero remains observed zero. Missing Run `finishStats`, a missing done bucket, and a missing card estimate remain distinct missing states. Calendar reports continue summing known effort while disclosing missing-estimate counts; incomplete retrieval periods remain unavailable rather than becoming zero.
+
+`standard_velocity` counts complete non-excluded empty weeks as zero, shows but excludes partial boundary periods from statistics, and expands its transformations in output. Run-label defaults (`vacation`, `holiday`, `break`, `leave`) apply only to Run-attributed reporting and can be replaced, disabled with `[]`, or extended. Calendar-delivered leave handling requires explicit organization/team/person date ranges. Use `excludeDecks` with stable IDs or unambiguous exact titles (for example `Test`) to exclude tool-testing or other non-production cards; the manifest records each excluded card and known effort. Deck exclusion is rejected for Run-attributed snapshots because their aggregate effort cannot be safely decomposed by deck.
+
+Configurations may be combined within one organization under the package's universal-effort assumption, and mixed weekly/biweekly Run lengths can be normalized together. Optional filtering accepts an exact stable configuration ID or an unambiguous exact visible name; configuration identity remains in periods and artifacts. Cross-team or cross-organization comparability remains a user interpretation.
+
+Empty samples expose unavailable means/percentiles; sample variance and standard deviation require at least two periods. Percentiles use inclusive linear interpolation and need not be observed values. Fixed biweekly periods use a stable global Monday anchor by default.
 
 ## Vision Board Tool
 
