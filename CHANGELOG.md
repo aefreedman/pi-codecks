@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.9.1] - 2026-08-05
+
+### Fixed
+
+- Bulk card creation now propagates operational cancellation/failure during normalization and duplicate discovery, stops safely on 429 responses, marks untouched records definitely unsent, and retains reconciliation evidence without replaying successful writes.
+- Server-directed `Retry-After` cooldowns now gate all extension-process requests alongside the local rate limiter and remain cancellable while waiting.
+
+### Added
+
+- Bulk card creation emits transient Pi progress with stage, elapsed time, records, request attempts, queue wait, and outcome counts; its final result contracts remain unchanged.
+
+### Changed
+
+- Refactored `using-codecks` into a concise routing spine with task-specific card, bulk, conversation, entity, fallback, security, and profile references loaded only when relevant.
+- Bulk-create call rendering now exposes mode, card count, duplicate policy, and verification mode. Agent guidance now directs one approved bulk operation rather than manual rate-limit chunking.
+
 ## [0.9.0] - 2026-08-04
 
 ### Added

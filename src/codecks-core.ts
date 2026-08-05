@@ -65,6 +65,9 @@ const RATE_WINDOW_MS = (() =>
     return Math.max(1000, Math.min(15000, value));
 })();
 const requestTimestamps: number[] = [];
+// A server-issued Retry-After applies to every request made by this extension
+// process, not merely the request that observed the 429.
+let serverCooldownUntil = 0;
 const ACCOUNT_SCAN_CONCURRENCY = 2;
 const ACCOUNT_SCAN_MAX_QUEUE = 8;
 let activeAccountScans = 0;
@@ -142,6 +145,7 @@ const releaseAccountScanSlot = (): void =>
 const withAccountScanSlot = async <T>(fn: (queueWaitMs: number) => Promise<T>): Promise<T> =>
 {
     const queueWaitMs = await acquireAccountScanSlot();
+    noteOperationQueueWait(queueWaitMs);
     try
     {
         return await fn(queueWaitMs);
@@ -205,17 +209,80 @@ const getDispatchPolicyMessage = (path: string): string | null =>
     return null;
 };
 
+type BulkCreateProgress = {
+    stage: string;
+    elapsedMs: number;
+    recordsProcessed: number;
+    requestsAttempted: number;
+    queueWaitMs: number;
+    created: number;
+    failed: number;
+    definitelyUnsent: number;
+};
+
+type OperationContext = {
+    onBulkCreateProgress?: (progress: BulkCreateProgress) => void;
+    requestsAttempted: number;
+    queueWaitMs: number;
+};
+
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
 const workspaceRootStorage = new AsyncLocalStorage<string | undefined>();
+const operationContextStorage = new AsyncLocalStorage<OperationContext | undefined>();
 
 const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.getStore();
 const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
+const getOperationContext = (): OperationContext | undefined => operationContextStorage.getStore();
 
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
     fn: () => Promise<T>,
     workspaceRoot?: string,
-): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, fn));
+    onBulkCreateProgress?: (progress: BulkCreateProgress) => void,
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run({ onBulkCreateProgress, requestsAttempted: 0, queueWaitMs: 0 }, fn)));
+
+const noteOperationQueueWait = (queueWaitMs: number): void =>
+{
+    const context = getOperationContext();
+    if (!context) return;
+    context.queueWaitMs += queueWaitMs;
+};
+
+const noteOperationRequest = (queueWaitMs: number): void =>
+{
+    const context = getOperationContext();
+    if (!context) return;
+    context.requestsAttempted += 1;
+    noteOperationQueueWait(queueWaitMs);
+};
+
+const emitBulkCreateProgress = (
+    startedAt: number,
+    stage: string,
+    recordsProcessed: number,
+    results: Record<string, unknown>[] = [],
+): void =>
+{
+    const context = getOperationContext();
+    if (!context?.onBulkCreateProgress) return;
+    try
+    {
+        context.onBulkCreateProgress({
+            stage,
+            elapsedMs: Math.max(0, Date.now() - startedAt),
+            recordsProcessed,
+            requestsAttempted: context.requestsAttempted,
+            queueWaitMs: context.queueWaitMs,
+            created: results.filter((entry) => entry.status === "created").length,
+            failed: results.filter((entry) => entry.status === "failed").length,
+            definitelyUnsent: results.filter((entry) => entry.status === "definitely_unsent").length,
+        });
+    }
+    catch
+    {
+        // UI updates are best-effort and must never alter the tool result.
+    }
+};
 
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) =>
 {
@@ -240,8 +307,9 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((
     signal?.addEventListener("abort", onAbort, { once: true });
 });
 
-const enforceRateLimit = async (): Promise<void> =>
+const enforceRateLimit = async (): Promise<number> =>
 {
+    const waitStartedAt = Date.now();
     while (true)
     {
         const now = Date.now();
@@ -250,14 +318,17 @@ const enforceRateLimit = async (): Promise<void> =>
             requestTimestamps.shift();
         }
 
-        if (requestTimestamps.length < RATE_LIMIT)
+        const localWaitMs = requestTimestamps.length < RATE_LIMIT
+            ? 0
+            : Math.max(0, RATE_WINDOW_MS - (now - requestTimestamps[0]) + 5);
+        const cooldownWaitMs = Math.max(0, serverCooldownUntil - now);
+        const waitMs = Math.max(localWaitMs, cooldownWaitMs);
+        if (waitMs === 0)
         {
             requestTimestamps.push(now);
-            return;
+            return Date.now() - waitStartedAt;
         }
 
-        const waitMs = Math.max(0, RATE_WINDOW_MS - (now - requestTimestamps[0]) + 5);
-        const waitStartedAt = Date.now();
         try
         {
             await sleep(waitMs, getActiveAbortSignal());
@@ -2168,7 +2239,8 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
     const config = getConfig();
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
-    await enforceRateLimit();
+    const queueWaitMs = await enforceRateLimit();
+    noteOperationRequest(queueWaitMs);
 
     const response = await fetch(`${config.baseUrl}/s3/sign?objectName=${encodeURIComponent(fileName)}`, {
         method: "GET",
@@ -2179,6 +2251,7 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
         signal,
     });
 
+    const retryAfterMs = observeServerCooldown(response);
     const text = await response.text();
     let payload: unknown = text;
 
@@ -2197,7 +2270,16 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
     if (!response.ok)
     {
         const details = sanitizeErrorPayload(payload);
-        throw new Error(`Codecks upload signing failed ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`);
+        const message = `Codecks upload signing failed ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
+        if (response.status === 429)
+        {
+            throw new CodecksOperationError("rate_limited", message, {
+                requestsAttempted: 1,
+                ...(retryAfterMs !== null ? { retryAfterMs, cooldownUntil: serverCooldownUntil } : {}),
+                recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
+            });
+        }
+        throw new Error(message);
     }
 
     if (!payload || typeof payload !== "object")
@@ -3154,6 +3236,18 @@ const parseRetryAfterMs = (headerValue: string | null): number | null =>
     return Math.max(0, parsed - Date.now());
 };
 
+// Observe headers before a body is consumed so concurrent operations cannot slip
+// past a server-directed cooldown while a response body is still streaming.
+const observeServerCooldown = (response: Response): number | null =>
+{
+    const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
+    if (retryAfterMs !== null)
+    {
+        serverCooldownUntil = Math.max(serverCooldownUntil, Date.now() + retryAfterMs);
+    }
+    return retryAfterMs;
+};
+
 const computeRetryDelayMs = (attempt: number, response: Response): number =>
 {
     const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
@@ -3201,7 +3295,8 @@ const requestJson = async (
     {
         try
         {
-            await enforceRateLimit();
+            const queueWaitMs = await enforceRateLimit();
+            noteOperationRequest(queueWaitMs);
         }
         catch (error)
         {
@@ -3279,6 +3374,7 @@ const requestJson = async (
             externalSignal?.removeEventListener("abort", onAbort);
         }
 
+        const retryAfterMs = observeServerCooldown(response);
         const text = await response.text();
         let payload: unknown = text;
 
@@ -3309,6 +3405,12 @@ const requestJson = async (
             && attempt < MAX_RETRY_ATTEMPTS;
         if (shouldRetry)
         {
+            // Retry-After is enforced by the shared gate on the next attempt. This
+            // records actual queue time and avoids sleeping once here and again there.
+            if (retryAfterMs !== null)
+            {
+                continue;
+            }
             await sleep(computeRetryDelayMs(attempt, response), externalSignal);
             continue;
         }
@@ -3319,6 +3421,7 @@ const requestJson = async (
         {
             throw new CodecksOperationError("rate_limited", message, {
                 requestsAttempted: attempt + 1,
+                ...(retryAfterMs !== null ? { retryAfterMs, cooldownUntil: serverCooldownUntil } : {}),
                 recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
             });
         }
@@ -7894,6 +7997,12 @@ const preflightOutcomeRecords = (records: unknown[], operation: "create" | "upda
     });
 };
 
+const isOperationalError = (error: unknown): boolean =>
+{
+    if (error instanceof CodecksOperationError) return true;
+    return ["caller_aborted", "rate_limit_queue_aborted", "request_timeout", "rate_limited", "scan_queue_full"].includes(classifyApiErrorCategory(toErrorMessage(error)));
+};
+
 const classifyMutationOutcome = (error: unknown): "failed" | "indeterminate" =>
 {
     if (error instanceof CodecksOperationError && ["request_timeout", "caller_aborted"].includes(error.category)) return "indeterminate";
@@ -7913,6 +8022,22 @@ const markDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: nu
             entry.certainty = "definitely_unsent";
             entry.reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made." };
         }
+    }
+};
+
+// Create dispatch is sequential: every later normalized record is known not to
+// have reached runDispatch, irrespective of its pre-dispatch duplicate status.
+const markBulkCreateDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number): void =>
+{
+    for (const entry of results)
+    {
+        if (Number(entry.index) <= afterIndex || entry.dispatchAttemptState !== "not_attempted") continue;
+        entry.status = "definitely_unsent";
+        entry.certainty = "definitely_unsent";
+        entry.reconciliation = {
+            retry: "safe_to_submit_after_reconciliation",
+            reason: "No dispatch attempt was made; retain and reconcile this record's duplicate evidence before continuing.",
+        };
     }
 };
 
@@ -7946,6 +8071,8 @@ export const card_bulk_create = tool({
         const verification: BulkCreateVerification = (args.verification as BulkCreateVerification | undefined) ?? "none";
         const outputMode: BulkCreateOutputMode = (args.outputMode as BulkCreateOutputMode | undefined) ?? (dryRun ? "detailed" : "compact");
         const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : [];
+        const progressStartedAt = Date.now();
+        emitBulkCreateProgress(progressStartedAt, "validating", 0);
         const structuralErrors = validateStrictBulkRecords(rawRecords, "create");
         if (structuralErrors.length > 0)
         {
@@ -7966,6 +8093,7 @@ export const card_bulk_create = tool({
         const normalized: NormalizedBulkCreateRecord[] = [];
         const normalizationErrors: Array<{ index: number; message: string }> = [];
         let loggedInUser: CodecksUser;
+        emitBulkCreateProgress(progressStartedAt, "normalizing", 0);
         try
         {
             loggedInUser = await fetchLoggedInUser();
@@ -7979,9 +8107,19 @@ export const card_bulk_create = tool({
             try
             {
                 normalized.push(await normalizeBulkCreateRecord(rawRecords[index] as BulkCreateRecord, defaults, index, loggedInUser));
+                emitBulkCreateProgress(progressStartedAt, "normalizing", index + 1);
             }
             catch (error)
             {
+                if (isOperationalError(error))
+                {
+                    const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+                    emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, index);
+                    return toStructuredErrorResult(format, "card-bulk-create", category, toErrorMessage(error), {
+                        ...getOperationErrorData(error),
+                        recordsProcessed: index,
+                    });
+                }
                 normalizationErrors.push({ index, message: toErrorMessage(error) });
             }
         }
@@ -8029,14 +8167,18 @@ export const card_bulk_create = tool({
         }
         else try
         {
+            emitBulkCreateProgress(progressStartedAt, "duplicate_discovery", normalized.length);
             duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000, duplicatePolicy);
+            emitBulkCreateProgress(progressStartedAt, "duplicate_discovery_complete", normalized.length);
         }
         catch (error)
         {
+            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+            emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, normalized.length);
             return toStructuredErrorResult(
                 format,
                 "card-bulk-create",
-                error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
+                category,
                 toErrorMessage(error),
                 getOperationErrorData(error),
             );
@@ -8062,23 +8204,28 @@ export const card_bulk_create = tool({
         const results: Record<string, unknown>[] = normalized.map((record) =>
         {
             const candidates = duplicateScan.candidates.get(record.index) ?? [];
+            const preDispatchStatus = duplicatePolicy === "skip" || duplicateScan.metadata.complete
+                ? (candidates.length > 0 ? "duplicate_candidate" : "ready")
+                : "scan_incomplete";
             return {
                 ...publicBulkCreateRecord(record, candidates),
-                status: duplicatePolicy === "skip" || duplicateScan.metadata.complete
-                    ? (candidates.length > 0 ? "duplicate_candidate" : "ready")
-                    : "scan_incomplete",
+                status: preDispatchStatus,
+                preDispatchStatus,
+                dispatchAttemptState: "not_attempted",
                 certainty: "not_dispatched",
                 verificationState: dryRun ? "not_applicable" : (verification === "none" ? "not_requested" : "not_identifiable"),
                 ...(verification === "identity" ? { verificationCheckedFields: [] } : {}),
             };
         });
 
+        emitBulkCreateProgress(progressStartedAt, dryRun ? "dry_run_ready" : "applying", 0, results);
         if (!dryRun)
         {
             for (const record of normalized)
             {
                 try
                 {
+                    results[record.index].dispatchAttemptState = "attempted";
                     const response = unwrapData(await runDispatch("cards/create", record.payload));
                     const dispatchIdentity = extractDispatchCardIdentity(response);
                     results[record.index].status = "created";
@@ -8090,6 +8237,7 @@ export const card_bulk_create = tool({
                         ...publicCardIdentity(dispatchIdentity),
                         title: dispatchIdentity.title,
                     };
+                    let verificationOperationalError: unknown;
                     if (verification === "identity")
                     {
                         if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
@@ -8111,6 +8259,7 @@ export const card_bulk_create = tool({
                                     message: toErrorMessage(error),
                                     ...getOperationErrorData(error),
                                 };
+                                if (isOperationalError(error)) verificationOperationalError = error;
                             }
                         }
                         else
@@ -8118,29 +8267,56 @@ export const card_bulk_create = tool({
                             results[record.index].verificationState = "not_identifiable";
                         }
                     }
+                    emitBulkCreateProgress(progressStartedAt, "applying", record.index + 1, results);
+                    if (verificationOperationalError)
+                    {
+                        const category = verificationOperationalError instanceof CodecksOperationError
+                            ? verificationOperationalError.category
+                            : classifyApiErrorCategory(toErrorMessage(verificationOperationalError));
+                        markBulkCreateDefinitelyUnsent(results, record.index);
+                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
+                        break;
+                    }
                 }
                 catch (error)
                 {
+                    const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+                    if (category === "rate_limit_queue_aborted")
+                    {
+                        results[record.index].status = "definitely_unsent";
+                        results[record.index].certainty = "definitely_unsent";
+                        results[record.index].error = { category, message: toErrorMessage(error), ...getOperationErrorData(error), retried: false };
+                        results[record.index].reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made because the local rate queue was cancelled." };
+                        markBulkCreateDefinitelyUnsent(results, record.index);
+                        emitBulkCreateProgress(progressStartedAt, "stopped_rate_limit_queue_aborted", record.index, results);
+                        break;
+                    }
+
                     const outcome = classifyMutationOutcome(error);
                     results[record.index].status = outcome;
                     results[record.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
-                    results[record.index].error = {
-                        category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
-                        message: toErrorMessage(error),
-                        ...getOperationErrorData(error),
-                        retried: false,
-                    };
+                    results[record.index].error = { category, message: toErrorMessage(error), ...getOperationErrorData(error), retried: false };
+                    if (category === "rate_limited")
+                    {
+                        results[record.index].reconciliation = { retry: "safe_to_submit_after_server_cooldown", reason: "Codecks rejected this dispatch with 429; previously created cards must not be replayed." };
+                        markBulkCreateDefinitelyUnsent(results, record.index);
+                        emitBulkCreateProgress(progressStartedAt, "stopped_rate_limited", record.index + 1, results);
+                        break;
+                    }
                     if (outcome === "indeterminate")
                     {
                         results[record.index].reconciliation = { actionKey: results[record.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
-                        markDefinitelyUnsent(results, record.index);
+                        markBulkCreateDefinitelyUnsent(results, record.index);
+                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
                         break;
                     }
-                    if (!continueOnError)
+                    if (isOperationalError(error) || !continueOnError)
                     {
-                        markDefinitelyUnsent(results, record.index);
+                        markBulkCreateDefinitelyUnsent(results, record.index);
+                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
                         break;
                     }
+                    emitBulkCreateProgress(progressStartedAt, "applying", record.index + 1, results);
                 }
             }
         }
@@ -8213,6 +8389,7 @@ export const card_bulk_create = tool({
             duplicateDiscovery: duplicateScan.metadata,
             results: results.map(compactBulkCreateRecord),
         };
+        emitBulkCreateProgress(progressStartedAt, "completed", rawRecords.length, results);
         return toStructuredResult(format, "card-bulk-create", lines.join("\n"), outputMode === "detailed" ? detailedData : compactData, warnings);
     },
 });
