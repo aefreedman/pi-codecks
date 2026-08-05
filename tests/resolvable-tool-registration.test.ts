@@ -309,10 +309,17 @@ assert.ok(decisionFixture.includes("codecks_card_add_comment only when explicitl
 const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../skills/using-codecks/SKILL.md", import.meta.url), "utf8");
 const velocitySkill = readFileSync(new URL("../skills/codecks-velocity-reporting/SKILL.md", import.meta.url), "utf8");
+const usingCodecksReferences = [
+  "card-operations.md",
+  "bulk-operations.md",
+  "conversations-and-resolvables.md",
+  "decks-milestones-and-runs.md",
+  "fallback-security-and-profiles.md",
+].map((name) => readFileSync(new URL(`../skills/using-codecks/references/${name}`, import.meta.url), "utf8")).join("\n");
 assert.match(skill, /^allowed-tools: .*codecks_tool_search .*codecks_velocity_report/m, "Pi 0.82 allowed-tools should be one space-delimited scalar containing the loader and velocity report");
 assert.match(velocitySkill, /name: codecks-velocity-reporting/);
 assert.match(velocitySkill, /codecks_velocity_report/);
-const docs = `${readme}\n${skill}\n${velocitySkill}`;
+const docs = `${readme}\n${skill}\n${usingCodecksReferences}\n${velocitySkill}`;
 for (const phrase of [
   "resolvableId",
   "cardId",
@@ -342,11 +349,11 @@ assert.match(docs, /does not resolve secret-reference placeholders|secret-refere
 assert.doesNotMatch(docs, /TOKEN_OP_REF|TOKEN_REF/);
 assert.match(docs, /Do not open new Comment threads|should not open new Comment threads/i);
 assert.match(docs, /Do not use `codecks_card_add_comment` to reply to an existing thread/i);
-assert.match(skill, /earlier evidence or assumption/i);
-assert.match(skill, /new contradictory or limiting evidence/i);
-assert.match(skill, /remaining validation gap/i);
-assert.match(skill, /do not call the issue "fixed" or name a "root cause" until evidence supports/i);
-assert.match(skill, /only one open Review/i);
-assert.match(skill, /report the update in chat/i);
+assert.match(usingCodecksReferences, /earlier evidence or assumption/i);
+assert.match(usingCodecksReferences, /new contradictory or limiting evidence/i);
+assert.match(usingCodecksReferences, /remaining validation gap/i);
+assert.match(usingCodecksReferences, /do not call an issue .fixed. or name a .root cause. until the evidence supports/i);
+assert.match(usingCodecksReferences, /only one open Review/i);
+assert.match(usingCodecksReferences, /report in chat/i);
 
 console.log("resolvable tool registration test passed");

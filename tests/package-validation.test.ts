@@ -103,6 +103,13 @@ const readme = read("README.md");
 const contributing = read("CONTRIBUTING.md");
 const testing = read("docs/testing.md");
 const release = read("docs/release.md");
+const usingCodecksReferences = [
+  "card-operations.md",
+  "bulk-operations.md",
+  "conversations-and-resolvables.md",
+  "decks-milestones-and-runs.md",
+  "fallback-security-and-profiles.md",
+].map((name) => read(`skills/using-codecks/references/${name}`)).join("\n");
 const packageFacingDocs = [
   readme,
   contributing,
@@ -110,6 +117,7 @@ const packageFacingDocs = [
   testing,
   release,
   read("skills/using-codecks/SKILL.md"),
+  usingCodecksReferences,
   read("skills/codecks-velocity-reporting/SKILL.md"),
 ].join("\n");
 const mutationRuntimeSurface = [
@@ -118,6 +126,7 @@ const mutationRuntimeSurface = [
   read("src/codecks-tool-loading.ts"),
   readme,
   read("skills/using-codecks/SKILL.md"),
+  usingCodecksReferences,
 ].join("\n");
 assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authorize_mutation|mutation-authorization|authorizationProvenance|ctx\.ui\.confirm|tracker\.codecks|guidance\/codecks\/work|workflow preflight/i);
 
@@ -132,7 +141,7 @@ const bulkCreateContractSurfaces = [
   bulkCreateRegistration,
   bulkCreateLoader,
   readme.match(/^[^\n]*codecks_card_bulk_create[^\n]*$/gm)?.join("\n") ?? "",
-  read("skills/using-codecks/SKILL.md").match(/^[^\n]*bulk-create[^\n]*$/gim)?.join("\n") ?? "",
+  `${read("skills/using-codecks/SKILL.md")}\n${read("skills/using-codecks/references/bulk-operations.md")}`.match(/^[^\n]*bulk-create[^\n]*$/gim)?.join("\n") ?? "",
 ].join("\\n");
 assert.ok(bulkCreateCore, "bulk-create core surface must be present");
 assert.ok(bulkCreateRegistration, "bulk-create registration contract must be present");

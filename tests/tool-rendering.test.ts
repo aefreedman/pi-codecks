@@ -103,4 +103,28 @@ for (const line of errorCollapsedLines) {
   assert.ok(visibleLength(line) <= 94, `rendered line exceeded width: ${visibleLength(line)} > 94: ${line}`);
 }
 
+const bulkCreate = getTool("codecks_card_bulk_create");
+const partialBulk = renderLines(bulkCreate.renderResult!({
+  content: [{ type: "text", text: "transient" }],
+  details: {
+    exportName: "card_bulk_create",
+    transient: true,
+    progress: {
+      stage: "applying",
+      elapsedMs: 321,
+      recordsProcessed: 4,
+      requestsAttempted: 7,
+      queueWaitMs: 125,
+      created: 2,
+      failed: 1,
+      definitelyUnsent: 1,
+    },
+  },
+}, { isPartial: true }, fakeTheme, {}), 240).join("\n");
+assert.match(partialBulk, /Bulk create applying/i);
+assert.match(partialBulk, /321ms elapsed.*4 record.*7 request.*125ms queued.*2 created.*1 failed.*1 definitely unsent/i);
+
+const genericPartial = renderLines(cardGet.renderResult!(structuredResult, { isPartial: true }, fakeTheme, {})).join("\n");
+assert.equal(genericPartial, "Running Codecks request...");
+
 console.log("Codecks tool rendering test passed");

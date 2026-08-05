@@ -469,6 +469,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_bulk_create for CSV/import-style card creation after mapping rows into card objects.",
       "Run codecks_card_bulk_create with dryRun=true before applying creates, especially for imports or bulk deck/milestone work.",
+      "After approval, submit one bulk operation and let the tool pace requests or stop safely; do not manually chunk records or count requests to manage rate limits.",
       "Review duplicate candidates and discovery completeness before apply. Account fallback is limited to a semantic title-filter rejection, probe budget, or incomplete probe; transport/auth/rate/cancel/timeout/queue failures block. Required blocks incomplete credential-visible evidence; parent-scoped required dry-runs preview only and required apply is blocked.",
       "Apply defaults to compact schema-v2 results with returned $references. Use outputMode=detailed for schema-v1 normalized diagnostics; verification=identity is opt-in and makes one non-retrying exact read per identifiable create.",
       "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request.",
@@ -1115,6 +1116,17 @@ type RenderTheme = {
 type CodecksToolDetails = {
   exportName?: string;
   rawResult?: unknown;
+  transient?: boolean;
+  progress?: {
+    stage?: string;
+    elapsedMs?: number;
+    recordsProcessed?: number;
+    requestsAttempted?: number;
+    queueWaitMs?: number;
+    created?: number;
+    failed?: number;
+    definitelyUnsent?: number;
+  };
 };
 
 function toText(result: unknown): string {
@@ -1246,6 +1258,13 @@ function summarizeCodecksResult(exportName: string, resultText: string): { ok: b
 }
 
 function renderCodecksCall(exportName: string, args: Record<string, unknown>, theme: RenderTheme): TextLikeComponent {
+  if (exportName === "card_bulk_create") {
+    const count = Array.isArray(args.cards) ? args.cards.length : 0;
+    const mode = args.dryRun === false ? "apply" : "dry-run";
+    const duplicatePolicy = typeof args.duplicatePolicy === "string" ? args.duplicatePolicy : (mode === "dry-run" ? "required" : "best_effort");
+    const verification = typeof args.verification === "string" ? args.verification : "none";
+    return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))} ${themed(theme, "accent", mode)} · ${count} card${count === 1 ? "" : "s"} · duplicates: ${duplicatePolicy} · verify: ${verification}`);
+  }
   const target = args.cardId ?? args.card ?? args.title ?? args.path ?? args.context ?? "";
   const suffix = target ? ` ${themed(theme, "accent", String(target))}` : "";
   return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))}${suffix}`);
@@ -1258,6 +1277,13 @@ function renderCodecksResult(
   theme: RenderTheme,
 ): TextLikeComponent {
   if (options?.isPartial) {
+    const progress = result?.details?.progress;
+    if (exportName === "card_bulk_create" && progress && typeof progress === "object") {
+      const value = progress as Record<string, unknown>;
+      const number = (key: string) => typeof value[key] === "number" ? value[key] : 0;
+      const stage = typeof value.stage === "string" ? value.stage : "running";
+      return textComponent(themed(theme, "warning", `Bulk create ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued · ${number("created")} created / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
+    }
     return textComponent(themed(theme, "warning", "Running Codecks request..."));
   }
 
@@ -1310,12 +1336,18 @@ export default function codecksTools(pi: ExtensionAPI) {
       renderResult(result, options, theme) {
         return renderCodecksResult(exportName, result, options, theme as RenderTheme);
       },
-      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      async execute(_toolCallId, params, signal, onUpdate, ctx) {
         const normalizedParams = { ...((params ?? {}) as Record<string, unknown>) };
         const result = await core.runWithAbortSignal(
           signal,
           async () => coreTool.execute(normalizedParams),
           ctx.cwd ?? process.cwd(),
+          exportName === "card_bulk_create" && onUpdate ? (progress) => {
+            onUpdate({
+              content: [{ type: "text", text: `Bulk create ${progress.stage}: ${progress.recordsProcessed} record(s), ${progress.requestsAttempted} request(s), ${progress.queueWaitMs}ms queued, ${progress.elapsedMs}ms elapsed.` }],
+              details: { exportName, transient: true, progress },
+            });
+          } : undefined,
         );
         const text = toText(result);
         return {
