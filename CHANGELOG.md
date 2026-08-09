@@ -9,6 +9,8 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added an internal asynchronous Codecks credential-provider boundary with the environment provider as the compatibility default. Credential/config resolution is lazy and shared only within each top-level tool operation; retries and multi-request operations do not re-resolve it.
+- Added deterministic credential characterization coverage for environment precedence, profile/base configuration, missing values, rejected references, provider fail-closed behavior, and per-operation request resolution.
 - Added a package-owned fixed Codecks read-only authentication/identity contract for trusted secret integrations. It validates only an account slug, posts the existing minimal logged-in-user query to the official Codecks API, and returns bounded redacted exit categories without exposing credentials or response bodies.
 
 ## [0.9.1] - 2026-08-05

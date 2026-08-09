@@ -26,6 +26,22 @@ type CodecksConfig = {
     baseUrl: string;
 };
 
+type CodecksCredentialRequest = Readonly<{
+    account: string;
+    profileKey?: string;
+    signal: AbortSignal;
+}>;
+
+type CodecksCredential = Readonly<{
+    token: string;
+    providerId: string;
+}>;
+
+interface CodecksCredentialProvider {
+    readonly id: string;
+    resolve(request: CodecksCredentialRequest): Promise<CodecksCredential>;
+}
+
 type CodecksUser = {
     id?: string | number;
     name?: string;
@@ -224,6 +240,7 @@ type OperationContext = {
     onBulkCreateProgress?: (progress: BulkCreateProgress) => void;
     requestsAttempted: number;
     queueWaitMs: number;
+    credentialConfigPromise?: Promise<CodecksConfig>;
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
@@ -425,34 +442,72 @@ const getBaseConfig = (): CodecksBaseConfig =>
     return { account, baseUrl, profileKey };
 };
 
-const getConfig = (): CodecksConfig =>
-{
-    const base = getBaseConfig();
-    const profileKey = base.profileKey;
-    const profileTokenOpRef = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN_OP_REF"), getProfileEnv(profileKey, "TOKEN_REF")) : undefined;
-    const profileTokenDirect = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN"), getProfileEnv(profileKey, "API_TOKEN")) : undefined;
-    const globalToken = firstNonEmpty(process.env.CODECKS_TOKEN, process.env.CODECKS_API_TOKEN);
-    if (profileTokenOpRef)
+const environmentCredentialProvider: CodecksCredentialProvider = {
+    id: "environment",
+    async resolve({ profileKey }): Promise<CodecksCredential>
     {
-        throwUnsupportedTokenRef(profileKey ?? "default");
-    }
-
-    const token = firstNonEmpty(profileTokenDirect, globalToken);
-
-    if (!token)
-    {
-        if (profileKey)
+        const profileTokenOpRef = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN_OP_REF"), getProfileEnv(profileKey, "TOKEN_REF")) : undefined;
+        const profileTokenDirect = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN"), getProfileEnv(profileKey, "API_TOKEN")) : undefined;
+        const globalToken = firstNonEmpty(process.env.CODECKS_TOKEN, process.env.CODECKS_API_TOKEN);
+        if (profileTokenOpRef)
         {
-            throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
+            throwUnsupportedTokenRef(profileKey ?? "default");
         }
-        throw new Error("Missing Codecks credentials. Set CODECKS_TOKEN (or CODECKS_API_TOKEN) and CODECKS_ACCOUNT (subdomain), or configure CODECKS_PROFILE.");
+
+        const token = firstNonEmpty(profileTokenDirect, globalToken);
+        if (!token)
+        {
+            if (profileKey)
+            {
+                throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
+            }
+            throw new Error("Missing Codecks credentials. Set CODECKS_TOKEN (or CODECKS_API_TOKEN) and CODECKS_ACCOUNT (subdomain), or configure CODECKS_PROFILE.");
+        }
+
+        return { token, providerId: "environment" };
+    },
+};
+
+const getCredentialProvider = (): CodecksCredentialProvider =>
+{
+    const selector = firstNonEmpty(process.env.CODECKS_CREDENTIAL_PROVIDER);
+    if (!selector || selector === "environment")
+    {
+        return environmentCredentialProvider;
     }
 
-    return {
+    if (selector === "external-helper")
+    {
+        throw new Error("Codecks credential provider 'external-helper' is unavailable in this version.");
+    }
+
+    throw new Error("Unsupported Codecks credential provider. Set CODECKS_CREDENTIAL_PROVIDER=environment or remove it.");
+};
+
+let testCredentialProvider: CodecksCredentialProvider | undefined;
+
+const resolveAuthenticatedConfig = async (): Promise<CodecksConfig> =>
+{
+    const provider = testCredentialProvider ?? getCredentialProvider();
+    const base = getBaseConfig();
+    const signal = getActiveAbortSignal() ?? new AbortController().signal;
+    const credential = await provider.resolve({
         account: base.account,
-        token,
-        baseUrl: base.baseUrl,
-    };
+        profileKey: base.profileKey,
+        signal,
+    });
+    return { account: base.account, baseUrl: base.baseUrl, token: credential.token };
+};
+
+const getAuthenticatedConfig = (): Promise<CodecksConfig> =>
+{
+    const context = getOperationContext();
+    if (!context)
+    {
+        return resolveAuthenticatedConfig();
+    }
+    context.credentialConfigPromise ??= resolveAuthenticatedConfig();
+    return context.credentialConfigPromise;
 };
 
 const DEFAULT_QUERY_CARD_FIELDS = ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"];
@@ -1833,6 +1888,14 @@ export const __test = {
     validateMutationText,
     snapshotAttachmentSource,
     assertUnchangedAttachmentSource,
+    getBaseConfig,
+    resolveEnvironmentCredential: (base: CodecksBaseConfig) => environmentCredentialProvider.resolve({
+        account: base.account,
+        profileKey: base.profileKey,
+        signal: new AbortController().signal,
+    }),
+    resolveAuthenticatedConfig,
+    setCredentialProviderForTests: (provider?: CodecksCredentialProvider) => { testCredentialProvider = provider; },
 };
 
 const normalizeUserId = (value: string): string => value.trim().toLowerCase();
@@ -2101,7 +2164,7 @@ const formatCardUrl = (shortCode?: string): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/card/${shortCode.replace("$", "")}`;
 };
 
@@ -2112,7 +2175,7 @@ const formatRunUrl = (accountSeq?: number): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/sprint/${accountSeq}`;
 };
 
@@ -2123,7 +2186,7 @@ const formatMilestoneUrl = (accountSeq?: number): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/milestones/${accountSeq}`;
 };
 
@@ -2236,7 +2299,7 @@ const detectContentType = (filePath: string, override?: string): string =>
 
 const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
     const queueWaitMs = await enforceRateLimit();
@@ -3431,7 +3494,7 @@ const requestJson = async (
 
 const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
@@ -3442,7 +3505,7 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 // than inheriting normal read retries.
 const runExactReadQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
@@ -3454,7 +3517,7 @@ const runDispatch = async (
     payload: Record<string, unknown>,
 ): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -9342,7 +9405,7 @@ export const velocity_observations_update = tool({
 
         try
         {
-            const config = getConfig();
+            const config = getBaseConfig();
             const path = await resolveWorkspacePath(getActiveWorkspaceRoot(), args.observationsPath, "output");
             let existing: ObservationCache | undefined;
             try { existing = validateObservationCache(JSON.parse(await fs.readFile(path, "utf8")), config.account); }

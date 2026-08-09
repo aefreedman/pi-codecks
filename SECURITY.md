@@ -10,7 +10,7 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 
 ## Credential and data handling
 
-`pi-codecks` expects credentials through environment variables supplied before Pi starts. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data.
+`pi-codecks` resolves credentials through its internal provider boundary. The current default and only available provider is `environment`, which reads environment variables supplied before Pi starts. This compatibility path is ambient within the Pi process: unrelated same-process extensions or subprocesses may inherit its token. It is not an isolation boundary. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data.
 
 - Use a dedicated non-production account and disposable fixture scope for live integration validation.
 - Keep live tests outside public pull-request CI.
@@ -18,7 +18,7 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 - Never paste raw Codecks responses into public reports; provide a minimal redacted shape instead.
 - If a credential may have been exposed, revoke or rotate it before sharing further details.
 
-The package rejects unresolved secret-reference placeholders. Resolve secrets through an explicit secret integration, then pass the resulting value through the supported environment variables.
+The environment provider rejects unresolved profile secret-reference placeholders. Resolve secrets before launch, then pass the resulting value through the supported environment variables. Unsupported credential-provider selections fail closed and never fall back to an ambient token.
 
 ## Supported versions
 
