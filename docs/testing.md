@@ -14,7 +14,7 @@ npm run pack:smoke
 npm run pack:dry-run
 ```
 
-`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment.
+`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment. This includes the fixed read-only authentication contract: its injected transport checks the literal official endpoint, POST identity-query shape, account-slug validation, exit categories, response bounds, and token redaction without opening a socket.
 
 `npm run pack:validate` checks the npm dry-run manifest against the public allow-list, verifies required Pi resources, rejects private/local paths, and scans packed text for high-confidence sensitive-content patterns.
 

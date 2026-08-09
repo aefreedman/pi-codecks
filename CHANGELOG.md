@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+### Added
+
+- Added a package-owned fixed Codecks read-only authentication/identity contract for trusted secret integrations. It validates only an account slug, posts the existing minimal logged-in-user query to the official Codecks API, and returns bounded redacted exit categories without exposing credentials or response bodies.
+
 ## [0.9.1] - 2026-08-05
 
 ### Fixed
