@@ -68,7 +68,15 @@ try {
   const installedReference = readFileSync(path.join(installedRoot, "references", "cg-changelog", "codecks-workflow.md"), "utf8");
   assert.match(installedReference, /codecks_card_list_done_within_timeframe/);
 
-  for (const excludedPath of ["tests", "scripts", ".github", "docs/plans", "todos"]) {
+  for (const excludedPath of [
+    "tests",
+    "scripts",
+    ".github",
+    "docs/plans",
+    "todos",
+    "src/codecks-readonly-auth-contract.ts",
+    "src/integrations/codecks-readonly-auth-client.mjs",
+  ]) {
     assert.equal(existsSync(path.join(installedRoot, excludedPath)), false, `did not expect installed package path: ${excludedPath}`);
   }
 

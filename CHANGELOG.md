@@ -10,6 +10,7 @@ and this project follows semantic versioning for public package releases.
 ### Fixed
 
 - Hardened external-helper execution against mixed-case inherited credential/reference variables, pre- and post-settlement stream errors, synchronous abort/kill/close races, and throwing or stalled injected termination paths. Termination remains best-effort; caller settlement is independent of child/taskkill completion.
+- Hardened the optional external-provider live-validation launcher after an unintended inherited-credential request during unreleased validation: it now requires exact `CODECKS_CREDENTIAL_PROVIDER=external-helper` and explicit `PI_CODECKS_ALLOW_LIVE_VALIDATION=1` before it can invoke a helper or fetch. Missing or wrong values fail with fixed invalid configuration and never select or fall back to ambient environment credentials.
 
 ### Added
 
@@ -18,7 +19,12 @@ and this project follows semantic versioning for public package releases.
 - Extended installed-tarball smoke coverage with an inert external helper that proves packed helper success, inherited credential sanitization, and fail-closed malformed output without network access.
 - Added an internal asynchronous Codecks credential-provider boundary with the environment provider as the compatibility default. Credential/config resolution is lazy and shared only within each top-level tool operation; retries and multi-request operations do not re-resolve it.
 - Added deterministic credential characterization coverage for environment precedence, profile/base configuration, missing values, rejected references, provider fail-closed behavior, and per-operation request resolution.
-- Added a package-owned fixed Codecks read-only authentication/identity contract for trusted secret integrations. It validates only an account slug, posts the existing minimal logged-in-user query to the official Codecks API, and returns bounded redacted exit categories without exposing credentials or response bodies.
+- Added a repository-only external-provider live-validation launcher that uses the normal provider-selected credential and exact-read identity path, accepts configuration only from the environment, emits one redacted fixed-category JSON status line, and exits successfully only when authenticated. Deterministic injected-fetch coverage proves this path without network access.
+- Added migration, security-boundary, and manager-neutral adapter guidance for the default ambient environment provider and explicit fail-closed external-helper provider.
+
+### Removed
+
+- Removed the unreleased fixed read-only authentication child and its package export in favor of the normal provider-selected exact-read validation path.
 
 ## [0.9.1] - 2026-08-05
 

@@ -14,13 +14,19 @@ npm run pack:smoke
 npm run pack:dry-run
 ```
 
-`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment. This includes the fixed read-only authentication contract: its injected transport checks the literal official endpoint, POST identity-query shape, account-slug validation, exit categories, response bounds, and token redaction without opening a socket.
+`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment. The repository-only external-provider launcher has an injected-fetch test that verifies the normal credential-provider selection and one fixed exact-read identity query without opening a socket.
 
 `npm run pack:validate` checks the npm dry-run manifest against the public allow-list, verifies required Pi resources, rejects private/local paths, and scans packed text for high-confidence sensitive-content patterns.
 
 `npm run pack:smoke` creates a tarball in an operating-system temporary directory, removes Codecks variables from the child environment, installs the tarball into a neutral temporary project in offline mode, and verifies the source entrypoint, skills, prompt assets, and direct Codecks tool registration. The temporary files are removed afterward.
 
 Public GitHub Actions run only these safe checks. Forked pull requests never receive Codecks secrets.
+
+## Optional external-provider live validation
+
+`npm run validate:external-provider-live` is a repository-only launcher for optional, separately authorized maintainer work or a trusted adapter wrapper. It is not normal package validation or public-CI work. It reads configuration only from the process environment and makes one fixed authenticated exact-read identity query only when **both** `CODECKS_CREDENTIAL_PROVIDER=external-helper` and the non-secret acknowledgement `PI_CODECKS_ALLOW_LIVE_VALIDATION=1` match exactly. Any missing or different value returns the fixed `invalid_configuration` category before it invokes a helper or fetch; the launcher never selects or falls back to the ambient `environment` provider, even if Codecks tokens exist. It accepts no request, model, or command-line configuration surface. Its only stdout is one redacted JSON line with fixed `status`, `category`, and `durationMs`; it never prints caught errors, stacks, account/profile/helper paths, tokens, references, API bodies, or vendor diagnostics. It exits `0` only for `authenticated`.
+
+Do not run it from public CI or with production credentials. Configure an absolute trusted helper path as described in the [external helper protocol](external-credential-helper-protocol.md); deterministic tests use only injected fake fetch and helper implementations, never a live request.
 
 ## Explicit live integration validation
 

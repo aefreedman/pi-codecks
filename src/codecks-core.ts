@@ -27,6 +27,19 @@ type CodecksConfig = {
     baseUrl: string;
 };
 
+type CodecksFetch = typeof fetch;
+
+export type CodecksExternalProviderCheckCategory =
+    | "authenticated"
+    | "authentication_rejected"
+    | "invalid_configuration"
+    | "malformed_response"
+    | "unavailable";
+
+export type CodecksExternalProviderCheckResult = Readonly<{
+    category: CodecksExternalProviderCheckCategory;
+}>;
+
 type CodecksCredentialRequest = Readonly<{
     account: string;
     profileKey?: string;
@@ -3359,6 +3372,7 @@ const requestJson = async (
     init: RequestInit,
     config: CodecksConfig,
     retryPolicy: CodecksRequestRetryPolicy,
+    fetchImplementation: CodecksFetch = fetch,
 ): Promise<unknown> =>
 {
     const externalSignal = getActiveAbortSignal();
@@ -3398,7 +3412,7 @@ const requestJson = async (
         let response: Response;
         try
         {
-            response = await fetch(`${config.baseUrl}${path}`, {
+            response = await fetchImplementation(`${config.baseUrl}${path}`, {
                 ...init,
                 headers: {
                     "Content-Type": "application/json",
@@ -3512,13 +3526,16 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 
 // Identity verification is diagnostic, so it must make one physical request rather
 // than inheriting normal read retries.
-const runExactReadQuery = async (query: Record<string, unknown>): Promise<unknown> =>
+const runExactReadQuery = async (
+    query: Record<string, unknown>,
+    fetchImplementation: CodecksFetch = fetch,
+): Promise<unknown> =>
 {
     const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
-    }, config, "exact-read");
+    }, config, "exact-read", fetchImplementation);
 };
 
 const runDispatch = async (
@@ -3654,29 +3671,60 @@ const handCardFields = [
     { user: ["id", "name", "fullName"] },
 ];
 
-const fetchLoggedInUser = async (): Promise<CodecksUser> =>
-{
-    const query = {
-        _root: [
-            {
-                loggedInUser: ["id", "name", "fullName"],
-            },
-        ],
-    };
+const LOGGED_IN_USER_IDENTITY_QUERY = Object.freeze({
+    _root: [
+        {
+            loggedInUser: ["id", "name", "fullName"],
+        },
+    ],
+});
 
-    const payload = await runQuery(query);
+const getLoggedInUserFromPayload = (payload: unknown): CodecksUser | undefined =>
+{
     const data = unwrapData(payload) as Record<string, unknown> | undefined;
     const root = getRoot(payload);
     const userMap = getEntityMap(data, "user");
     const resolved = resolveFromMap(root?.loggedInUser, userMap);
-    const user = normalizeEntity((resolved ?? root?.loggedInUser) as CodecksUser | CodecksUser[] | undefined);
+    return normalizeEntity((resolved ?? root?.loggedInUser) as CodecksUser | CodecksUser[] | undefined);
+};
 
+const fetchLoggedInUser = async (): Promise<CodecksUser> =>
+{
+    const user = getLoggedInUserFromPayload(await runQuery(LOGGED_IN_USER_IDENTITY_QUERY));
     if (!user?.id)
     {
         throw new Error("Unable to resolve logged-in user from Codecks.");
     }
-
     return user;
+};
+
+/**
+ * Repository-only live validation uses this fixed identity read to exercise the
+ * production credential-provider and exact-read paths. `fetchImplementation`
+ * is injectable only for deterministic no-network tests.
+ */
+export const runExternalProviderIdentityCheck = async (
+    fetchImplementation: CodecksFetch = fetch,
+): Promise<CodecksExternalProviderCheckResult> =>
+{
+    try
+    {
+        const user = getLoggedInUserFromPayload(await runExactReadQuery(LOGGED_IN_USER_IDENTITY_QUERY, fetchImplementation));
+        return { category: user?.id ? "authenticated" : "malformed_response" };
+    }
+    catch (error)
+    {
+        const message = toErrorMessage(error);
+        if (/Codecks API error (?:401|403)\b/.test(message))
+        {
+            return { category: "authentication_rejected" };
+        }
+        if (/^(?:Missing Codecks|Invalid CODECKS_PROFILE|Unsupported Codecks credential provider|External Codecks credential helper configuration is invalid\.)/.test(message))
+        {
+            return { category: "invalid_configuration" };
+        }
+        return { category: "unavailable" };
+    }
 };
 
 type LookupResult =

@@ -25,6 +25,10 @@ const requiredFiles = [
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);
 const allowedPrefixes = ["docs/", "prompts/", "references/", "skills/", "src/"];
+const retiredPackageFiles = [
+  "src/codecks-readonly-auth-contract.ts",
+  "src/integrations/codecks-readonly-auth-client.mjs",
+];
 const forbiddenPathPatterns = [
   { label: "test source", pattern: /^tests\// },
   { label: "packaging script", pattern: /^scripts\// },
@@ -53,6 +57,10 @@ for (const required of requiredFiles) {
   if (!files.includes(required)) {
     errors.push(`missing required package file: ${required}`);
   }
+}
+
+for (const retired of retiredPackageFiles) {
+  if (files.includes(retired)) errors.push(`retired package file must not be packed: ${retired}`);
 }
 
 for (const file of files) {

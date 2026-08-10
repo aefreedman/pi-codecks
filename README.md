@@ -118,41 +118,42 @@ pi install -l <path-to-pi-codecks>
 
 ## Configuration
 
-Provide credentials through environment variables before launching Pi:
+The default compatibility provider reads credentials from the environment before Pi starts:
 
 ```bash
 export CODECKS_ACCOUNT=<your-codecks-subdomain>
 export CODECKS_TOKEN=<your-codecks-api-token>
 ```
 
-Alternative variable names are also supported:
+`CODECKS_SUBDOMAIN`, `CODECKS_API_TOKEN`, and `CODECKS_API_BASE` remain supported. Profiles use `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*`; profile account and API-base values take precedence over global values, and profile direct token values take precedence when the `environment` provider is active. `environment` is selected when `CODECKS_CREDENTIAL_PROVIDER` is absent (or can be selected explicitly with `CODECKS_CREDENTIAL_PROVIDER=environment`), so existing environment-only setups need no migration.
 
-- `CODECKS_SUBDOMAIN`
-- `CODECKS_API_TOKEN`
-- `CODECKS_API_BASE`
-
-Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. Profile `TOKEN`/`API_TOKEN` values take precedence over global `CODECKS_TOKEN`/`CODECKS_API_TOKEN`; profile account and API-base values likewise take precedence over global values. The environment credential provider is the default (and may be selected explicitly with `CODECKS_CREDENTIAL_PROVIDER=environment`). It intentionally reads tokens from Pi's ambient process environment, so unrelated same-process extensions or subprocesses may inherit them.
-
-`pi-codecks` does not resolve secret-reference placeholders. Profile secret-reference variables are rejected; resolve a secret into a supported token environment variable before launching Pi.
+This compatibility path intentionally leaves its token ambient in the Pi process: unrelated same-process extensions or subprocesses may inherit it. It is not an isolation boundary. `pi-codecks` does not interpret credential-manager reference syntax; resolve a secret before launch into a supported environment token, or use an external helper.
 
 ### External credential helper
 
-For a trusted local credential-manager adapter, explicitly select the helper provider before launching Pi:
+To narrow accidental ambient Codecks-token inheritance, explicitly select a trusted local adapter before launching Pi:
 
 ```bash
 export CODECKS_CREDENTIAL_PROVIDER=external-helper
 export CODECKS_CREDENTIAL_HELPER_MODULE=/absolute/path/to/codecks-helper.mjs
 ```
 
-The module path must be an existing absolute `.js` or `.mjs` file. The package invokes it with the current Node executable, no shell, and no caller/model-selected arguments. It sends bounded non-secret Codecks account/profile metadata over stdin and accepts one bounded version-1 JSON credential response on stdout. The helper provider is authoritative: invalid configuration, launch failure, malformed/extra output, nonzero exit, timeout, or cancellation fails closed and never falls back to ambient `CODECKS_TOKEN`, profile tokens, or another provider. It case-insensitively removes direct/global/profile Codecks token/reference variables and provider/profile/helper selectors from the helper environment; helper stderr is bounded and discarded, never returned in tool output or errors. Cancellation/timeouts make a best-effort termination attempt, while the caller settles without waiting for a child-process or taskkill completion. See [the adapter-author protocol](docs/external-credential-helper-protocol.md) for the exact exchange and environment-sanitization requirements.
+The module path must be an existing **absolute** `.js` or `.mjs` file. `pi-codecks` starts it with the current Node executable, no shell, and no caller- or model-selected arguments. The helper receives bounded non-secret account/profile metadata on stdin and returns one bounded version-1 credential response on stdout. A selected helper is authoritative: invalid configuration, launch failure, malformed or extra output, nonzero exit, timeout, or cancellation fails closed. It never falls back to ambient tokens, profile tokens, or another provider.
 
-The helper path and any manager-specific configuration are trusted launcher/user configuration, not model-facing tool input or an OS isolation boundary. There is no adapter auto-discovery, cross-operation credential cache, refresh/lease protocol, or automatic 401 retry.
+Migrate without changing Codecks tools: leave account/profile/API-base configuration in place, put manager-specific authentication and references in the adapter's trusted launcher/user configuration, then set the two selector variables above. There is no adapter auto-discovery; adapters publish a stable package-relative helper path, while the launcher resolves it to an absolute path. See the public [adapter-author protocol](docs/external-credential-helper-protocol.md) for the exchange, environment sanitization, and manager-neutral setup requirements.
 
-### Trusted read-only authentication contract
+The helper path and manager-specific settings are trusted launcher/user configuration, never model-facing tool input. The helper environment removes Codecks credential/reference and provider-selector variables case-insensitively; stderr is bounded and discarded. This reduces accidental inheritance but does not isolate trusted extensions or same-user processes. `pi-codecks` has no credential-manager dependency and does not provide a secret broker, helper discovery, cross-operation credential cache, refresh/lease protocol, automatic 401 retry, or a model-facing credential operation. Review [Security](SECURITY.md) before configuring live credentials.
 
-For the separately configured read-only authentication integration, `pi-codecks` owns one narrow child-process contract: `src/integrations/codecks-readonly-auth-client.mjs`. `resolveCodecksReadonlyAuthClientExecutable()` resolves that child from this package's `import.meta.url`. The child accepts no operational arguments and reads only `PI_CODECKS_READONLY_AUTH_ACCOUNT` plus the injected `PI_CODECKS_READONLY_AUTH_TOKEN`. The account must be a Codecks subdomain slug; it is sent only as `X-Account`. The client always sends the existing minimal logged-in-user query as `POST https://api.codecks.io/`, never honors `CODECKS_API_BASE`, and never performs a dispatch or other operation.
+### Optional live validation launcher
 
-Its only public outcomes are fixed exit codes: `0` authenticated, `10` authentication rejected, `11` malformed response, `12` response too large, `13` invalid configuration, and `14` unavailable. It emits no token, account, URL, headers, or response body. The script is for trusted integration code rather than a Pi tool or general HTTP/Bearer-token client; its request destination, method, credential environment names, query, and operation are fixed. Until these separately installed unreleased packages share a released runtime export, the trusted user-level launcher configuration selecting the absolute child path remains the identity boundary; `pi-onepassword` cannot prove that path is this package's child. Account-backed validation remains separately authorized and optional.
+`npm run validate:external-provider-live` is optional, separately authorized live work for a maintainer or trusted adapter wrapper; it is not part of normal package use or public CI. Before it can invoke the helper or make its one fixed identity request, the process must set **both** exact values:
+
+```bash
+export CODECKS_CREDENTIAL_PROVIDER=external-helper
+export PI_CODECKS_ALLOW_LIVE_VALIDATION=1
+```
+
+Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
 
 ## Card Retrieval Tools
 
