@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { resolveExternalHelperCredential } from "./codecks-external-helper";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, relative, resolve } from "path";
@@ -478,7 +479,14 @@ const getCredentialProvider = (): CodecksCredentialProvider =>
 
     if (selector === "external-helper")
     {
-        throw new Error("Codecks credential provider 'external-helper' is unavailable in this version.");
+        return {
+            id: "external-helper",
+            async resolve(request): Promise<CodecksCredential>
+            {
+                const credential = await resolveExternalHelperCredential(request);
+                return { token: credential.token, providerId: credential.providerId };
+            },
+        };
     }
 
     throw new Error("Unsupported Codecks credential provider. Set CODECKS_CREDENTIAL_PROVIDER=environment or remove it.");
@@ -1895,6 +1903,7 @@ export const __test = {
         signal: new AbortController().signal,
     }),
     resolveAuthenticatedConfig,
+    resolveExternalHelperCredential,
     setCredentialProviderForTests: (provider?: CodecksCredentialProvider) => { testCredentialProvider = provider; },
 };
 

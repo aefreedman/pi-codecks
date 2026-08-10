@@ -133,7 +133,20 @@ Alternative variable names are also supported:
 
 Profiles may be configured with `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*` variables. Profile `TOKEN`/`API_TOKEN` values take precedence over global `CODECKS_TOKEN`/`CODECKS_API_TOKEN`; profile account and API-base values likewise take precedence over global values. The environment credential provider is the default (and may be selected explicitly with `CODECKS_CREDENTIAL_PROVIDER=environment`). It intentionally reads tokens from Pi's ambient process environment, so unrelated same-process extensions or subprocesses may inherit them.
 
-`pi-codecks` does not resolve secret-reference placeholders. Profile secret-reference variables are rejected; resolve a secret into a supported token environment variable before launching Pi. Other provider selections fail closed in this release and do not fall back to environment credentials.
+`pi-codecks` does not resolve secret-reference placeholders. Profile secret-reference variables are rejected; resolve a secret into a supported token environment variable before launching Pi.
+
+### External credential helper
+
+For a trusted local credential-manager adapter, explicitly select the helper provider before launching Pi:
+
+```bash
+export CODECKS_CREDENTIAL_PROVIDER=external-helper
+export CODECKS_CREDENTIAL_HELPER_MODULE=/absolute/path/to/codecks-helper.mjs
+```
+
+The module path must be an existing absolute `.js` or `.mjs` file. The package invokes it with the current Node executable, no shell, and no caller/model-selected arguments. It sends bounded non-secret Codecks account/profile metadata over stdin and accepts one bounded version-1 JSON credential response on stdout. The helper provider is authoritative: invalid configuration, launch failure, malformed/extra output, nonzero exit, timeout, or cancellation fails closed and never falls back to ambient `CODECKS_TOKEN`, profile tokens, or another provider. It case-insensitively removes direct/global/profile Codecks token/reference variables and provider/profile/helper selectors from the helper environment; helper stderr is bounded and discarded, never returned in tool output or errors. Cancellation/timeouts make a best-effort termination attempt, while the caller settles without waiting for a child-process or taskkill completion. See [the adapter-author protocol](docs/external-credential-helper-protocol.md) for the exact exchange and environment-sanitization requirements.
+
+The helper path and any manager-specific configuration are trusted launcher/user configuration, not model-facing tool input or an OS isolation boundary. There is no adapter auto-discovery, cross-operation credential cache, refresh/lease protocol, or automatic 401 retry.
 
 ### Trusted read-only authentication contract
 

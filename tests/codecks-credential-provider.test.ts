@@ -78,7 +78,7 @@ try {
   process.env.CODECKS_CREDENTIAL_PROVIDER = "environment";
   assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), { account: "selector-account", baseUrl: "https://api.codecks.io", token: "selector-token" });
   process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
-  await assert.rejects(core.__test.resolveAuthenticatedConfig(), /Codecks credential provider 'external-helper' is unavailable in this version\./);
+  await assert.rejects(core.__test.resolveAuthenticatedConfig(), /External Codecks credential helper configuration is invalid\./);
   process.env.CODECKS_CREDENTIAL_PROVIDER = "unknown-provider";
   await assert.rejects(core.__test.resolveAuthenticatedConfig(), /Unsupported Codecks credential provider\. Set CODECKS_CREDENTIAL_PROVIDER=environment or remove it\./);
 

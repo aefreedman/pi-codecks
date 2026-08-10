@@ -7,8 +7,15 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+### Fixed
+
+- Hardened external-helper execution against mixed-case inherited credential/reference variables, pre- and post-settlement stream errors, synchronous abort/kill/close races, and throwing or stalled injected termination paths. Termination remains best-effort; caller settlement is independent of child/taskkill completion.
+
 ### Added
 
+- Added an explicit provider-neutral `external-helper` credential provider. It runs a trusted absolute `.js`/`.mjs` Node helper without a shell, exchanges one bounded version-1 stdin/stdout JSON message, sanitizes inherited Codecks credential variables, bounds timeout/output, makes bounded best-effort termination attempts on cancellation, and fails closed without environment fallback.
+- Added deterministic fake-helper coverage and public adapter-author protocol documentation for helper request/response validation, output/error redaction, cancellation, timeout, and adversarial child-process behavior.
+- Extended installed-tarball smoke coverage with an inert external helper that proves packed helper success, inherited credential sanitization, and fail-closed malformed output without network access.
 - Added an internal asynchronous Codecks credential-provider boundary with the environment provider as the compatibility default. Credential/config resolution is lazy and shared only within each top-level tool operation; retries and multi-request operations do not re-resolve it.
 - Added deterministic credential characterization coverage for environment precedence, profile/base configuration, missing values, rejected references, provider fail-closed behavior, and per-operation request resolution.
 - Added a package-owned fixed Codecks read-only authentication/identity contract for trusted secret integrations. It validates only an account slug, posts the existing minimal logged-in-user query to the official Codecks API, and returns bounded redacted exit categories without exposing credentials or response bodies.

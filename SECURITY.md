@@ -10,7 +10,7 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 
 ## Credential and data handling
 
-`pi-codecks` resolves credentials through its internal provider boundary. The current default and only available provider is `environment`, which reads environment variables supplied before Pi starts. This compatibility path is ambient within the Pi process: unrelated same-process extensions or subprocesses may inherit its token. It is not an isolation boundary. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data.
+`pi-codecks` resolves credentials through its internal provider boundary. The default `environment` provider reads environment variables supplied before Pi starts. This compatibility path is ambient within the Pi process: unrelated same-process extensions or subprocesses may inherit its token. It is not an isolation boundary. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data.
 
 - Use a dedicated non-production account and disposable fixture scope for live integration validation.
 - Keep live tests outside public pull-request CI.
@@ -18,7 +18,9 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 - Never paste raw Codecks responses into public reports; provide a minimal redacted shape instead.
 - If a credential may have been exposed, revoke or rotate it before sharing further details.
 
-The environment provider rejects unresolved profile secret-reference placeholders. Resolve secrets before launch, then pass the resulting value through the supported environment variables. Unsupported credential-provider selections fail closed and never fall back to an ambient token.
+The environment provider rejects unresolved profile secret-reference placeholders. Resolve secrets before launch, then pass the resulting value through the supported environment variables.
+
+Users may explicitly select `CODECKS_CREDENTIAL_PROVIDER=external-helper` with an absolute trusted `.js`/`.mjs` `CODECKS_CREDENTIAL_HELPER_MODULE`. The package runs that module through the current Node executable without a shell or caller/model-selected arguments; its bounded versioned stdin/stdout exchange is documented in [the external helper protocol](docs/external-credential-helper-protocol.md). Global/profile Codecks direct-token and secret-reference variables plus profile/provider/helper selectors are removed case-insensitively from the helper's inherited environment. Helper stdout/stderr, paths, manager references, and credentials are never included in public errors or tool results. A selected helper is authoritative: invalid configuration, malformed output, nonzero exit, timeout, cancellation, or launch failure fails closed and never falls back to an ambient token. This reduces accidental Codecks-token inheritance; it does not isolate trusted extensions or same-user processes.
 
 ## Supported versions
 

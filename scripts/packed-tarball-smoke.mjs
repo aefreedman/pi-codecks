@@ -53,6 +53,8 @@ try {
   for (const relativePath of [
     "index.ts",
     "src/codecks-core.ts",
+    "src/codecks-external-helper.ts",
+    "docs/external-credential-helper-protocol.md",
     "skills/using-codecks/SKILL.md",
     "skills/codecks-velocity-reporting/SKILL.md",
     "prompts/codecks-inbox.md",
@@ -100,7 +102,50 @@ console.log("isolated packed extension loaded");
   assert.equal(standaloneResult.status, 0, `standalone packed extension load failed:\n${standaloneResult.stdout}\n${standaloneResult.stderr}`);
   assert.match(standaloneResult.stdout, /isolated packed extension loaded/);
 
-  console.log("Packed tarball smoke test passed in a credential-free temporary project.");
+  const helperPath = path.join(consumerDir, "inert-packed-helper.mjs");
+  const malformedHelperPath = path.join(consumerDir, "inert-malformed-helper.mjs");
+  writeFileSync(helperPath, `
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const prohibited = Object.keys(process.env).some((key) => {
+    const normalized = key.toUpperCase();
+    return /^CODECKS_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
+      || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
+      || ["CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE"].includes(normalized);
+  });
+  process.stdout.write(prohibited ? "not-json" : JSON.stringify({ version: 1, credential: "packed-inert-helper-token" }));
+});
+`);
+  writeFileSync(malformedHelperPath, `process.stdin.resume(); process.stdin.on("end", () => process.stdout.write("not-json"));\n`);
+  const helperSmokePath = path.join(consumerDir, "external-helper-smoke.mjs");
+  writeFileSync(helperSmokePath, `
+import assert from "node:assert/strict";
+import * as core from "./node_modules/@aefree/pi-codecks/src/codecks-core.ts";
+
+process.env.CODECKS_ACCOUNT = "packed-helper-account";
+process.env.CODECKS_TOKEN = "ambient-token-that-must-not-reach-helper";
+process.env.CODECKS_PROFILE = "packed-profile";
+process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
+process.env.CODECKS_CREDENTIAL_HELPER_MODULE = ${JSON.stringify(helperPath)};
+assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), {
+  account: "packed-helper-account", baseUrl: "https://api.codecks.io", token: "packed-inert-helper-token",
+});
+process.env.CODECKS_CREDENTIAL_HELPER_MODULE = ${JSON.stringify(malformedHelperPath)};
+await assert.rejects(core.__test.resolveAuthenticatedConfig(), {
+  message: "External Codecks credential helper returned an invalid response.",
+});
+console.log("installed external helper succeeds and fails closed");
+`);
+  const helperResult = spawnSync(process.execPath, ["--import", tsxLoader, helperSmokePath], {
+    cwd: consumerDir,
+    env: cleanEnv,
+    encoding: "utf8",
+  });
+  assert.equal(helperResult.status, 0, `installed external-helper smoke failed:\n${helperResult.stdout}\n${helperResult.stderr}`);
+  assert.match(helperResult.stdout, /installed external helper succeeds and fails closed/);
+
+  console.log("Packed tarball smoke test passed in a credential-free temporary project with inert external-helper coverage.");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

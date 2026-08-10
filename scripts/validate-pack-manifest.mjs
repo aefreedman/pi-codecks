@@ -7,6 +7,7 @@ const requiredFiles = [
   "CHANGELOG.md",
   "LICENSE",
   "README.md",
+  "docs/external-credential-helper-protocol.md",
   "docs/resolvable-inbox-heuristics.md",
   "docs/release.md",
   "docs/testing.md",
@@ -17,6 +18,7 @@ const requiredFiles = [
   "skills/codecks-velocity-reporting/SKILL.md",
   "skills/using-codecks/SKILL.md",
   "src/codecks-core.ts",
+  "src/codecks-external-helper.ts",
   "src/pi-tool-compat.ts",
   "src/velocity-report.ts",
 ];
