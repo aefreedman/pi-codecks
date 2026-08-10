@@ -153,7 +153,7 @@ export CODECKS_CREDENTIAL_PROVIDER=external-helper
 export PI_CODECKS_ALLOW_LIVE_VALIDATION=1
 ```
 
-Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
+Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher emits only fixed `status`, `category`, and `durationMs` JSON fields; `durationMs` is clamped to `0..60000`. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
 
 ## Card Retrieval Tools
 

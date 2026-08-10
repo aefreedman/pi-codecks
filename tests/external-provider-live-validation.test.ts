@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runExternalProviderLiveValidation } from "../scripts/validate-external-provider-live.ts";
+import {
+  MAX_EXTERNAL_PROVIDER_LIVE_VALIDATION_DURATION_MS,
+  runExternalProviderLiveValidation,
+} from "../scripts/validate-external-provider-live.ts";
 
 const originalEnvironment = new Map(
   Object.entries(process.env).filter(([key]) => /^(?:CODECKS|PI_CODECKS)_/i.test(key)),
@@ -41,11 +44,19 @@ const assertFailsClosedBeforeHelperOrFetch = async (configuration: {
       throw new Error("fetch must not be called without explicit live authorization");
     }) as typeof fetch,
     write: (line) => lines.push(line),
+    now: (() => {
+      let calls = 0;
+      return () => calls++ === 0 ? 1 : 60_002;
+    })(),
   });
 
   assert.equal(fetchCalls, 0, "unauthorized launcher configuration must not invoke fetch");
   assert.equal(existsSync(helperCounterPath), false, "unauthorized launcher configuration must not invoke the helper");
-  assert.deepEqual(result, { status: "not_authenticated", category: "invalid_configuration", durationMs: result.durationMs });
+  assert.deepEqual(result, {
+    status: "not_authenticated",
+    category: "invalid_configuration",
+    durationMs: MAX_EXTERNAL_PROVIDER_LIVE_VALIDATION_DURATION_MS,
+  });
   assert.equal(lines.length, 1);
   assert.deepEqual(JSON.parse(lines[0]), result);
 };

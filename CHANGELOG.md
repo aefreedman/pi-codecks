@@ -9,6 +9,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Bounded the optional external-provider live-validation launcher's public `durationMs` diagnostic to `0..60000` while retaining its fixed redacted result contract.
 - Hardened external-helper execution against mixed-case inherited credential/reference variables, pre- and post-settlement stream errors, synchronous abort/kill/close races, and throwing or stalled injected termination paths. Termination remains best-effort; caller settlement is independent of child/taskkill completion.
 - Hardened the optional external-provider live-validation launcher after an unintended inherited-credential request during unreleased validation: it now requires exact `CODECKS_CREDENTIAL_PROVIDER=external-helper` and explicit `PI_CODECKS_ALLOW_LIVE_VALIDATION=1` before it can invoke a helper or fetch. Missing or wrong values fail with fixed invalid configuration and never select or fall back to ambient environment credentials.
 

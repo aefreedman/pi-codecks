@@ -15,7 +15,11 @@ type LiveValidationOptions = Readonly<{
     /** Injectable only for deterministic no-network tests; CLI configuration is process.env only. */
     fetchImplementation?: typeof fetch;
     write?: (line: string) => void;
+    now?: () => number;
 }>;
+
+/** Keeps public timing diagnostics useful without exposing unbounded runtime detail. */
+export const MAX_EXTERNAL_PROVIDER_LIVE_VALIDATION_DURATION_MS = 60_000;
 
 const hasExplicitLiveAuthorization = (): boolean =>
     process.env.CODECKS_CREDENTIAL_PROVIDER === "external-helper"
@@ -31,7 +35,8 @@ export const runExternalProviderLiveValidation = async (
     options: LiveValidationOptions = {},
 ): Promise<LiveValidationOutput> =>
 {
-    const startedAt = Date.now();
+    const now = options.now ?? Date.now;
+    const startedAt = now();
     let result: CodecksExternalProviderCheckResult = { category: "invalid_configuration" };
     if (hasExplicitLiveAuthorization())
     {
@@ -49,7 +54,10 @@ export const runExternalProviderLiveValidation = async (
     const output: LiveValidationOutput = {
         status: result.category === "authenticated" ? "authenticated" : "not_authenticated",
         category: result.category,
-        durationMs: Math.max(0, Date.now() - startedAt),
+        durationMs: Math.min(
+            MAX_EXTERNAL_PROVIDER_LIVE_VALIDATION_DURATION_MS,
+            Math.max(0, now() - startedAt),
+        ),
     };
     (options.write ?? ((line) => process.stdout.write(line)))(`${JSON.stringify(output)}\n`);
     return output;
