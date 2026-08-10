@@ -153,7 +153,7 @@ export CODECKS_CREDENTIAL_PROVIDER=external-helper
 export PI_CODECKS_ALLOW_LIVE_VALIDATION=1
 ```
 
-Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher emits only fixed `status`, `category`, and `durationMs` JSON fields; `durationMs` is clamped to `0..60000`. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
+Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher emits only fixed `status`, `category`, and `durationMs` JSON fields; `durationMs` is clamped to `0..60000`. HTTP `401`/`403` and a structurally valid `_root.loggedInUser` explicitly returned as `null` or the literal empty string map to `authentication_rejected`; missing or incompatible response structure, whitespace-only strings, and other nonempty identities that cannot resolve to an ID map to `malformed_response`. A missing `loggedInUser` property remains malformed conservatively, because it can indicate an incompatible or truncated response rather than the API's explicit unauthenticated convention. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
 
 ## Card Retrieval Tools
 

@@ -7,6 +7,7 @@ import {
   MAX_EXTERNAL_PROVIDER_LIVE_VALIDATION_DURATION_MS,
   runExternalProviderLiveValidation,
 } from "../scripts/validate-external-provider-live.ts";
+import { runExternalProviderIdentityCheck } from "../src/codecks-core.ts";
 
 const originalEnvironment = new Map(
   Object.entries(process.env).filter(([key]) => /^(?:CODECKS|PI_CODECKS)_/i.test(key)),
@@ -71,6 +72,39 @@ try {
   configureAmbientCredentialFixture();
   process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
   process.env.PI_CODECKS_ALLOW_LIVE_VALIDATION = "1";
+
+  const checkIdentityPayload = async (payload: unknown): Promise<string> => {
+    const result = await runExternalProviderIdentityCheck((async () => new Response(JSON.stringify(payload), { status: 200 })) as typeof fetch);
+    return result.category;
+  };
+
+  // The exact identity response accepts both Codecks forms: a direct user
+  // object and a scalar relation resolved through the top-level user map.
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: { id: "direct-user" } } } }), "authenticated");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: "mapped-user" }, user: { "mapped-user": { id: "mapped-user" } } } }), "authenticated");
+
+  // Only null or the literal empty string are the Codecks unauthenticated
+  // convention. A missing field remains malformed: JSON cannot represent
+  // undefined, and treating a dropped/incompatible field as auth rejection
+  // would hide a response-shape regression.
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: null } } }), "authentication_rejected");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: "" } } }), "authentication_rejected");
+  assert.equal(await checkIdentityPayload({ data: { _root: {} } }), "malformed_response");
+
+  // Nonempty unresolved values, including whitespace-only strings, plus
+  // malformed relation shapes must not be misreported as credential rejection.
+  assert.equal(await checkIdentityPayload({ data: {} }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: [] } }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: "   " } } }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: "unresolved-user" }, user: {} } }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: {} } } }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: { name: "Missing id" } } } }), "malformed_response");
+  assert.equal(await checkIdentityPayload({ data: { _root: { loggedInUser: ["wrong-shape"] } } }), "malformed_response");
+
+  for (const status of [401, 403]) {
+    const rejected = await runExternalProviderIdentityCheck((async () => new Response("vendor body and inert-helper-token", { status, statusText: "Rejected" })) as typeof fetch);
+    assert.deepEqual(rejected, { category: "authentication_rejected" });
+  }
 
   const lines: string[] = [];
   let calls = 0;

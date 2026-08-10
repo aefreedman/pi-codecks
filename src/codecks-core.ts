@@ -3688,6 +3688,39 @@ const getLoggedInUserFromPayload = (payload: unknown): CodecksUser | undefined =
     return normalizeEntity((resolved ?? root?.loggedInUser) as CodecksUser | CodecksUser[] | undefined);
 };
 
+const isExplicitlyEmptyIdentity = (value: unknown): boolean =>
+    value === null || value === undefined || value === "";
+
+/**
+ * The exact identity query convention makes an explicitly present `null`,
+ * `undefined`, or literal empty-string `loggedInUser` relation an
+ * authentication rejection. A missing relation is deliberately not treated the
+ * same way: it could indicate an incompatible or truncated response, so it
+ * remains malformed rather than masking that fault.
+ */
+const classifyExternalProviderIdentityPayload = (payload: unknown): CodecksExternalProviderCheckCategory =>
+{
+    const data = unwrapData(payload);
+    if (!isRecord(data) || !isRecord(data._root))
+    {
+        return "malformed_response";
+    }
+
+    const root = data._root;
+    if (!Object.prototype.hasOwnProperty.call(root, "loggedInUser"))
+    {
+        return "malformed_response";
+    }
+
+    if (isExplicitlyEmptyIdentity(root.loggedInUser))
+    {
+        return "authentication_rejected";
+    }
+
+    const user = getLoggedInUserFromPayload(payload);
+    return user?.id ? "authenticated" : "malformed_response";
+};
+
 const fetchLoggedInUser = async (): Promise<CodecksUser> =>
 {
     const user = getLoggedInUserFromPayload(await runQuery(LOGGED_IN_USER_IDENTITY_QUERY));
@@ -3709,8 +3742,7 @@ export const runExternalProviderIdentityCheck = async (
 {
     try
     {
-        const user = getLoggedInUserFromPayload(await runExactReadQuery(LOGGED_IN_USER_IDENTITY_QUERY, fetchImplementation));
-        return { category: user?.id ? "authenticated" : "malformed_response" };
+        return { category: classifyExternalProviderIdentityPayload(await runExactReadQuery(LOGGED_IN_USER_IDENTITY_QUERY, fetchImplementation)) };
     }
     catch (error)
     {
