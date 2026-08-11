@@ -7594,10 +7594,8 @@ export const card_create = tool({
         const dispatchIdentity = extractDispatchCardIdentity(response);
         const createdId = dispatchIdentity.cardId ?? "";
         const createdSeq = dispatchIdentity.accountSeq ?? undefined;
-        const createdCardType = resolveCardType(
-            (createdCard as CodecksEntity | undefined)
-            ?? (normalizedCardType ? { isDoc: normalizedCardType.isDoc } as CodecksEntity : undefined),
-        );
+        const createdCardType = normalizedCardType?.value
+            ?? resolveCardType(createdCard as CodecksEntity | undefined);
         const shortCode = createdSeq !== undefined ? formatShortCode(createdSeq) : "";
         const url = shortCode ? formatCardUrl(shortCode) : "";
         const lines = [

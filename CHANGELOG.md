@@ -20,6 +20,10 @@ and this project follows semantic versioning for public package releases.
 - Bulk-create responses now omit successful records from agent context, preserve complete sanitized details in a restrictive temporary JSON artifact, and keep exceptional records inline. Exact user authorization can cover an apply when its dry-run matches the authorized scope.
 - Single-card creation now trusts dispatch-returned identity and no longer searches or reads cards after dispatch.
 
+### Fixed
+
+- Single-card creation now reports an explicitly requested documentation card type even when the successful dispatch response contains identity fields but omits type state.
+
 ## [0.10.0] - 2026-08-11
 
 ### Fixed
