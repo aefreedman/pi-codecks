@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.11.1] - 2026-08-11
+
 ### Changed
 
 - Expanded `codecks_card_get` TUI results now present available card details, content, and relationships in an aligned human-readable layout instead of the structured JSON transport envelope.
