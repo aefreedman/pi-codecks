@@ -85,7 +85,7 @@ assertProperties("codecks_milestone_update", ["milestoneId", "description", "cle
 assertRequired("codecks_milestone_update", ["milestoneId"]);
 assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "clearRun", "format"]);
 assertRequired("codecks_card_update_run", ["cardId"]);
-assertProperties("codecks_card_bulk_create", ["cards", "deck", "milestone", "parentCardId", "dryRun", "duplicateLimit", "duplicateScanLimit", "duplicatePolicy", "verification", "outputMode", "continueOnError", "format"]);
+assertProperties("codecks_card_bulk_create", ["cards", "deck", "milestone", "parentCardId", "dryRun", "format"]);
 assertRequired("codecks_card_bulk_create", ["cards"]);
 assertProperties("codecks_card_bulk_update", ["updates", "dryRun", "continueOnError", "format"]);
 assertRequired("codecks_card_bulk_update", ["updates"]);
@@ -311,7 +311,6 @@ const skill = readFileSync(new URL("../skills/using-codecks/SKILL.md", import.me
 const velocitySkill = readFileSync(new URL("../skills/codecks-velocity-reporting/SKILL.md", import.meta.url), "utf8");
 const usingCodecksReferences = [
   "card-operations.md",
-  "bulk-operations.md",
   "conversations-and-resolvables.md",
   "decks-milestones-and-runs.md",
   "fallback-security-and-profiles.md",

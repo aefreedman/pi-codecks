@@ -1,6 +1,6 @@
 {
   "name": "@aefree/pi-codecks",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Pi tools, skills, and prompts for safe Codecks project-management workflows.",
   "type": "module",
   "license": "MIT",

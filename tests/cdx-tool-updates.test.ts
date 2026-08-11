@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 
 useInertEnvironmentCredentialProvider();
@@ -33,6 +34,8 @@ const getData = (result: string): AnyRecord => {
   assert.ok(isObject(payload.data), "expected payload.data object");
   return payload.data;
 };
+
+const getArtifact = (data: AnyRecord): AnyRecord => JSON.parse(readFileSync(data.artifact.path, "utf8"));
 
 const getError = (result: string): AnyRecord => {
   const payload = parseToolResult(result);
@@ -622,28 +625,20 @@ const testCardSearchNoMatchesIsSuccessful = async (tools: ToolModule): Promise<v
   });
 };
 
-const testBulkCreateDryRunReportsDuplicateCandidates = async (tools: ToolModule): Promise<void> => {
+const testBulkCreateDryRunDoesNotSearchForDuplicates = async (tools: ToolModule): Promise<void> => {
   await withMockedCodecks(({ path, query }) => {
     assert.equal(path, "query");
     if (JSON.stringify(query).includes("loggedInUser")) {
       return jsonResponse({ data: { _root: { loggedInUser: USER_ID }, user: { [USER_ID]: { id: USER_ID, name: "Fixture User" } } } });
     }
-    const relationKey = getAccountRelationKey(query!, "cards");
-    assert.ok(relationKey, `expected cards relation query: ${JSON.stringify(query)}`);
-    const card = buildCard({ title: "Duplicate title", accountSeq: 77 });
-    return jsonResponse({
-      data: {
-        _root: { account: ACCOUNT_ID },
-        account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [relationKey]: [CARD_ID] } },
-        card: { [CARD_ID]: card },
-      },
-    });
+    throw new Error(`bulk create unexpectedly searched: ${JSON.stringify(query)}`);
   }, async () => {
     const result = await tools.card_bulk_create.execute({ cards: [{ title: "Duplicate title", content: "Body" }], dryRun: true, format: "json" });
     const data = getData(String(result));
     assert.equal(data.dryRun, true);
-    assert.equal(data.duplicateCandidates, 1);
-    assert.equal(data.results[0].status, "duplicate_candidate");
+    assert.equal(data.results.length, 0);
+    assert.equal(getArtifact(data).results[0].status, "preview");
+    assert.equal(data.duplicateDiscovery, undefined);
   });
 };
 
@@ -714,9 +709,7 @@ const testBulkCreateResolvesValidUuidLocations = async (tools: ToolModule): Prom
     if (deckKey) return jsonResponse(buildDeckPayload(deckKey));
     const milestoneKey = getAccountRelationKey(query!, "milestones");
     if (milestoneKey) return jsonResponse(buildMilestonePayload(milestoneKey));
-    const cardKey = getAccountRelationKey(query!, "cards");
-    assert.ok(cardKey, `expected card duplicate scan: ${JSON.stringify(query)}`);
-    return jsonResponse({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [cardKey!]: [] } }, card: {} } });
+    throw new Error(`bulk create unexpectedly searched cards: ${JSON.stringify(query)}`);
   }, async () => {
     const result = await tools.card_bulk_create.execute({
       cards: [{ title: "Resolved UUIDs", deck: DECK_ID, milestone: MILESTONE_ID }],
@@ -724,9 +717,11 @@ const testBulkCreateResolvesValidUuidLocations = async (tools: ToolModule): Prom
       format: "json",
     });
     const data = getData(String(result));
-    assert.equal(data.results[0].status, "ready");
-    assert.deepEqual(data.results[0].deck, { id: DECK_ID, name: "Development" });
-    assert.deepEqual(data.results[0].milestone, { id: MILESTONE_ID, name: "Alpha" });
+    assert.equal(data.results.length, 0);
+    const previewRecord = getArtifact(data).results[0];
+    assert.equal(previewRecord.status, "preview");
+    assert.deepEqual(previewRecord.normalizedRequested.deck, { id: DECK_ID, name: "Development" });
+    assert.deepEqual(previewRecord.normalizedRequested.milestone, { id: MILESTONE_ID, name: "Alpha" });
   });
 };
 
@@ -741,13 +736,7 @@ const testSingleAndBulkCreateUseIdenticalPayloads = async (tools: ToolModule): P
     if (JSON.stringify(query).includes("loggedInUser")) {
       return jsonResponse({ data: { _root: { loggedInUser: USER_ID }, user: { [USER_ID]: { id: USER_ID, name: "Fixture User" } } } });
     }
-    const cardKey = getAccountRelationKey(query!, "cards");
-    if (cardKey) {
-      return jsonResponse({ data: { _root: { account: ACCOUNT_ID }, account: { [ACCOUNT_ID]: { id: ACCOUNT_ID, [cardKey]: [] } }, card: {} } });
-    }
-    const key = directCardKey(query!);
-    assert.ok(key, `expected created-card lookup: ${JSON.stringify(query)}`);
-    return jsonResponse(buildCardPayload(buildCard({ accountSeq: 123 })));
+    throw new Error(`unexpected create follow-up query: ${JSON.stringify(query)}`);
   }, async () => {
     const input = {
       title: "Shared payload",
@@ -840,7 +829,7 @@ await testPrivateCardCreationDefaultsOwner(tools);
 await testCardCreateCoercesNumericLocationIdsForDispatch(tools);
 await testCardListResolvablesEmptyIsSuccessful(tools);
 await testCardSearchNoMatchesIsSuccessful(tools);
-await testBulkCreateDryRunReportsDuplicateCandidates(tools);
+await testBulkCreateDryRunDoesNotSearchForDuplicates(tools);
 await testBulkCreateRejectsInvalidUuidLocationsWithoutDispatch(tools);
 await testCardCreateRejectsInvalidUuidDeckWithoutDispatch(tools);
 await testBulkCreateResolvesValidUuidLocations(tools);

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+## [0.11.0] - 2026-08-11
+
+### Added
+
+- Added shared observable 40-requests-per-five-seconds request pacing and bounded recovery for definitely rejected HTTP 429 responses. Recovery permits at most two retries, stops after three consecutive 429s, and respects valid Codecks numeric-millisecond or HTTP-date `Retry-After` values within a fifteen-second server-wait budget.
+- Added progress and result metrics for local/server waits, physical attempts, sanitized `Retry-After` diagnostics, retry events, and continuation-safe records.
+
+### Changed
+
+- Simplified bulk card creation to normalized write intent and one per-record result contract, removing implicit duplicate discovery, verification reads, dual schemas, compatibility payloads, and agent-managed pacing guidance.
+- Bulk-create responses now omit successful records from agent context, preserve complete sanitized details in a restrictive temporary JSON artifact, and keep exceptional records inline. Exact user authorization can cover an apply when its dry-run matches the authorized scope.
+- Single-card creation now trusts dispatch-returned identity and no longer searches or reads cards after dispatch.
+
 ## [0.10.0] - 2026-08-11
 
 ### Fixed

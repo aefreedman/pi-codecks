@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 import { loadRegisteredTools } from "./pi-tool-harness.ts";
 import * as core from "../src/codecks-core.ts";
@@ -22,6 +23,7 @@ const parseResult = (value: unknown): Json => {
   assert.ok(match, `expected structured result: ${String(value)}`);
   return JSON.parse(match[1]);
 };
+const artifactDetails = (result: Json): Json => JSON.parse(readFileSync(result.data.artifact.path, "utf8"));
 const relationKey = (query: Json, relation: string): string | undefined => {
   const root = query._root?.[0];
   const entries = root?.account ?? [];
@@ -61,24 +63,11 @@ try {
   assert.equal(unknown.error.requestsAttempted, 0);
   assert.equal(fetchCalls, 0);
 
-  for (const count of [1, 4, 23, 100]) {
-    let scans = 0;
-    globalThis.fetch = (async (_input, init) => {
-      const query = JSON.parse(String(init?.body)).query as Json;
-      if (JSON.stringify(query).includes("loggedInUser")) return response(loggedInPayload());
-      const key = relationKey(query, "cards");
-      assert.ok(key, `unexpected query: ${JSON.stringify(query)}`);
-      scans += 1;
-      return response(emptyCardScanPayload(key!));
-    }) as typeof fetch;
-    const cards = Array.from({ length: count }, (_, index) => ({ title: `Shared scan ${index}` }));
-    const preview = parseResult(await invoke(core.card_bulk_create, { cards, dryRun: true, duplicateScanLimit: 500, format: "json" }));
-    assert.equal(preview.ok, true);
-    assert.equal(preview.data.count, count);
-    assert.equal(preview.data.scan.complete, true);
-    assert.equal(preview.data.scan.requestsAttempted, count <= 4 ? count : 1);
-    assert.equal(scans, count <= 4 ? count : 1, `${count}-record preview must stay within the title-first request budget`);
-  }
+  // Preview normalizes write intent only; it performs no implicit card scan.
+  let previewQueries = 0;
+  globalThis.fetch = (async (_input, init) => { previewQueries += 1; const query = JSON.parse(String(init?.body)).query as Json; assert.ok(JSON.stringify(query).includes("loggedInUser")); return response(loggedInPayload()); }) as typeof fetch;
+  const initialPreview = parseResult(await invoke(core.card_bulk_create, { cards: [{ title: "Shared title" }, { title: "Shared title" }], dryRun: true, format: "json" }));
+  assert.equal(initialPreview.ok, true); assert.equal(initialPreview.data.results.length, 0); assert.equal(artifactDetails(initialPreview).results[0].status, "preview"); assert.equal(previewQueries, 1);
 
   let appliedCreate: Json | undefined;
   let cardScans = 0;
@@ -102,31 +91,22 @@ try {
   }) as typeof fetch;
   const createArgs = { cards: [{ title: "Parity", content: "Body", assigneeId: USER_ID, effort: 3, priority: "high", tags: ["alpha"], putOnHand: true }], format: "json" };
   const preview = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: true }));
-  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false, outputMode: "detailed" }));
+  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false }));
   assert.equal(preview.ok, true);
   assert.equal(apply.ok, true);
-  assert.equal(apply.data.results[0].status, "created");
-  assert.equal(apply.data.results[0].certainty, "dispatch_returned");
-  assert.deepEqual(apply.data.results[0].dispatchReturned, { id: "dispatch-action-id", payload: { id: CARD_ID, accountSeq: 2481 } });
-  assert.equal(preview.data.results[0].assignee.id, appliedCreate!.assigneeId);
-  assert.equal(preview.data.results[0].effort, appliedCreate!.effort);
-  assert.equal(preview.data.results[0].priority.code, appliedCreate!.priority);
-  assert.equal(preview.data.results[0].content, appliedCreate!.content);
-  assert.equal(preview.data.results[0].putOnHand, appliedCreate!.putOnHand);
-  assert.equal(cardScans, 2, "preview and apply use bounded duplicate discovery; default apply performs no identity read");
-  assert.deepEqual(apply.data.results[0].dispatchIdentity, {
-    cardId: CARD_ID,
-    accountSeq: 2481,
-    shortCode: "$45j",
-    cardRef: "$45j",
-    accountSeqRef: "seq:2481",
-  });
-  assert.deepEqual(apply.data.results[0].created, {
-    ...apply.data.results[0].dispatchIdentity,
-    title: null,
-  });
-  assert.equal(apply.data.results[0].verificationState, "not_requested");
-  assert.equal(apply.data.results[0].persistedVerified, null);
+  assert.equal(preview.data.results.length, 0);
+  assert.equal(apply.data.results.length, 0);
+  const previewRecord = artifactDetails(preview).results[0];
+  const applyRecord = artifactDetails(apply).results[0];
+  assert.equal(applyRecord.status, "created");
+  assert.equal(applyRecord.certainty, "dispatch_returned");
+  assert.equal(previewRecord.normalizedRequested.assignee.id, appliedCreate!.assigneeId);
+  assert.equal(previewRecord.normalizedRequested.effort, appliedCreate!.effort);
+  assert.equal(previewRecord.normalizedRequested.priority.code, appliedCreate!.priority);
+  assert.equal(previewRecord.normalizedRequested.content, appliedCreate!.content);
+  assert.equal(previewRecord.normalizedRequested.putOnHand, appliedCreate!.putOnHand);
+  assert.equal(cardScans, 0, "bulk create performs no duplicate or post-create reads");
+  assert.equal(applyRecord.card.cardId, CARD_ID);
 
   let mutationAttempts = 0;
   globalThis.fetch = (async (input, init) => {

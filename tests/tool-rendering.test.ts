@@ -123,6 +123,16 @@ const partialBulk = renderLines(bulkCreate.renderResult!({
 }, { isPartial: true }, fakeTheme, {}), 240).join("\n");
 assert.match(partialBulk, /Bulk create applying/i);
 assert.match(partialBulk, /321ms elapsed.*4 record.*7 request.*125ms queued.*2 created.*1 failed.*1 definitely unsent/i);
+const rateLimitedBulk = renderLines(bulkCreate.renderResult!({
+  content: [{ type: "text", text: "transient" }],
+  details: { exportName: "card_bulk_create", transient: true, progress: {
+    stage: "rate_limited_retrying", elapsedMs: 1000, recordsProcessed: 19, requestsAttempted: 21, queueWaitMs: 700,
+    localGateWaitMs: 200, serverCooldownWaitMs: 500, created: 19, failed: 0, definitelyUnsent: 0,
+    recordIndex: 20, recordCount: 45, retryAttempt: 1, retryMax: 2, retryAfterMs: 5000, retryAfterFormat: "codecks_milliseconds", retryAfterParseStatus: "valid",
+  } },
+}, { isPartial: true }, fakeTheme, {}), 320).join("\n");
+assert.match(rateLimitedBulk, /rate limited record 20\/45, retry 1\/2 after 5000ms \(codecks_milliseconds; valid\)/i);
+assert.match(rateLimitedBulk, /200ms local \/ 500ms server/i);
 
 const genericPartial = renderLines(cardGet.renderResult!(structuredResult, { isPartial: true }, fakeTheme, {})).join("\n");
 assert.equal(genericPartial, "Running Codecks request...");

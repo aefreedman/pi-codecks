@@ -1,7 +1,7 @@
 ---
 name: using-codecks
-description: Use for Codecks Free-plan core card workflows and deck-description, milestone, and Run operations, with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
-allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
+description: Use for ordinary single-card Codecks lookup and mutation, Deck descriptions, milestones, Runs, attachments, conversations, credentials, and safe query/dispatch fallback. Excludes multi-card bulk create/import/update workflows.
+allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # Using Codecks
@@ -15,7 +15,6 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 ## In scope
 
 - Card search, retrieval, creation, updates, lifecycle, priority, effort, tags, parent, and Run assignment.
-- Bulk card preview/apply workflows.
 - Deck-description, milestone-description, and ordinary Run operations.
 - Comments, Reviews, Blockers, attachments, and resolvable lifecycle actions.
 - Safe `codecks_query` or `codecks_dispatch` fallback for in-scope gaps.
@@ -26,6 +25,7 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 - Paid-plan-only capabilities.
 - Journey setup/apply/clone automation, which remains UI-only here.
 - Card archive, delete, or trash operations.
+- Multi-card create/import/update workflows, which are handled directly by specialized bulk tools.
 
 ## Core workflow
 
@@ -50,7 +50,6 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 ## Reference routing
 
 - For card lookup, ordinary create/update, lifecycle, effort, search, or vision-board work, read [references/card-operations.md](references/card-operations.md).
-- For any multi-card create/update, import, duplicate scan, approval, rate-limit, or partial-application workflow, read [references/bulk-operations.md](references/bulk-operations.md).
 - Before opening or modifying a Comment, Review, Blocker, or resolvable thread, read [references/conversations-and-resolvables.md](references/conversations-and-resolvables.md).
 - For Deck descriptions, milestones, Runs, or card Run assignment, read [references/decks-milestones-and-runs.md](references/decks-milestones-and-runs.md).
 - Before raw query/dispatch, attachments, credentials, or profile switching, read [references/fallback-security-and-profiles.md](references/fallback-security-and-profiles.md).
