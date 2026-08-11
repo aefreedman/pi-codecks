@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
 import { resolveOnePasswordCredential } from "./codecks-onepassword";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
-import { basename, extname, isAbsolute, relative, resolve } from "path";
+import { basename, extname, isAbsolute, join, relative, resolve } from "path";
 import {
     DEFAULT_OVERLAP_DAYS,
     atomicWriteFile,
@@ -86,15 +87,9 @@ const RATE_LIMIT = (() =>
     }
     return Math.max(1, Math.min(40, value));
 })();
-const RATE_WINDOW_MS = (() =>
-{
-    const value = Number.parseInt(process.env.CODECKS_RATE_WINDOW_MS ?? "5000", 10);
-    if (!Number.isFinite(value))
-    {
-        return 5000;
-    }
-    return Math.max(1000, Math.min(15000, value));
-})();
+// Codecks permits 40 physical requests in five seconds. This transport bound is
+// deliberately fixed: callers must not configure a longer invisible wait.
+const RATE_WINDOW_MS = 5000;
 const requestTimestamps: number[] = [];
 // A server-issued Retry-After applies to every request made by this extension
 // process, not merely the request that observed the 429.
@@ -188,7 +183,7 @@ const withAccountScanSlot = async <T>(fn: (queueWaitMs: number) => Promise<T>): 
 };
 
 const ALLOW_OUT_OF_SCOPE_DISPATCH = /^(1|true|yes)$/i.test(process.env.CODECKS_ALLOW_OUT_OF_SCOPE_DISPATCH ?? "");
-const RETRY_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const RETRY_STATUS_CODES = new Set([500, 502, 503, 504]);
 const MAX_RETRY_ATTEMPTS = (() =>
 {
     const value = Number.parseInt(process.env.CODECKS_RETRY_ATTEMPTS ?? "2", 10);
@@ -246,16 +241,34 @@ type BulkCreateProgress = {
     recordsProcessed: number;
     requestsAttempted: number;
     queueWaitMs: number;
+    localGateWaitMs: number;
+    serverCooldownWaitMs: number;
     created: number;
     failed: number;
     definitelyUnsent: number;
+    pacingReason?: "local_window" | "server_cooldown";
+    pacingElapsedMs?: number;
+    pacingRemainingMs?: number;
+    recordIndex?: number;
+    recordCount?: number;
+    retryAttempt?: number;
+    retryMax?: number;
+    retryAfterMs?: number;
+    retryAfterFormat?: "codecks_milliseconds" | "http_date";
+    retryAfterParseStatus?: "missing" | "valid" | "malformed" | "negative" | "non_finite" | "over_budget";
+    retryAfterReason?: string;
+    rateLimitError?: string;
+    consecutive429?: number;
 };
 
 type OperationContext = {
     onBulkCreateProgress?: (progress: BulkCreateProgress) => void;
     requestsAttempted: number;
     queueWaitMs: number;
+    localGateWaitMs: number;
+    serverCooldownWaitMs: number;
     credentialConfigPromise?: Promise<CodecksConfig>;
+    progressSnapshot?: { startedAt: number; stage: string; recordsProcessed: number; results: Record<string, unknown>[]; rateLimit?: Pick<BulkCreateProgress, "recordIndex" | "recordCount" | "retryAttempt" | "retryMax" | "retryAfterMs" | "retryAfterFormat" | "retryAfterParseStatus" | "retryAfterReason" | "rateLimitError" | "consecutive429"> };
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
@@ -266,12 +279,17 @@ const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.g
 const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 const getOperationContext = (): OperationContext | undefined => operationContextStorage.getStore();
 
+const createOperationContext = (onBulkCreateProgress?: (progress: BulkCreateProgress) => void): OperationContext => ({ onBulkCreateProgress, requestsAttempted: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
+
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
     fn: () => Promise<T>,
     workspaceRoot?: string,
     onBulkCreateProgress?: (progress: BulkCreateProgress) => void,
-): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run({ onBulkCreateProgress, requestsAttempted: 0, queueWaitMs: 0 }, fn)));
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run(createOperationContext(onBulkCreateProgress), fn)));
+
+const withOperationContextIfMissing = <T>(fn: () => Promise<T>): Promise<T> =>
+    getOperationContext() ? fn() : operationContextStorage.run(createOperationContext(), fn);
 
 const noteOperationQueueWait = (queueWaitMs: number): void =>
 {
@@ -280,12 +298,15 @@ const noteOperationQueueWait = (queueWaitMs: number): void =>
     context.queueWaitMs += queueWaitMs;
 };
 
-const noteOperationRequest = (queueWaitMs: number): void =>
+type RateGateWait = { queueWaitMs: number; localWaitMs: number; serverWaitMs: number };
+const noteOperationRequest = (wait: RateGateWait): void =>
 {
     const context = getOperationContext();
     if (!context) return;
     context.requestsAttempted += 1;
-    noteOperationQueueWait(queueWaitMs);
+    context.queueWaitMs += wait.queueWaitMs;
+    context.localGateWaitMs += wait.localWaitMs;
+    context.serverCooldownWaitMs += wait.serverWaitMs;
 };
 
 const emitBulkCreateProgress = (
@@ -293,21 +314,33 @@ const emitBulkCreateProgress = (
     stage: string,
     recordsProcessed: number,
     results: Record<string, unknown>[] = [],
+    pacing?: Pick<BulkCreateProgress, "pacingReason" | "pacingElapsedMs" | "pacingRemainingMs">,
+    rateLimit?: NonNullable<OperationContext["progressSnapshot"]>["rateLimit"],
 ): void =>
 {
     const context = getOperationContext();
     if (!context?.onBulkCreateProgress) return;
+    if (!pacing) context.progressSnapshot = { startedAt, stage, recordsProcessed, results, rateLimit };
+    const snapshot = pacing ? context.progressSnapshot : undefined;
+    const effectiveStartedAt = snapshot?.startedAt ?? startedAt;
+    const effectiveStage = pacing ? `${snapshot?.stage ?? stage}:${stage}` : stage;
+    const effectiveRecordsProcessed = snapshot?.recordsProcessed ?? recordsProcessed;
+    const effectiveResults = snapshot?.results ?? results;
     try
     {
         context.onBulkCreateProgress({
-            stage,
-            elapsedMs: Math.max(0, Date.now() - startedAt),
-            recordsProcessed,
+            stage: effectiveStage,
+            elapsedMs: Math.max(0, Date.now() - effectiveStartedAt),
+            recordsProcessed: effectiveRecordsProcessed,
             requestsAttempted: context.requestsAttempted,
             queueWaitMs: context.queueWaitMs,
-            created: results.filter((entry) => entry.status === "created").length,
-            failed: results.filter((entry) => entry.status === "failed").length,
-            definitelyUnsent: results.filter((entry) => entry.status === "definitely_unsent").length,
+            localGateWaitMs: context.localGateWaitMs,
+            serverCooldownWaitMs: context.serverCooldownWaitMs,
+            created: effectiveResults.filter((entry) => entry.status === "created").length,
+            failed: effectiveResults.filter((entry) => entry.status === "failed").length,
+            definitelyUnsent: effectiveResults.filter((entry) => entry.status === "definitely_unsent").length,
+            ...(snapshot?.rateLimit ?? rateLimit),
+            ...pacing,
         });
     }
     catch
@@ -339,44 +372,43 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((
     signal?.addEventListener("abort", onAbort, { once: true });
 });
 
-const enforceRateLimit = async (): Promise<number> =>
+const enforceRateLimit = async (): Promise<RateGateWait> =>
 {
-    const waitStartedAt = Date.now();
-    while (true)
+    const signal = getActiveAbortSignal();
+    if (signal?.aborted)
     {
+        throw new CodecksOperationError("caller_aborted", "Operation cancelled by caller before Codecks request pacing.", { requestsAttempted: 0 });
+    }
+    const waitStartedAt = Date.now();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let activeWaitDeadline = 0;
+    let accumulatedLocalWaitMs = 0;
+    let accumulatedServerWaitMs = 0;
+    const publishWait = (reason: "local_window" | "server_cooldown") => emitBulkCreateProgress(waitStartedAt, `rate_gate_${reason}`, 0, [], { pacingReason: reason, pacingElapsedMs: Date.now() - waitStartedAt, pacingRemainingMs: Math.max(0, activeWaitDeadline - Date.now()) });
+    try { while (true) {
         const now = Date.now();
-        while (requestTimestamps.length > 0 && now - requestTimestamps[0] > RATE_WINDOW_MS)
-        {
-            requestTimestamps.shift();
-        }
-
-        const localWaitMs = requestTimestamps.length < RATE_LIMIT
-            ? 0
-            : Math.max(0, RATE_WINDOW_MS - (now - requestTimestamps[0]) + 5);
+        while (requestTimestamps.length > 0 && now - requestTimestamps[0] >= RATE_WINDOW_MS) requestTimestamps.shift();
+        if (serverCooldownUntil <= now) serverCooldownUntil = 0;
+        const localWaitMs = requestTimestamps.length < RATE_LIMIT ? 0 : Math.max(0, RATE_WINDOW_MS - (now - requestTimestamps[0]));
         const cooldownWaitMs = Math.max(0, serverCooldownUntil - now);
         const waitMs = Math.max(localWaitMs, cooldownWaitMs);
-        if (waitMs === 0)
-        {
-            requestTimestamps.push(now);
-            return Date.now() - waitStartedAt;
+        if (waitMs === 0) {
+            if (signal?.aborted) throw new CodecksOperationError("caller_aborted", "Operation cancelled by caller before Codecks request dispatch.", { requestsAttempted: 0 });
+            requestTimestamps.push(Date.now());
+            return { queueWaitMs: Date.now() - waitStartedAt, localWaitMs: accumulatedLocalWaitMs, serverWaitMs: accumulatedServerWaitMs };
         }
-
-        try
-        {
-            await sleep(waitMs, getActiveAbortSignal());
-        }
-        catch (error)
-        {
-            if (error instanceof CodecksOperationError && error.category === "caller_aborted")
-            {
-                throw new CodecksOperationError("rate_limit_queue_aborted", "Operation cancelled while waiting for the Codecks request-rate queue.", {
-                    queueWaitMs: Date.now() - waitStartedAt,
-                    recoveryHint: "Retry sequentially with a narrower scope; do not fan out broad searches.",
-                });
-            }
+        const reason = cooldownWaitMs >= localWaitMs ? "server_cooldown" : "local_window";
+        if (reason === "server_cooldown") accumulatedServerWaitMs += waitMs;
+        else accumulatedLocalWaitMs += waitMs;
+        activeWaitDeadline = now + waitMs;
+        publishWait(reason);
+        timer = setInterval(() => publishWait(reason), 1000);
+        try { await sleep(waitMs, signal); }
+        catch (error) {
+            if (error instanceof CodecksOperationError && error.category === "caller_aborted") throw new CodecksOperationError("rate_limit_queue_aborted", "Operation cancelled while waiting for Codecks request pacing.", { queueWaitMs: Date.now() - waitStartedAt, recoveryHint: "Retry the untouched operation after the short pacing window." });
             throw error;
-        }
-    }
+        } finally { if (timer) { clearInterval(timer); timer = undefined; } }
+    }} finally { if (timer) clearInterval(timer); }
 };
 
 const normalizeProfileKey = (value: string | undefined): string | undefined =>
@@ -1930,6 +1962,14 @@ export const __test = {
     resolveAuthenticatedConfig,
     resolveExternalHelperCredential,
     resolveOnePasswordCredential,
+    // Narrow deterministic hooks for the shared transport gate; production callers
+    // cannot reach these exports through registered tools.
+    resetRateGate: () => { requestTimestamps.length = 0; serverCooldownUntil = 0; },
+    seedRateGate: (timestamps: number[], cooldownUntil = 0) => { requestTimestamps.splice(0, requestTimestamps.length, ...timestamps); serverCooldownUntil = cooldownUntil; },
+    getRateGateState: () => ({ timestamps: [...requestTimestamps], cooldownUntil: serverCooldownUntil }),
+    acquireRateGate: () => enforceRateLimit(),
+    parseRetryAfterMs: (value: string | null) => parseRetryAfterMs(value),
+    observeServerCooldown: (response: Response) => observeServerCooldown(response),
     setCredentialProviderForTests: (provider?: CodecksCredentialProvider) => { testCredentialProvider = provider; },
 };
 
@@ -2349,7 +2389,12 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
         signal,
     });
 
-    const retryAfterMs = observeServerCooldown(response);
+    const retryAfter = observeServerCooldown(response);
+    if (response.status === 429 && retryAfter.status !== "valid") throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
+        httpStatus: 429, retryAfterParseStatus: retryAfter.status, retryAfterReason: retryAfter.reason,
+        ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
+        recoveryHint: "Retry after the bounded fifteen-second recovery window.",
+    });
     const text = await response.text();
     let payload: unknown = text;
 
@@ -2371,9 +2416,13 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
         const message = `Codecks upload signing failed ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
         if (response.status === 429)
         {
-            throw new CodecksOperationError("rate_limited", message, {
+            throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
+                httpStatus: 429,
                 requestsAttempted: 1,
-                ...(retryAfterMs !== null ? { retryAfterMs, cooldownUntil: serverCooldownUntil } : {}),
+                retryAfterParseStatus: retryAfter.status,
+                ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
+                ...(retryAfter.reason ? { retryAfterReason: retryAfter.reason } : {}),
+                ...(retryAfter.value !== null ? { cooldownUntil: serverCooldownUntil } : {}),
                 recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
             });
         }
@@ -3302,57 +3351,54 @@ const normalizeDispatchPayload = (path: string, payload: Record<string, unknown>
     return normalizedPayload;
 };
 
-const parseRetryAfterMs = (headerValue: string | null): number | null =>
+// Bulk-create recovery accepts no more than three server-directed waits. Fifteen
+// seconds is therefore the smallest bounded budget derived from the existing
+// five-second pacing window, rather than a guessed mutation quota.
+const MAX_SERVER_COOLDOWN_MS = 15_000;
+const BULK_CREATE_MAX_CONSECUTIVE_429 = 3;
+type RetryAfterParseStatus = "missing" | "valid" | "malformed" | "negative" | "non_finite" | "over_budget";
+type RetryAfterFormat = "codecks_milliseconds" | "http_date" | "seconds";
+type RetryAfterParse = { value: number | null; requestedMs?: number; format?: RetryAfterFormat; status: RetryAfterParseStatus; reason?: string; error?: string };
+// Codecks returns numeric Retry-After values in milliseconds on genuine 429 responses,
+// unlike generic HTTP delay-seconds. Callers for non-429 retry policy must opt into
+// standard delay-seconds explicitly.
+const parseRetryAfterMs = (headerValue: string | null, numericFormat: "codecks_milliseconds" | "seconds" = "codecks_milliseconds"): RetryAfterParse =>
 {
-    if (!headerValue)
-    {
-        return null;
-    }
-
+    if (!headerValue || !headerValue.trim()) return { value: null, status: "missing", reason: "Retry-After was not supplied." };
     const trimmed = headerValue.trim();
-    if (!trimmed)
-    {
-        return null;
+    if (/^-/.test(trimmed)) return { value: null, status: "negative", reason: "Retry-After must not be negative.", error: "Retry-After must not be negative." };
+    let requestedMs: number;
+    let format: RetryAfterFormat;
+    // Numeric Codecks 429 values are milliseconds. Round fractional values up so
+    // a retry cannot precede the requested instant.
+    if (/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) {
+        requestedMs = Math.ceil(Number(trimmed) * (numericFormat === "seconds" ? 1000 : 1));
+        format = numericFormat;
+    } else if (/^(?:nan|[+-]?(?:inf|infinity))$/i.test(trimmed)) {
+        return { value: null, status: "non_finite", reason: "Retry-After is not finite.", error: "Retry-After is not finite." };
+    } else {
+        const parsed = Date.parse(trimmed);
+        if (Number.isNaN(parsed)) return { value: null, status: "malformed", reason: "Retry-After is malformed.", error: "Retry-After is malformed." };
+        requestedMs = Math.max(0, parsed - Date.now());
+        format = "http_date";
     }
-
-    if (/^\d+$/.test(trimmed))
-    {
-        const seconds = Number(trimmed);
-        if (!Number.isFinite(seconds))
-        {
-            return null;
-        }
-        return Math.max(0, seconds * 1000);
-    }
-
-    const parsed = Date.parse(trimmed);
-    if (Number.isNaN(parsed))
-    {
-        return null;
-    }
-
-    return Math.max(0, parsed - Date.now());
+    if (!Number.isFinite(requestedMs)) return { value: null, format, status: "non_finite", reason: "Retry-After is not finite.", error: "Retry-After is not finite." };
+    if (requestedMs > MAX_SERVER_COOLDOWN_MS) return { value: null, requestedMs, format, status: "over_budget", reason: "Retry-After exceeds the fifteen-second bounded bulk-create recovery window.", error: "Retry-After exceeds the fifteen-second bounded bulk-create recovery window." };
+    return { value: requestedMs, requestedMs, format, status: "valid" };
 };
 
-// Observe headers before a body is consumed so concurrent operations cannot slip
-// past a server-directed cooldown while a response body is still streaming.
-const observeServerCooldown = (response: Response): number | null =>
+// Only a genuine 429 may affect later calls. Successful and unrelated responses cannot wedge this process.
+const observeServerCooldown = (response: Response): RetryAfterParse =>
 {
-    const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
-    if (retryAfterMs !== null)
-    {
-        serverCooldownUntil = Math.max(serverCooldownUntil, Date.now() + retryAfterMs);
-    }
-    return retryAfterMs;
+    const parsed = parseRetryAfterMs(response.headers.get("Retry-After"));
+    if (response.status === 429 && parsed.value !== null) serverCooldownUntil = Math.max(serverCooldownUntil, Date.now() + parsed.value);
+    return parsed;
 };
 
 const computeRetryDelayMs = (attempt: number, response: Response): number =>
 {
-    const retryAfterMs = parseRetryAfterMs(response.headers.get("Retry-After"));
-    if (retryAfterMs !== null)
-    {
-        return retryAfterMs;
-    }
+    const retryAfter = parseRetryAfterMs(response.headers.get("Retry-After"), "seconds");
+    if (retryAfter.value !== null) return retryAfter.value;
 
     const exponential = RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt));
     const jitter = Math.floor(Math.random() * RETRY_JITTER_MS);
@@ -3394,8 +3440,8 @@ const requestJson = async (
     {
         try
         {
-            const queueWaitMs = await enforceRateLimit();
-            noteOperationRequest(queueWaitMs);
+            const gateWait = await enforceRateLimit();
+            noteOperationRequest(gateWait);
         }
         catch (error)
         {
@@ -3473,7 +3519,12 @@ const requestJson = async (
             externalSignal?.removeEventListener("abort", onAbort);
         }
 
-        const retryAfterMs = observeServerCooldown(response);
+        const retryAfter = observeServerCooldown(response);
+    if (response.status === 429 && retryAfter.status !== "valid") throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
+        httpStatus: 429, retryAfterParseStatus: retryAfter.status, retryAfterReason: retryAfter.reason,
+        ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
+        recoveryHint: "Retry after the bounded fifteen-second recovery window.",
+    });
         const text = await response.text();
         let payload: unknown = text;
 
@@ -3506,10 +3557,7 @@ const requestJson = async (
         {
             // Retry-After is enforced by the shared gate on the next attempt. This
             // records actual queue time and avoids sleeping once here and again there.
-            if (retryAfterMs !== null)
-            {
-                continue;
-            }
+            if (retryAfter.value !== null) continue;
             await sleep(computeRetryDelayMs(attempt, response), externalSignal);
             continue;
         }
@@ -3518,9 +3566,13 @@ const requestJson = async (
         const message = `Codecks API error ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
         if (response.status === 429)
         {
-            throw new CodecksOperationError("rate_limited", message, {
+            throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
+                httpStatus: 429,
                 requestsAttempted: attempt + 1,
-                ...(retryAfterMs !== null ? { retryAfterMs, cooldownUntil: serverCooldownUntil } : {}),
+                retryAfterParseStatus: retryAfter.status,
+                ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
+                ...(retryAfter.reason ? { retryAfterReason: retryAfter.reason } : {}),
+                ...(retryAfter.value !== null ? { cooldownUntil: serverCooldownUntil } : {}),
                 recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
             });
         }
@@ -6684,7 +6736,8 @@ export const card_get = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-get", "api_error", toErrorMessage(error));
+            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), getOperationErrorData(error));
         }
     },
 });
@@ -7531,63 +7584,18 @@ export const card_create = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-create", "api_error", toErrorMessage(error));
+            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-create", category, toErrorMessage(error), getOperationErrorData(error));
         }
         const createdData = unwrapData(response) as Record<string, unknown> | undefined;
         const createdCard = createdData?.card && typeof createdData.card === "object"
             ? createdData.card as Record<string, unknown>
             : createdData;
-        let createdId = createdCard?.cardId ? String(createdCard.cardId) : "";
-        let createdSeq = typeof createdCard?.accountSeq === "number"
-            ? createdCard.accountSeq
-            : (typeof createdCard?.accountSeq === "string" && /^\d+$/.test(createdCard.accountSeq)
-                ? Number(createdCard.accountSeq)
-                : undefined);
-        if (!createdId && resolvedTitle)
-        {
-            const createdLookup = await fetchCardMatches({
-                title: resolvedTitle,
-                location: deckArg !== undefined ? "deck" : (milestoneArg !== undefined ? "milestone" : "any"),
-                deck: deckArg,
-                milestone: milestoneArg,
-                limit: 10,
-                includeArchived: true,
-            });
-            if (!createdLookup.error && createdLookup.cards && createdLookup.cards.length > 0)
-            {
-                const exactTitleMatches = createdLookup.cards
-                    .filter((entry) => String(entry.title ?? "") === resolvedTitle)
-                    .sort((left, right) => toTimestamp(right.lastUpdatedAt) - toTimestamp(left.lastUpdatedAt));
-                const matched = exactTitleMatches[0] ?? createdLookup.cards[0];
-                createdId = matched?.cardId ? String(matched.cardId) : createdId;
-                const matchedSeq = matched?.accountSeq;
-                if (typeof matchedSeq === "number")
-                {
-                    createdSeq = matchedSeq;
-                }
-            }
-        }
-        let createdMeta: CodecksEntity | undefined;
-        if (createdId)
-        {
-            try
-            {
-                createdMeta = await fetchCardById(createdId);
-            }
-            catch
-            {
-                createdMeta = undefined;
-            }
-
-            const createdMetaSeq = createdMeta?.accountSeq as number | undefined;
-            if (createdMetaSeq !== undefined)
-            {
-                createdSeq = createdMetaSeq;
-            }
-        }
+        const dispatchIdentity = extractDispatchCardIdentity(response);
+        const createdId = dispatchIdentity.cardId ?? "";
+        const createdSeq = dispatchIdentity.accountSeq ?? undefined;
         const createdCardType = resolveCardType(
-            createdMeta
-            ?? (createdCard as CodecksEntity | undefined)
+            (createdCard as CodecksEntity | undefined)
             ?? (normalizedCardType ? { isDoc: normalizedCardType.isDoc } as CodecksEntity : undefined),
         );
         const shortCode = createdSeq !== undefined ? formatShortCode(createdSeq) : "";
@@ -7753,7 +7761,22 @@ const resolveBulkAssignee = async (value: string | number | undefined): Promise<
     return { id, name: String(user?.fullName ?? user?.name ?? id) };
 };
 
-const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: BulkCreateRecord, index: number, loggedInUser: CodecksUser): Promise<NormalizedBulkCreateRecord> =>
+type BulkCreateNormalizationContext = {
+    decks: Map<string, Promise<LookupResult>>;
+    milestones: Map<string, Promise<LookupResult>>;
+    assignees: Map<string, Promise<{ id: string | number; name: string }>>;
+    parents: Map<string, Promise<Awaited<ReturnType<typeof resolveCardForUpdate>>>>;
+};
+
+const cachedResolution = <T>(cache: Map<string, Promise<T>>, value: string | number, resolve: () => Promise<T>): Promise<T> =>
+{
+    const key = String(value);
+    let pending = cache.get(key);
+    if (!pending) { pending = resolve(); cache.set(key, pending); }
+    return pending;
+};
+
+const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: BulkCreateRecord, index: number, loggedInUser: CodecksUser, context: BulkCreateNormalizationContext): Promise<NormalizedBulkCreateRecord> =>
 {
     const document = resolveCardDocument(record.title, record.content);
     const tags = normalizeCreateTags(record.tags);
@@ -7766,7 +7789,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     const deckValue = blankToUndefined(record.deck ?? defaults.deck);
     if (deckValue !== undefined)
     {
-        const result = await resolveDeck(deckValue);
+        const result = await cachedResolution(context.decks, deckValue, () => resolveDeck(deckValue));
         if (result.kind !== "resolved") throw new Error(`cards[${index}].deck: ${renderLookupMessage(result, String(deckValue))}`);
         deck = { id: String(result.id), name: result.label };
     }
@@ -7775,7 +7798,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     const milestoneValue = blankToUndefined(record.milestone ?? defaults.milestone);
     if (milestoneValue !== undefined)
     {
-        const result = await resolveMilestone(milestoneValue);
+        const result = await cachedResolution(context.milestones, milestoneValue, () => resolveMilestone(milestoneValue));
         if (result.kind !== "resolved") throw new Error(`cards[${index}].milestone: ${renderLookupMessage(result, String(milestoneValue))}`);
         milestone = { id: String(result.id), name: result.label };
     }
@@ -7787,7 +7810,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
         throw new Error(`cards[${index}] could not resolve a default assignee; provide assigneeId from codecks_user_lookup.`);
     }
     const assignee: { id: string | number; name: string } = explicitAssignee !== undefined
-        ? await resolveBulkAssignee(explicitAssignee)
+        ? await cachedResolution(context.assignees, explicitAssignee, () => resolveBulkAssignee(explicitAssignee))
         : { id: defaultAssigneeId!, name: String(loggedInUser.fullName ?? loggedInUser.name ?? defaultAssigneeId) };
     const priority = record.priority === undefined ? { code: null, label: "None" } : normalizePriorityInput(record.priority);
     if (!priority) throw new Error(`cards[${index}].priority must be none, low, medium, high, a, b, or c.`);
@@ -7796,7 +7819,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     const parentValue = blankToUndefined(record.parentCardId ?? defaults.parentCardId);
     if (parentValue !== undefined)
     {
-        const result = await resolveCardForUpdate(parentValue);
+        const result = await cachedResolution(context.parents, parentValue, () => resolveCardForUpdate(parentValue));
         if (!result) throw new Error(`cards[${index}].parentCardId was not found.`);
         parent = { cardId: result.cardId, cardRef: result.shortCode || null, title: result.title || "(untitled)" };
     }
@@ -7836,137 +7859,6 @@ const relationEntityId = (value: unknown): string | null =>
 {
     if (value && typeof value === "object") return String((value as CodecksEntity).id ?? (value as CodecksEntity).cardId ?? "") || null;
     return value === undefined || value === null ? null : String(value);
-};
-
-type DuplicatePolicy = "required" | "best_effort" | "skip";
-type BulkCreateOutputMode = "compact" | "detailed";
-type BulkCreateVerification = "none" | "identity";
-
-// Title-contains is the narrow, portable discovery primitive. Four logical title
-// probes are allowed; each probe can paginate and therefore use multiple HTTP requests.
-// Larger title sets use one bounded account fallback.
-const BULK_CREATE_TITLE_REQUEST_BUDGET = 4;
-const normalizeDuplicateTitle = (title: string): string => title.trim().toLocaleLowerCase();
-const recordMatchesDuplicate = (card: CodecksEntity, record: NormalizedBulkCreateRecord): boolean =>
-    normalizeDuplicateTitle(String(card.title ?? "")) === normalizeDuplicateTitle(record.title)
-    && (!record.deck || relationEntityId(card.deck) === String(record.deck.id))
-    && (!record.milestone || relationEntityId(card.milestone) === String(record.milestone.id));
-
-const emptyDuplicateCandidates = (records: NormalizedBulkCreateRecord[]): Map<number, Record<string, unknown>[]> =>
-    new Map(records.map((record) => [record.index, []]));
-
-const semanticTitleFilterRejection = (error: unknown): boolean =>
-{
-    // Only a server-declared rejection of this narrow filter can widen discovery.
-    // Transport, auth, rate, cancellation, timeout, and queue errors stay blocking.
-    const rootError = error instanceof PagedCardScanFailure ? error.cause : error;
-    if (rootError instanceof CodecksOperationError) return false;
-    const message = toErrorMessage(rootError);
-    return /^Codecks API semantic error:/i.test(message)
-        && /\btitle\b/i.test(message)
-        && /\b(?:contains|filter|operator)\b/i.test(message)
-        && /\b(?:unsupported|unavailable|invalid|not allowed|rejected)\b/i.test(message);
-};
-
-const scanStageMetadata = (stage: "title_contains" | "account_fallback", scans: PagedCardScanResult[], probesAttempted?: number, semanticRejectedProbes = 0, semanticRejectedRequests = 0) => ({
-    stage,
-    ...(probesAttempted === undefined ? {} : { probesAttempted }),
-    ...(semanticRejectedProbes > 0 ? {
-        semanticRejectedProbes,
-        semanticRejectedRequests,
-    } : {}),
-    complete: scans.every((scan) => scan.complete),
-    scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
-    requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
-    queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
-    elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
-});
-
-const scanBulkCreateDuplicates = async (records: NormalizedBulkCreateRecord[], duplicateLimit: number, scanLimit: number, policy: DuplicatePolicy) =>
-{
-    const bounds = { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) };
-    if (policy === "skip") return {
-        candidates: emptyDuplicateCandidates(records),
-        metadata: { strategy: "skipped", credentialVisibleScope: "not_scanned", complete: false, scanned: 0, scanLimit, requestsAttempted: 0, queueWaitMs: 0, elapsedMs: 0, bounds, stages: [], fallback: null, policyOutcome: "skipped_by_request" },
-    };
-
-    const titles = [...new Set(records.map((record) => normalizeDuplicateTitle(record.title)))];
-    const titleScans: PagedCardScanResult[] = [];
-    let titleProbesAttempted = 0;
-    let semanticRejectedProbes = 0;
-    let semanticRejectedRequests = 0;
-    let fallbackScan: PagedCardScanResult | null = null;
-    let fallback: string | null = null;
-    if (titles.length <= BULK_CREATE_TITLE_REQUEST_BUDGET)
-    {
-        // At most four probes run sequentially. This avoids unaccountable work if a
-        // server-declared title-filter rejection requires the account fallback.
-        for (const title of titles)
-        {
-            titleProbesAttempted += 1;
-            try
-            {
-                titleScans.push(await fetchPagedCards({
-                    filters: { title: { op: "contains", value: title } }, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500),
-                }));
-            }
-            catch (error)
-            {
-                if (!semanticTitleFilterRejection(error)) throw error instanceof PagedCardScanFailure ? error.cause : error;
-                if (error instanceof PagedCardScanFailure)
-                {
-                    titleScans.push(error.scan);
-                    semanticRejectedRequests += error.scan.requestsAttempted;
-                }
-                semanticRejectedProbes += 1;
-                fallback = "title_contains_semantically_rejected";
-                break;
-            }
-        }
-    }
-    else fallback = "title_request_budget_exceeded";
-
-    if (titleScans.length === 0 || titleScans.some((scan) => !scan.complete))
-    {
-        fallback ??= "title_scan_incomplete";
-        fallbackScan = await fetchPagedCards({ filters: {}, fields: cardPlanningFields, scanLimit, pageSize: Math.min(scanLimit, 500) });
-    }
-
-    const scans = [...titleScans, ...(fallbackScan ? [fallbackScan] : [])];
-    // Accessible archived cards are valid duplicate evidence; deleted cards are not.
-    // Inaccessible Private cards cannot be returned by this credential-visible scan.
-    const cards = scans.flatMap((scan) => scan.cards)
-        .filter((card) => String(card.visibility ?? "").toLowerCase() !== "deleted");
-    const candidates = emptyDuplicateCandidates(records);
-    if (duplicateLimit > 0) for (const record of records) candidates.set(record.index, cards
-        .filter((card) => recordMatchesDuplicate(card, record)).slice(0, duplicateLimit).map((card) => normalizeCardSearchSummary(card)));
-    const complete = fallbackScan ? fallbackScan.complete : titleScans.every((scan) => scan.complete);
-    const incompleteOnlyByBound = !complete && !!fallbackScan && fallbackScan.scanLimitReached;
-    const stages = [
-        ...(titleScans.length > 0 ? [scanStageMetadata("title_contains", titleScans, titleProbesAttempted, semanticRejectedProbes, semanticRejectedRequests)] : []),
-        ...(fallbackScan ? [scanStageMetadata("account_fallback", [fallbackScan])] : []),
-    ];
-    return {
-        candidates,
-        metadata: {
-            strategy: fallbackScan ? "account_fallback" : "title_contains",
-            credentialVisibleScope: "cards accessible to the configured credential at scan time (including archived cards when returned; excluding deleted and inaccessible Private cards)",
-            complete,
-            scanned: scans.reduce((total, scan) => total + scan.scannedCards, 0),
-            scanLimit,
-            requestsAttempted: scans.reduce((total, scan) => total + scan.requestsAttempted, 0),
-            queueWaitMs: scans.reduce((total, scan) => total + scan.queueWaitMs, 0),
-            elapsedMs: scans.reduce((total, scan) => total + scan.elapsedMs, 0),
-            ...(semanticRejectedProbes > 0 ? {
-                semanticRejectedProbes,
-                semanticRejectedRequests,
-            } : {}),
-            bounds,
-            stages,
-            fallback,
-            policyOutcome: complete ? "complete" : (incompleteOnlyByBound ? "incomplete_scan_limit" : "incomplete"),
-        },
-    };
 };
 
 const normalizedMutationFingerprint = (value: Record<string, unknown>): string =>
@@ -8043,519 +7935,168 @@ const publicCardIdentity = (identity: Pick<DispatchCardIdentity, "cardId" | "acc
     };
 };
 
-const verifyCreatedCard = async (identity: DispatchCardIdentity): Promise<{ state: "identity_verified" | "not_found" | "mismatch"; observed?: Record<string, unknown>; checkedFields: string[] }> =>
-{
-    const card = identity.accountSeq !== null
-        ? await fetchCardByAccountSeqExactlyOnce(identity.accountSeq, ["cardId", "accountSeq", "title"])
-        : identity.cardId
-            ? await fetchCardByIdExactlyOnce(identity.cardId, ["cardId", "accountSeq", "title"])
-            : undefined;
-    // No persisted entity means no identity component was compared.
-    if (!card) return { state: "not_found", checkedFields: [] };
 
-    const persistedIdentity: DispatchCardIdentity = {
-        cardId: card.cardId === undefined || card.cardId === null ? null : String(card.cardId),
-        accountSeq: parseCardAccountSeq(card.accountSeq),
-        title: typeof card.title === "string" ? card.title : null,
-    };
-    const checkedFields: string[] = [];
-    if (identity.cardId) checkedFields.push("cardId");
-    if (identity.accountSeq !== null) checkedFields.push("accountSeq");
-    const observed = { ...publicCardIdentity(persistedIdentity), title: persistedIdentity.title };
-    const mismatch = (identity.cardId !== null && persistedIdentity.cardId !== identity.cardId)
-        || (identity.accountSeq !== null && persistedIdentity.accountSeq !== identity.accountSeq);
-    return { state: mismatch ? "mismatch" : "identity_verified", observed, checkedFields };
-};
+const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord) => ({
+    index: record.index,
+    correlationKey: record.correlationKey,
+    normalizedRequested: {
+        title: record.title, content: record.content, cardType: record.cardType, deck: record.deck,
+        milestone: record.milestone, assignee: record.assignee, effort: record.effort, priority: record.priority,
+        tags: record.tags, putOnHand: record.putOnHand, parent: record.parent,
+    },
+});
 
-const publicBulkCreateRecord = (record: NormalizedBulkCreateRecord, duplicateCandidates: Record<string, unknown>[]) =>
-{
-    const normalizedRequested = {
-        title: record.title,
-        content: record.content,
-        contentMode: "replace",
-        cardType: record.cardType,
-        deck: record.deck,
-        milestone: record.milestone,
-        assignee: record.assignee,
-        effort: record.effort,
-        priority: record.priority,
-        tags: record.tags,
-        bodyHashtags: record.bodyHashtags,
-        putOnHand: record.putOnHand,
-        handState: record.putOnHand ? "on_hand" : "off_hand",
-        parent: record.parent,
-        run: null,
-        privateCard: !record.deck && !record.parent,
-    } as Record<string, unknown>;
-    return {
-        index: record.index,
-        operation: "create",
-        correlationKey: record.correlationKey,
-        actionKey: actionKeyFor("create", record.index, record.payload),
-        normalizedRequested,
-        normalizedRequestedFingerprint: normalizedMutationFingerprint(normalizedRequested),
-        dispatchReturned: null,
-        persistedVerified: null,
-        verificationState: "not_performed",
-        ...normalizedRequested,
-        duplicateCandidates,
-    };
-};
-
-const compactBulkCreateRecord = (entry: Record<string, unknown>): Record<string, unknown> =>
-{
-    const result: Record<string, unknown> = {
-        index: entry.index,
-        correlationKey: entry.correlationKey,
-        status: entry.status,
-        certainty: entry.certainty,
-    };
-    const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
-    if (identity?.cardRef) result.cardRef = identity.cardRef;
-    if (identity?.cardId) result.cardId = identity.cardId;
-    if (identity?.accountSeqRef) result.accountSeqRef = identity.accountSeqRef;
-    if (entry.status === "indeterminate") result.actionKey = entry.actionKey;
-    if (entry.verificationState) result.verificationState = entry.verificationState;
-    if (Array.isArray(entry.verificationCheckedFields)) result.verificationCheckedFields = entry.verificationCheckedFields;
-    if (entry.verificationObservedIdentity) result.verificationObservedIdentity = entry.verificationObservedIdentity;
-    if (entry.verificationWarning) result.verificationWarning = String(entry.verificationWarning).slice(0, 240);
-    if (entry.verificationError && isRecord(entry.verificationError)) result.verificationError = {
-        category: entry.verificationError.category,
-        message: String(entry.verificationError.message ?? "Verification read failed.").slice(0, 240),
-    };
-    if (entry.error) result.error = entry.error;
-    if (entry.reconciliation) result.reconciliation = entry.reconciliation;
-    return result;
-};
-
-const boundedBulkWarnings = (metadata: Record<string, unknown>, policy: DuplicatePolicy): string[] =>
-{
-    const warnings: string[] = [];
-    if (policy === "skip") warnings.push("Duplicate discovery was skipped by explicit request.");
-    else if (metadata.complete === false) warnings.push("Duplicate discovery is incomplete; no-match rows are not definitive evidence.");
-    if (metadata.policyOutcome === "parent_local_required_unavailable") warnings.push("Parent-local duplicate matching is unavailable; this is a preview only and no create was dispatched.");
-    if (typeof metadata.fallback === "string" && metadata.fallback !== "parent_local_required_unavailable") warnings.push(`Duplicate discovery used account fallback: ${metadata.fallback}.`);
-    return warnings.slice(0, 3);
-};
-
-const preflightOutcomeRecords = (records: unknown[], operation: "create" | "update", errors: Array<{ index?: number; message: string }> = []) =>
-{
+const preflightOutcomeRecords = (records: unknown[], operationOrErrors: "create" | "update" | Array<{ index?: number; message: string }> = "create", maybeErrors: Array<{ index?: number; message: string }> = []) => {
+    const errors = Array.isArray(operationOrErrors) ? operationOrErrors : maybeErrors;
+    const operation = Array.isArray(operationOrErrors) ? "create" : operationOrErrors;
     const byIndex = new Map<number, string[]>();
-    for (const error of errors)
-    {
-        const index = error.index ?? Number(error.message.match(/\[(\d+)\]/)?.[1]);
-        if (Number.isInteger(index)) byIndex.set(index, [...(byIndex.get(index) ?? []), error.message]);
-    }
-    return records.map((record, index) =>
-    {
-        const input = isRecord(record) ? record : {};
-        const messages = byIndex.get(index) ?? [];
-        return {
-            index,
-            operation,
-            correlationKey: typeof input.correlationKey === "string" ? input.correlationKey : null,
-            actionKey: null,
-            status: messages.length > 0 ? "failed" : "definitely_unsent",
-            certainty: messages.length > 0 ? "definitely_rejected" : "definitely_unsent",
-            ...(messages.length > 0 ? { error: { category: "validation_error", message: messages.join(" ") } } : {}),
-        };
-    });
+    for (const error of errors) { const index = error.index ?? Number(error.message.match(/\[(\d+)\]/)?.[1]); if (Number.isInteger(index)) byIndex.set(index, [...(byIndex.get(index) ?? []), error.message]); }
+    return records.map((record, index) => ({ index, correlationKey: isRecord(record) && typeof record.correlationKey === "string" ? record.correlationKey : null, status: byIndex.has(index) ? "failed" : "definitely_unsent", certainty: byIndex.has(index) ? "definitely_rejected" : "definitely_unsent", ...(byIndex.has(index) ? { error: { category: "validation_error", message: byIndex.get(index)!.join(" ") } } : {}) , operation }));
 };
-
-const isOperationalError = (error: unknown): boolean =>
-{
-    if (error instanceof CodecksOperationError) return true;
-    return ["caller_aborted", "rate_limit_queue_aborted", "request_timeout", "rate_limited", "scan_queue_full"].includes(classifyApiErrorCategory(toErrorMessage(error)));
-};
-
+const markDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number) => { for (const entry of results) if (Number(entry.index) > afterIndex && entry.status === "ready") { entry.status = "definitely_unsent"; entry.certainty = "definitely_unsent"; } };
+const isOperationalError = (error: unknown): boolean => error instanceof CodecksOperationError;
 const classifyMutationOutcome = (error: unknown): "failed" | "indeterminate" =>
-{
-    if (error instanceof CodecksOperationError && ["request_timeout", "caller_aborted"].includes(error.category)) return "indeterminate";
-    const message = toErrorMessage(error);
-    return /\b(?:5\d\d|timeout|timed out|network|socket|connection|econn|epipe|fetch failed)\b/i.test(message)
-        ? "indeterminate"
-        : "failed";
-};
-
-const markDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number): void =>
-{
-    for (const entry of results)
-    {
-        if (Number(entry.index) > afterIndex && entry.status === "ready")
-        {
-            entry.status = "definitely_unsent";
-            entry.certainty = "definitely_unsent";
-            entry.reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made." };
-        }
+    error instanceof CodecksOperationError && ["request_timeout", "caller_aborted"].includes(error.category) || /\b(?:5\d\d|timeout|network|socket|connection|fetch failed)\b/i.test(toErrorMessage(error)) ? "indeterminate" : "failed";
+const markBulkCreateDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number) => {
+    for (const entry of results) if (Number(entry.index) > afterIndex && entry.status === "ready") {
+        entry.status = "definitely_unsent"; entry.certainty = "definitely_unsent";
+        entry.recovery = "No dispatch attempt was made; this record is safe to submit later.";
     }
 };
 
-// Create dispatch is sequential: every later normalized record is known not to
-// have reached runDispatch, irrespective of its pre-dispatch duplicate status.
-const markBulkCreateDefinitelyUnsent = (results: Record<string, unknown>[], afterIndex: number): void =>
-{
-    for (const entry of results)
+const writeBulkCreateArtifact = async (details: Record<string, unknown>) => {
+    try
     {
-        if (Number(entry.index) <= afterIndex || entry.dispatchAttemptState !== "not_attempted") continue;
-        entry.status = "definitely_unsent";
-        entry.certainty = "definitely_unsent";
-        entry.reconciliation = {
-            retry: "safe_to_submit_after_reconciliation",
-            reason: "No dispatch attempt was made; retain and reconcile this record's duplicate evidence before continuing.",
-        };
+        const directory = await fs.mkdtemp(join(tmpdir(), "pi-codecks-bulk-create-"));
+        const path = join(directory, "result.json");
+        await fs.writeFile(path, `${JSON.stringify(details, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        return { path, format: "json", temporary: true };
+    }
+    catch (error)
+    {
+        return { unavailable: true, reason: "The sanitized detailed-result artifact could not be written." };
     }
 };
 
 export const card_bulk_create = tool({
-    description: "Preview or create multiple Codecks cards with duplicate detection and per-card status results.",
+    description: "Preview or create multiple Codecks cards with normalized, per-record outcomes.",
     args: {
-        cards: tool.schema.array(tool.schema.object({
-            correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
-            deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
-            effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
-            putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional(),
-        })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
-        deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default deck name or ID for cards without a deck."),
-        milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default milestone name or ID for cards without a milestone."),
-        parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Default parent Hero card for cards without a parentCardId."),
-        dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."),
-        duplicateLimit: tool.schema.number().min(0).max(20).optional().describe("Maximum duplicate candidates to record per card. Defaults to 5."),
-        duplicateScanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum rows per bounded duplicate-discovery relation. Defaults to 3000."),
-        duplicatePolicy: tool.schema.enum(["required", "best_effort", "skip"]).optional().describe("Duplicate evidence policy. Dry-run defaults to required; apply defaults to best_effort. skip performs no discovery."),
-        verification: tool.schema.enum(["none", "identity"]).optional().describe("Post-create verification. none (default) performs zero reads; identity makes at most one exact read for each identifiable create."),
-        outputMode: tool.schema.enum(["compact", "detailed"]).optional().describe("Structured result detail. Dry-run defaults to detailed (schema v1); apply defaults to compact (schema v2)."),
-        continueOnError: tool.schema.boolean().optional().describe("Continue applying later cards after an apply failure. Defaults to true."),
-        format: outputFormatArg,
+        cards: tool.schema.array(tool.schema.object({ correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(), deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional() })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
+        deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."), format: outputFormatArg,
     },
-    async execute(args)
-    {
-        const format = args.format ?? "text";
-        const dryRun = args.dryRun !== false;
-        const continueOnError = args.continueOnError !== false;
-        const duplicatePolicy: DuplicatePolicy = (args.duplicatePolicy as DuplicatePolicy | undefined) ?? (dryRun ? "required" : "best_effort");
-        const verification: BulkCreateVerification = (args.verification as BulkCreateVerification | undefined) ?? "none";
-        const outputMode: BulkCreateOutputMode = (args.outputMode as BulkCreateOutputMode | undefined) ?? (dryRun ? "detailed" : "compact");
-        const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : [];
-        const progressStartedAt = Date.now();
-        emitBulkCreateProgress(progressStartedAt, "validating", 0);
-        const structuralErrors = validateStrictBulkRecords(rawRecords, "create");
-        if (structuralErrors.length > 0)
-        {
-            const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
-            return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), {
-                indexedErrors: structuralErrors,
-                invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
-                requestsAttempted: 0,
-                results: preflightOutcomeRecords(rawRecords, "create", indexedErrors),
-            });
-        }
-
-        const defaults: BulkCreateRecord = {
-            deck: blankToUndefined(args.deck),
-            milestone: blankToUndefined(args.milestone),
-            parentCardId: blankToUndefined(args.parentCardId),
-        };
-        const normalized: NormalizedBulkCreateRecord[] = [];
-        const normalizationErrors: Array<{ index: number; message: string }> = [];
-        let loggedInUser: CodecksUser;
-        emitBulkCreateProgress(progressStartedAt, "normalizing", 0);
-        try
-        {
-            loggedInUser = await fetchLoggedInUser();
-        }
-        catch (error)
-        {
-            return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
-        }
-        for (let index = 0; index < rawRecords.length; index += 1)
-        {
-            try
-            {
-                normalized.push(await normalizeBulkCreateRecord(rawRecords[index] as BulkCreateRecord, defaults, index, loggedInUser));
-                emitBulkCreateProgress(progressStartedAt, "normalizing", index + 1);
+    async execute(args) {
+        return withOperationContextIfMissing(async () => {
+        const format = args.format ?? "text"; const dryRun = args.dryRun !== false; const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : []; const startedAt = Date.now();
+        emitBulkCreateProgress(startedAt, "validating", 0);
+        const allowedArguments = new Set(["cards", "deck", "milestone", "parentCardId", "dryRun", "format"]);
+        const topLevelErrors = Object.keys(args).filter((field) => !allowedArguments.has(field)).map((field) => `bulk create argument ${field} is unsupported.`);
+        const structuralErrors = [...topLevelErrors, ...validateStrictBulkRecords(rawRecords, "create")];
+        if (structuralErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), { indexedErrors: structuralErrors, results: preflightOutcomeRecords(rawRecords, structuralErrors.map(message => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }))), requestsAttempted: 0 });
+        const defaults: BulkCreateRecord = { deck: blankToUndefined(args.deck), milestone: blankToUndefined(args.milestone), parentCardId: blankToUndefined(args.parentCardId) };
+        let user: CodecksUser;
+        try { user = await fetchLoggedInUser(); } catch (error) { return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        const normalized: NormalizedBulkCreateRecord[] = []; const normalizationErrors: Array<{ index: number; message: string }> = [];
+        const normalizationContext: BulkCreateNormalizationContext = { decks: new Map(), milestones: new Map(), assignees: new Map(), parents: new Map() };
+        for (let index = 0; index < rawRecords.length; index++) {
+            try {
+                normalized.push(await normalizeBulkCreateRecord(rawRecords[index] as BulkCreateRecord, defaults, index, user, normalizationContext));
+                emitBulkCreateProgress(startedAt, "normalizing", index + 1);
             }
             catch (error)
             {
-                if (isOperationalError(error))
-                {
-                    const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-                    emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, index);
-                    return toStructuredErrorResult(format, "card-bulk-create", category, toErrorMessage(error), {
-                        ...getOperationErrorData(error),
-                        recordsProcessed: index,
-                    });
+                if (isOperationalError(error)) {
+                    const category = error.category;
+                    const results = preflightOutcomeRecords(rawRecords, [{ index, message: toErrorMessage(error) }]);
+                    for (const entry of results) if (Number(entry.index) !== index && entry.status === "definitely_unsent") (entry as Record<string, unknown>).recovery = "No dispatch attempt was made; this record is safe to submit later.";
+                    return toStructuredErrorResult(format, "card-bulk-create", category, toErrorMessage(error), { ...getOperationErrorData(error), results });
                 }
                 normalizationErrors.push({ index, message: toErrorMessage(error) });
             }
         }
-        if (normalizationErrors.length > 0)
-        {
-            return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map((entry) => entry.message).join(" "), {
-                indexedErrors: normalizationErrors,
-                invalidRecordCount: normalizationErrors.length,
-                requestsAttempted: 0,
-                results: preflightOutcomeRecords(rawRecords, "create", normalizationErrors),
-            });
-        }
-
-        const parentScopedRequiredUnavailable = duplicatePolicy === "required" && normalized.some((record) => record.parent);
-        if (parentScopedRequiredUnavailable && !dryRun)
-        {
-            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "duplicatePolicy=required is unavailable for parent-scoped creates until parent-local duplicate matching is supported.", {
-                duplicatePolicy,
-                requestsAttempted: 0,
-                recoveryHint: "Use duplicatePolicy=best_effort after reviewing a dry-run, or omit parentCardId for an account-visible required check.",
-            });
-        }
-
-        let duplicateScan: Awaited<ReturnType<typeof scanBulkCreateDuplicates>>;
-        if (parentScopedRequiredUnavailable)
-        {
-            const scanLimit = args.duplicateScanLimit ?? 3000;
-            duplicateScan = {
-                candidates: emptyDuplicateCandidates(normalized),
-                metadata: {
-                    strategy: "parent_local_unavailable",
-                    credentialVisibleScope: "not_scanned",
-                    complete: false,
-                    scanned: 0,
-                    scanLimit,
-                    requestsAttempted: 0,
-                    queueWaitMs: 0,
-                    elapsedMs: 0,
-                    bounds: { titleRequestBudget: BULK_CREATE_TITLE_REQUEST_BUDGET, titleRequestBudgetUnit: "logical_title_probes", scanLimit, pageSize: Math.min(scanLimit, 500) },
-                    stages: [],
-                    fallback: "parent_local_required_unavailable",
-                    policyOutcome: "parent_local_required_unavailable",
-                },
-            };
-        }
-        else try
-        {
-            emitBulkCreateProgress(progressStartedAt, "duplicate_discovery", normalized.length);
-            duplicateScan = await scanBulkCreateDuplicates(normalized, args.duplicateLimit ?? 5, args.duplicateScanLimit ?? 3000, duplicatePolicy);
-            emitBulkCreateProgress(progressStartedAt, "duplicate_discovery_complete", normalized.length);
-        }
-        catch (error)
-        {
-            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-            emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, normalized.length);
-            return toStructuredErrorResult(
-                format,
-                "card-bulk-create",
-                category,
-                toErrorMessage(error),
-                getOperationErrorData(error),
-            );
-        }
-
-        if (!parentScopedRequiredUnavailable) duplicateScan.metadata.policyOutcome = duplicatePolicy === "skip"
-            ? "skipped_by_request"
-            : duplicateScan.metadata.complete
-                ? "complete"
-                : duplicatePolicy === "required"
-                    ? (dryRun ? "required_incomplete_review" : "required_blocked")
-                    : (dryRun ? "best_effort_incomplete_review" : "best_effort_proceeded");
-
-        if (!duplicateScan.metadata.complete && !dryRun && duplicatePolicy === "required")
-        {
-            return toStructuredErrorResult(format, "card-bulk-create", "conflict", "Duplicate discovery is incomplete under duplicatePolicy=required; no creates were dispatched.", {
-                scan: duplicateScan.metadata,
-                duplicatePolicy,
-                recoveryHint: "Increase duplicateScanLimit or use duplicatePolicy=best_effort only after reviewing the incomplete evidence.",
-            });
-        }
-
-        const results: Record<string, unknown>[] = normalized.map((record) =>
-        {
-            const candidates = duplicateScan.candidates.get(record.index) ?? [];
-            const preDispatchStatus = duplicatePolicy === "skip" || duplicateScan.metadata.complete
-                ? (candidates.length > 0 ? "duplicate_candidate" : "ready")
-                : "scan_incomplete";
-            return {
-                ...publicBulkCreateRecord(record, candidates),
-                status: preDispatchStatus,
-                preDispatchStatus,
-                dispatchAttemptState: "not_attempted",
-                certainty: "not_dispatched",
-                verificationState: dryRun ? "not_applicable" : (verification === "none" ? "not_requested" : "not_identifiable"),
-                ...(verification === "identity" ? { verificationCheckedFields: [] } : {}),
-            };
-        });
-
-        emitBulkCreateProgress(progressStartedAt, dryRun ? "dry_run_ready" : "applying", 0, results);
-        if (!dryRun)
-        {
-            for (const record of normalized)
-            {
-                try
-                {
-                    results[record.index].dispatchAttemptState = "attempted";
-                    const response = unwrapData(await runDispatch("cards/create", record.payload));
-                    const dispatchIdentity = extractDispatchCardIdentity(response);
-                    results[record.index].status = "created";
-                    results[record.index].certainty = "dispatch_returned";
-                    results[record.index].dispatchReturned = truncateStructuredValue(response ?? null).value;
-                    // `created` is retained for compatibility; `dispatchIdentity` makes its source explicit.
-                    results[record.index].dispatchIdentity = publicCardIdentity(dispatchIdentity);
-                    results[record.index].created = {
-                        ...publicCardIdentity(dispatchIdentity),
-                        title: dispatchIdentity.title,
-                    };
-                    let verificationOperationalError: unknown;
-                    if (verification === "identity")
-                    {
-                        if (dispatchIdentity.cardId || dispatchIdentity.accountSeq !== null)
-                        {
-                            try
-                            {
-                                const identityCheck = await verifyCreatedCard(dispatchIdentity);
-                                results[record.index].verificationState = identityCheck.state;
-                                results[record.index].verificationCheckedFields = identityCheck.checkedFields;
-                                if (identityCheck.state === "not_found") results[record.index].verificationWarning = "Identity was not found after one read; this can be eventual-consistency delay, not a failed create.";
-                                if (identityCheck.observed) results[record.index].verificationObservedIdentity = identityCheck.observed;
-                                if (identityCheck.state === "identity_verified" && identityCheck.observed) results[record.index].persistedVerified = identityCheck.observed;
-                            }
-                            catch (error)
-                            {
-                                results[record.index].verificationState = "read_failed";
-                                results[record.index].verificationError = {
-                                    category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
-                                    message: toErrorMessage(error),
-                                    ...getOperationErrorData(error),
-                                };
-                                if (isOperationalError(error)) verificationOperationalError = error;
-                            }
-                        }
-                        else
-                        {
-                            results[record.index].verificationState = "not_identifiable";
-                        }
-                    }
-                    emitBulkCreateProgress(progressStartedAt, "applying", record.index + 1, results);
-                    if (verificationOperationalError)
-                    {
-                        const category = verificationOperationalError instanceof CodecksOperationError
-                            ? verificationOperationalError.category
-                            : classifyApiErrorCategory(toErrorMessage(verificationOperationalError));
-                        markBulkCreateDefinitelyUnsent(results, record.index);
-                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
-                        break;
-                    }
-                }
-                catch (error)
-                {
+        if (normalizationErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map(x => x.message).join(" "), { indexedErrors: normalizationErrors, results: preflightOutcomeRecords(rawRecords, normalizationErrors), requestsAttempted: 0 });
+        const results = normalized.map(record => ({ ...publicBulkCreateRecord(record), status: dryRun ? "preview" : "ready", certainty: "not_dispatched" } as Record<string, unknown>));
+        const normalizationRequests = getOperationContext()?.requestsAttempted ?? 0;
+        const retryEvents: Array<{ index: number; retryAttempt: number; retryAfterMs: number; retryAfterFormat?: "codecks_milliseconds" | "http_date" }> = [];
+        const rateLimitEvents: Array<{ index: number; retryAttempt: number; retryAttempted: boolean; retryAfterMs?: number; retryAfterFormat?: "codecks_milliseconds" | "http_date"; retryAfterParseStatus?: RetryAfterParseStatus; retryAfterReason?: string; reason: string }> = [];
+        let uniqueRecordsAttempted = 0;
+        let consecutive429 = 0;
+        let plannedServerRecoveryWaitMs = 0;
+        let safeContinuationStartIndex: number | null = null;
+        if (!dryRun) for (const record of normalized) {
+            uniqueRecordsAttempted += 1;
+            let retryAttempt = 0;
+            while (true) {
+                emitBulkCreateProgress(startedAt, "dispatching", record.index, results, undefined, { recordIndex: record.index + 1, recordCount: normalized.length });
+                try {
+                    const identity = extractDispatchCardIdentity(unwrapData(await runDispatch("cards/create", record.payload)));
+                    results[record.index].status = "created"; results[record.index].certainty = "dispatch_returned"; results[record.index].card = publicCardIdentity(identity);
+                    consecutive429 = 0;
+                    break;
+                } catch (error) {
                     const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-                    if (category === "rate_limit_queue_aborted")
-                    {
-                        results[record.index].status = "definitely_unsent";
-                        results[record.index].certainty = "definitely_unsent";
-                        results[record.index].error = { category, message: toErrorMessage(error), ...getOperationErrorData(error), retried: false };
-                        results[record.index].reconciliation = { retry: "safe_to_submit_after_reconciliation", reason: "No dispatch attempt was made because the local rate queue was cancelled." };
-                        markBulkCreateDefinitelyUnsent(results, record.index);
-                        emitBulkCreateProgress(progressStartedAt, "stopped_rate_limit_queue_aborted", record.index, results);
-                        break;
+                    const errorData = getOperationErrorData(error);
+                    const retryAfterMs = typeof errorData.retryAfterMs === "number" ? errorData.retryAfterMs : undefined;
+                    const retryAfterFormat = errorData.retryAfterFormat === "codecks_milliseconds" || errorData.retryAfterFormat === "http_date" ? errorData.retryAfterFormat : undefined;
+                    const retryAfterParseStatus = errorData.retryAfterParseStatus === "missing" || errorData.retryAfterParseStatus === "valid" || errorData.retryAfterParseStatus === "malformed" || errorData.retryAfterParseStatus === "negative" || errorData.retryAfterParseStatus === "non_finite" || errorData.retryAfterParseStatus === "over_budget" ? errorData.retryAfterParseStatus : undefined;
+                    const retryAfterReason = typeof errorData.retryAfterReason === "string" ? errorData.retryAfterReason : undefined;
+                    const nextConsecutive429 = category === "rate_limited" ? consecutive429 + 1 : consecutive429;
+                    if (category === "rate_limited") consecutive429 = nextConsecutive429;
+                    if (category === "rate_limited" && retryAfterMs !== undefined && nextConsecutive429 < BULK_CREATE_MAX_CONSECUTIVE_429 && plannedServerRecoveryWaitMs + retryAfterMs <= MAX_SERVER_COOLDOWN_MS) {
+                        retryAttempt += 1;
+                        plannedServerRecoveryWaitMs += retryAfterMs;
+                        retryEvents.push({ index: record.index, retryAttempt, retryAfterMs, retryAfterFormat });
+                        rateLimitEvents.push({ index: record.index, retryAttempt, retryAttempted: true, retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, reason: "Retrying after valid bounded Retry-After." });
+                        emitBulkCreateProgress(startedAt, "rate_limited_retrying", record.index, results, undefined, {
+                            recordIndex: record.index + 1, recordCount: normalized.length, retryAttempt, retryMax: BULK_CREATE_MAX_CONSECUTIVE_429 - 1,
+                            retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, rateLimitError: "Codecks rejected the request with HTTP 429.", consecutive429,
+                        });
+                        // Only a 429 is explicitly rejected; the shared gate observes Retry-After before retrying.
+                        continue;
                     }
-
-                    const outcome = classifyMutationOutcome(error);
-                    results[record.index].status = outcome;
-                    results[record.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
-                    results[record.index].error = { category, message: toErrorMessage(error), ...getOperationErrorData(error), retried: false };
-                    if (category === "rate_limited")
-                    {
-                        results[record.index].reconciliation = { retry: "safe_to_submit_after_server_cooldown", reason: "Codecks rejected this dispatch with 429; previously created cards must not be replayed." };
-                        markBulkCreateDefinitelyUnsent(results, record.index);
-                        emitBulkCreateProgress(progressStartedAt, "stopped_rate_limited", record.index + 1, results);
-                        break;
-                    }
-                    if (outcome === "indeterminate")
-                    {
-                        results[record.index].reconciliation = { actionKey: results[record.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
-                        markBulkCreateDefinitelyUnsent(results, record.index);
-                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
-                        break;
-                    }
-                    if (isOperationalError(error) || !continueOnError)
-                    {
-                        markBulkCreateDefinitelyUnsent(results, record.index);
-                        emitBulkCreateProgress(progressStartedAt, `stopped_${category}`, record.index + 1, results);
-                        break;
-                    }
-                    emitBulkCreateProgress(progressStartedAt, "applying", record.index + 1, results);
+                    if (category === "rate_limited") rateLimitEvents.push({
+                        index: record.index, retryAttempt, retryAttempted: false, retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason,
+                        reason: retryAfterParseStatus === "over_budget" ? "Retry-After exceeds the operation recovery budget." : retryAfterParseStatus && retryAfterParseStatus !== "valid" ? "Retry-After could not be used for automatic recovery." : nextConsecutive429 >= BULK_CREATE_MAX_CONSECUTIVE_429 ? "Maximum consecutive HTTP 429 responses reached." : "Retry was not attempted.",
+                    });
+                    if (category === "rate_limit_queue_aborted") { results[record.index].status = "definitely_unsent"; results[record.index].certainty = "definitely_unsent"; }
+                    else { const outcome = classifyMutationOutcome(error); results[record.index].status = outcome; results[record.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected"; }
+                    results[record.index].error = { category, message: toErrorMessage(error), ...errorData };
+                    safeContinuationStartIndex = record.index + 1 < rawRecords.length ? record.index + 1 : null;
+                    markBulkCreateDefinitelyUnsent(results, record.index);
+                    emitBulkCreateProgress(startedAt, `stopped_${category}`, record.index, results, undefined, category === "rate_limited" ? {
+                        recordIndex: record.index + 1, recordCount: normalized.length, retryAttempt, retryMax: BULK_CREATE_MAX_CONSECUTIVE_429 - 1,
+                        retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, rateLimitError: toErrorMessage(error), consecutive429,
+                    } : undefined);
+                    break;
                 }
             }
+            if (results[record.index].status !== "created") break;
+            emitBulkCreateProgress(startedAt, "applying", record.index + 1, results);
         }
-
-        const created = results.filter((entry) => entry.status === "created").length;
-        const failed = results.filter((entry) => entry.status === "failed").length;
-        const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
-        const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
-        const duplicateCandidates = results.filter((entry) => Array.isArray(entry.duplicateCandidates) && entry.duplicateCandidates.length > 0).length;
-        const lines = [
-            "## Bulk Card Create",
-            "",
-            `Mode: ${dryRun ? "dry-run" : "apply"}`,
-            `Records: ${rawRecords.length}`,
-            `Created: ${created}`,
-            `Failed: ${failed}`,
-            `Indeterminate: ${indeterminate}`,
-            `Definitely Unsent: ${definitelyUnsent}`,
-            `Duplicate Candidates: ${duplicateCandidates}`,
-            `Discovery: ${duplicateScan.metadata.strategy}; ${duplicateScan.metadata.complete ? "complete" : "incomplete"}; ${duplicateScan.metadata.scanned} rows; ${duplicateScan.metadata.requestsAttempted} request(s); policy ${duplicatePolicy}`,
-            "",
-            ...results.map((entry) => {
-                const identity = entry.dispatchIdentity as Record<string, unknown> | undefined;
-                const reference = identity?.cardRef ? ` ${identity.cardRef}` : "";
-                const cardId = identity?.cardId ? ` (${identity.cardId})` : "";
-                const detail = entry.status === "indeterminate"
-                    ? ` — reconcile; action ${entry.actionKey}`
-                    : entry.error && isRecord(entry.error) ? ` — ${String(entry.error.message ?? "error")}` : "";
-                const verificationState = entry.verificationState ? `; verification ${entry.verificationState}` : "";
-                const checkedFields = Array.isArray(entry.verificationCheckedFields) && entry.verificationCheckedFields.length > 0
-                    ? ` (${entry.verificationCheckedFields.join(", ")})` : "";
-                const verificationObserved = isRecord(entry.verificationObservedIdentity)
-                    ? `; observed ${String(entry.verificationObservedIdentity.cardRef ?? entry.verificationObservedIdentity.cardId ?? "identity")}` : "";
-                const verificationDetail = entry.verificationWarning
-                    ? `; ${String(entry.verificationWarning).slice(0, 240)}`
-                    : isRecord(entry.verificationError) ? `; verification read error: ${String(entry.verificationError.message ?? "failed").slice(0, 240)}` : "";
-                return `- #${Number(entry.index) + 1}${entry.correlationKey ? ` [${entry.correlationKey}]` : ""} ${entry.status}/${entry.certainty}${reference}${cardId}${verificationState}${checkedFields}${verificationObserved}${detail}${verificationDetail}`;
-            }),
-        ];
-        const warnings = boundedBulkWarnings(duplicateScan.metadata, duplicatePolicy);
-        const detailedData = {
-            responseSchemaVersion: 1,
-            dryRun,
-            outputMode: "detailed",
-            duplicatePolicy,
-            verification,
-            count: rawRecords.length,
-            created,
-            failed,
-            indeterminate,
-            definitelyUnsent,
-            invalidRecordCount: 0,
-            duplicateCandidates,
-            complete: duplicateScan.metadata.complete,
-            scan: duplicateScan.metadata,
-            results,
+        const count = (status: string) => results.filter(x => x.status === status).length;
+        const operation = getOperationContext();
+        const metrics = {
+            elapsedMs: Math.max(0, Date.now() - startedAt),
+            physicalRequests: operation?.requestsAttempted ?? 0,
+            normalizationRequests,
+            dispatchRequests: Math.max(0, (operation?.requestsAttempted ?? 0) - normalizationRequests),
+            uniqueRecordsAttempted,
+            localGateWaitMs: operation?.localGateWaitMs ?? 0,
+            serverCooldownWaitMs: operation?.serverCooldownWaitMs ?? 0,
+            consecutive429,
+            maxConsecutive429: BULK_CREATE_MAX_CONSECUTIVE_429,
+            serverRecoveryWaitBudgetMs: MAX_SERVER_COOLDOWN_MS,
+            retryEvents,
+            rateLimitEvents,
+            safeContinuationRange: safeContinuationStartIndex === null ? null : { startIndex: safeContinuationStartIndex, endIndex: rawRecords.length - 1 },
         };
-        const compactData = {
-            responseSchemaVersion: 2,
-            dryRun,
-            outputMode: "compact",
-            duplicatePolicy,
-            verification,
-            count: rawRecords.length,
-            created,
-            failed,
-            indeterminate,
-            definitelyUnsent,
-            duplicateCandidates,
-            duplicateDiscovery: duplicateScan.metadata,
-            results: results.map(compactBulkCreateRecord),
-        };
-        emitBulkCreateProgress(progressStartedAt, "completed", rawRecords.length, results);
-        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), outputMode === "detailed" ? detailedData : compactData, warnings);
+        const totals = { dryRun, count: rawRecords.length, created: count("created"), failed: count("failed"), indeterminate: count("indeterminate"), definitelyUnsent: count("definitely_unsent") };
+        const artifact = await writeBulkCreateArtifact({ action: "card-bulk-create", createdAt: new Date().toISOString(), ...totals, metrics, results });
+        const exceptionalResults = results.filter(result => result.status !== "created" && result.status !== "preview");
+        const data = { ...totals, metrics, results: exceptionalResults, artifact };
+        const lines = ["## Bulk Card Create", "", `Mode: ${dryRun ? "dry-run" : "apply"}`, `Records: ${rawRecords.length}`, `Created: ${data.created}`, `Failed: ${data.failed}`, `Indeterminate: ${data.indeterminate}`, `Definitely Unsent: ${data.definitelyUnsent}`, `Physical Requests: ${metrics.physicalRequests}`, `Local Gate Wait: ${metrics.localGateWaitMs}ms`, `Server Cooldown Wait: ${metrics.serverCooldownWaitMs}ms`, `429 Recovery: ${metrics.retryEvents.length} retry event(s), ${metrics.consecutive429}/${metrics.maxConsecutive429} final consecutive`, `Detailed Results: ${"path" in artifact ? artifact.path : "unavailable"}`, ...(exceptionalResults.length ? ["", ...exceptionalResults.map(x => `- #${Number(x.index) + 1}${x.correlationKey ? ` [${x.correlationKey}]` : ""} ${x.status}/${x.certainty}${x.error && isRecord(x.error) ? ` — ${String(x.error.message)}` : ""}`)] : [])];
+        emitBulkCreateProgress(startedAt, "completed", rawRecords.length, results);
+        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), data);
+        });
     },
 });
 

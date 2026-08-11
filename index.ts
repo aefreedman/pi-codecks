@@ -442,37 +442,21 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   card_bulk_create: {
     parameters: Type.Object({
       cards: Type.Array(bulkCreateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card-create records. Use assigneeId (from codecks_user_lookup), never assignee." }),
-      deck: Type.Optional(cardRefSchema),
-      milestone: Type.Optional(cardRefSchema),
-      parentCardId: Type.Optional(cardRefSchema),
-      dryRun: Type.Optional(Type.Boolean()),
-      duplicateLimit: Type.Optional(Type.Number({ minimum: 0, maximum: 20 })),
-      duplicateScanLimit: Type.Optional(Type.Number({ minimum: 1, maximum: 10000 })),
-      duplicatePolicy: Type.Optional(Type.Union([Type.Literal("required"), Type.Literal("best_effort"), Type.Literal("skip")])),
-      verification: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("identity")])),
-      outputMode: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("detailed")])),
-      continueOnError: Type.Optional(Type.Boolean()),
-      format: Type.Optional(outputFormatEnum),
-    }),
+      deck: Type.Optional(cardRefSchema), milestone: Type.Optional(cardRefSchema), parentCardId: Type.Optional(cardRefSchema), dryRun: Type.Optional(Type.Boolean()), format: Type.Optional(outputFormatEnum),
+    }, { additionalProperties: false }),
     prepareArguments(args) {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
       if (input.dry_run !== undefined && input.dryRun === undefined) input.dryRun = input.dry_run;
-      if (input.duplicate_limit !== undefined && input.duplicateLimit === undefined) input.duplicateLimit = input.duplicate_limit;
-      if (input.duplicate_scan_limit !== undefined && input.duplicateScanLimit === undefined) input.duplicateScanLimit = input.duplicate_scan_limit;
-      if (input.duplicate_policy !== undefined && input.duplicatePolicy === undefined) input.duplicatePolicy = input.duplicate_policy;
-      if (input.output_mode !== undefined && input.outputMode === undefined) input.outputMode = input.output_mode;
-      if (input.continue_on_error !== undefined && input.continueOnError === undefined) input.continueOnError = input.continue_on_error;
       if (input.parent_card_id !== undefined && input.parentCardId === undefined) input.parentCardId = input.parent_card_id;
       return input;
     },
-    promptSnippet: "Preview or create multiple Codecks cards with duplicate detection and per-card status output.",
+    promptSnippet: "Preview or create multiple Codecks cards with compact outcomes and a temporary sanitized detail artifact.",
     promptGuidelines: [
       ...CARD_REFERENCE_WRITE_GUIDELINES,
-      "Use codecks_card_bulk_create for CSV/import-style card creation after mapping rows into card objects.",
-      "Run codecks_card_bulk_create with dryRun=true before applying creates, especially for imports or bulk deck/milestone work.",
-      "After approval, submit one bulk operation and let the tool pace requests or stop safely; do not manually chunk records or count requests to manage rate limits.",
-      "Review duplicate candidates and discovery completeness before apply. Account fallback is limited to a semantic title-filter rejection, probe budget, or incomplete probe; transport/auth/rate/cancel/timeout/queue failures block. Required blocks incomplete credential-visible evidence; parent-scoped required dry-runs preview only and required apply is blocked.",
-      "Apply defaults to compact schema-v2 results with returned $references. Use outputMode=detailed for schema-v1 normalized diagnostics; verification=identity is opt-in and makes one non-retrying exact read per identifiable create.",
+      "Use codecks_card_search for optional caller-controlled likely-match review before approval; bulk create never searches for duplicates.",
+      "Run codecks_card_bulk_create with dryRun=true before applying creates. Exact authorization in the user's request covers a matching apply; ask again only if previewed scope differs.",
+      "Submit one approved bulk operation. The package paces physical requests at 40 per five seconds; do not manually chunk records or count requests.",
+      "Bulk create stops at the first dispatch failure. Compact output includes exceptional records; full sanitized per-record details are written to the returned temporary artifact path.",
       "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request.",
     ],
   },
@@ -1262,9 +1246,7 @@ function renderCodecksCall(exportName: string, args: Record<string, unknown>, th
   if (exportName === "card_bulk_create") {
     const count = Array.isArray(args.cards) ? args.cards.length : 0;
     const mode = args.dryRun === false ? "apply" : "dry-run";
-    const duplicatePolicy = typeof args.duplicatePolicy === "string" ? args.duplicatePolicy : (mode === "dry-run" ? "required" : "best_effort");
-    const verification = typeof args.verification === "string" ? args.verification : "none";
-    return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))} ${themed(theme, "accent", mode)} · ${count} card${count === 1 ? "" : "s"} · duplicates: ${duplicatePolicy} · verify: ${verification}`);
+    return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))} ${themed(theme, "accent", mode)} · ${count} card${count === 1 ? "" : "s"}`);
   }
   const target = args.cardId ?? args.card ?? args.title ?? args.path ?? args.context ?? "";
   const suffix = target ? ` ${themed(theme, "accent", String(target))}` : "";
@@ -1283,7 +1265,9 @@ function renderCodecksResult(
       const value = progress as Record<string, unknown>;
       const number = (key: string) => typeof value[key] === "number" ? value[key] : 0;
       const stage = typeof value.stage === "string" ? value.stage : "running";
-      return textComponent(themed(theme, "warning", `Bulk create ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued · ${number("created")} created / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
+      const pacing = typeof value.pacingReason === "string" ? ` · pacing ${value.pacingReason}: ${number("pacingElapsedMs")}ms elapsed, ~${number("pacingRemainingMs")}ms remaining` : "";
+      const retry = typeof value.retryAttempt === "number" ? ` · rate limited record ${number("recordIndex")}/${number("recordCount")}, retry ${number("retryAttempt")}/${number("retryMax")} after ${number("retryAfterMs")}ms (${String(value.retryAfterFormat ?? "unknown")}; ${String(value.retryAfterParseStatus ?? "unknown")}${typeof value.retryAfterReason === "string" ? `: ${value.retryAfterReason}` : ""})` : "";
+      return textComponent(themed(theme, "warning", `Bulk create ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued (${number("localGateWaitMs")}ms local / ${number("serverCooldownWaitMs")}ms server)${pacing}${retry} · ${number("created")} created / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
     }
     return textComponent(themed(theme, "warning", "Running Codecks request..."));
   }
@@ -1343,9 +1327,19 @@ export default function codecksTools(pi: ExtensionAPI) {
           signal,
           async () => coreTool.execute(normalizedParams),
           ctx.cwd ?? process.cwd(),
-          exportName === "card_bulk_create" && onUpdate ? (progress) => {
+          onUpdate ? (progress) => {
+            const prefix = exportName === "card_bulk_create" ? "Bulk create" : "Codecks request";
+            const pacing = progress.pacingReason
+              ? `; pacing ${progress.pacingReason}, ${progress.pacingElapsedMs ?? 0}ms elapsed, about ${progress.pacingRemainingMs ?? 0}ms remaining`
+              : "";
+            const currentRecord = typeof progress.recordIndex === "number"
+              ? `; record ${progress.recordIndex}/${progress.recordCount ?? 0}`
+              : "";
+            const retry = typeof progress.retryAttempt === "number"
+              ? `; Codecks HTTP 429, retry ${progress.retryAttempt}/${progress.retryMax ?? 0}, Retry-After ${progress.retryAfterMs ?? 0}ms (${progress.retryAfterFormat ?? "unknown"}; ${progress.retryAfterParseStatus ?? "unknown"}${progress.retryAfterReason ? `: ${progress.retryAfterReason}` : ""})`
+              : "";
             onUpdate({
-              content: [{ type: "text", text: `Bulk create ${progress.stage}: ${progress.recordsProcessed} record(s), ${progress.requestsAttempted} request(s), ${progress.queueWaitMs}ms queued, ${progress.elapsedMs}ms elapsed.` }],
+              content: [{ type: "text", text: `${prefix} ${progress.stage}: ${progress.recordsProcessed} record(s), ${progress.requestsAttempted} request(s), ${progress.queueWaitMs}ms queued (${progress.localGateWaitMs ?? 0}ms local / ${progress.serverCooldownWaitMs ?? 0}ms server), ${progress.elapsedMs}ms elapsed${currentRecord}${pacing}${retry}.` }],
               details: { exportName, transient: true, progress },
             });
           } : undefined,

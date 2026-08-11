@@ -35,6 +35,17 @@ assertInvalid("codecks_card_search", { searchIn: "workspace" });
 assertInvalid("codecks_card_search", { limit: 0 });
 assertInvalid("codecks_card_search", { pageSize: 501 });
 
+// Bulk-create intentionally has no compatibility layer: removed policy,
+// verification, response-shaping, and idempotency fields are rejected at the
+// public schema boundary before the core tool is invoked.
+for (const field of [
+  "duplicatePolicy", "duplicateLimit", "duplicateScanLimit", "verification",
+  "outputMode", "responseSchemaVersion", "continueOnError", "actionKey",
+  "payloadFingerprint", "created", "dispatchReturned", "persistedVerified",
+]) {
+  assertInvalid("codecks_card_bulk_create", { cards: [{ title: "strict" }], [field]: true });
+}
+
 const dispatch = getTool("codecks_dispatch");
 const validated = prepareAndValidate(dispatch, {
   path: "journey/apply",
