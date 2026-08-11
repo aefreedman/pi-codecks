@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
+
+useInertEnvironmentCredentialProvider();
 
 type AnyRecord = Record<string, unknown>;
 type ToolModule = typeof import("../src/codecks-core.ts");
@@ -73,11 +76,8 @@ const withMockedFetch = async (handler: QueryHandler, run: () => Promise<void>):
   }
 };
 
-const loadTools = async (): Promise<ToolModule> => {
-  process.env.CODECKS_ACCOUNT = "test-account";
-  process.env.CODECKS_TOKEN = "test-token";
-  return import("../src/codecks-core.ts");
-};
+const loadTools = async (): Promise<ToolModule> =>
+  import("../src/codecks-core.ts");
 
 const buildCard = (overrides: AnyRecord = {}): AnyRecord => ({
   cardId: CARD_ID,

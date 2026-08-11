@@ -9,7 +9,6 @@ const requiredFiles = [
   "README.md",
   "docs/external-credential-helper-protocol.md",
   "docs/resolvable-inbox-heuristics.md",
-  "docs/release.md",
   "docs/testing.md",
   "index.ts",
   "package.json",
@@ -24,6 +23,7 @@ const requiredFiles = [
   "src/pi-tool-compat.ts",
   "src/velocity-report.ts",
 ];
+const repositoryOnlyFiles = ["docs/release.md"];
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);
 const allowedPrefixes = ["docs/", "prompts/", "references/", "skills/", "src/"];
@@ -63,6 +63,9 @@ for (const required of requiredFiles) {
 
 for (const retired of retiredPackageFiles) {
   if (files.includes(retired)) errors.push(`retired package file must not be packed: ${retired}`);
+}
+for (const repositoryOnly of repositoryOnlyFiles) {
+  if (files.includes(repositoryOnly)) errors.push(`repository-only file must not be packed: ${repositoryOnly}`);
 }
 
 for (const file of files) {

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
+
+useInertEnvironmentCredentialProvider();
 
 type AnyRecord = Record<string, unknown>;
 
@@ -219,11 +222,8 @@ const buildHandler = (overrides: {
   };
 };
 
-const loadTools = async (): Promise<ToolModule> => {
-  process.env.CODECKS_ACCOUNT = "test-account";
-  process.env.CODECKS_TOKEN = "test-token";
-  return import("../src/codecks-core.ts");
-};
+const loadTools = async (): Promise<ToolModule> =>
+  import("../src/codecks-core.ts");
 
 const testShortCodeAndDollarCodeResolve = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(buildHandler({ directVisionBoardErrorStatus: 500, accountVisionBoardsErrorStatus: 500, queryErrorStatus: 500 }), async () => {

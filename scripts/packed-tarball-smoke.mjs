@@ -20,9 +20,6 @@ try {
       name: "pi-codecks-neutral-smoke",
       private: true,
       version: "0.0.0",
-      // The extension imports TypeBox at runtime; make it explicit for the
-      // neutral packed-consumer smoke test.
-      dependencies: { typebox: `file:${path.join(packageRoot, "node_modules", "typebox")}` },
     }, null, 2)}\n`,
   );
 
@@ -49,6 +46,7 @@ try {
   assert.deepEqual(packageJson.pi?.skills, ["./skills"]);
   assert.deepEqual(packageJson.pi?.prompts, ["./prompts"]);
   assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined, "packed package must not declare a workflow integration");
+  assert.ok(existsSync(path.join(consumerDir, "node_modules", "typebox", "package.json")), "packed consumer must resolve TypeBox from the package runtime dependency");
 
   for (const relativePath of [
     "index.ts",
@@ -75,6 +73,7 @@ try {
     "scripts",
     ".github",
     "docs/plans",
+    "docs/release.md",
     "todos",
     "src/codecks-readonly-auth-contract.ts",
     "src/integrations/codecks-readonly-auth-client.mjs",

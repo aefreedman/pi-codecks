@@ -9,6 +9,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Declared TypeBox as a runtime dependency so standalone npm-installed extensions resolve their schema runtime without relying on an optional peer supplied by a host.
 - Classified a structurally valid exact identity response with `_root.loggedInUser` explicitly `null` or the literal empty string as the existing redacted `authentication_rejected` result. Missing/incompatible roots, whitespace-only strings, and other nonempty identities that cannot normalize to an ID remain `malformed_response`; HTTP `401`/`403` behavior is unchanged.
 - Bounded the optional external-provider live-validation launcher's public `durationMs` diagnostic to `0..60000` while retaining its fixed redacted result contract.
 - Hardened external-helper execution against mixed-case inherited credential/reference variables, pre- and post-settlement stream errors, synchronous abort/kill/close races, and throwing or stalled injected termination paths. Termination remains best-effort; caller settlement is independent of child/taskkill completion.

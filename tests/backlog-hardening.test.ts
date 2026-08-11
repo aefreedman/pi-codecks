@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import * as core from "../src/codecks-core.ts";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 
-process.env.CODECKS_ACCOUNT = "test-account";
-process.env.CODECKS_TOKEN = "test-token";
+useInertEnvironmentCredentialProvider();
 
 const CARD_ID = "11111111-1111-4111-8111-111111111111";
 const response = (payload: unknown) => new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });

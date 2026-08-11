@@ -3,10 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import * as core from "../src/codecks-core.ts";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 import { loadRegisteredTools } from "./pi-tool-harness.ts";
 
-process.env.CODECKS_ACCOUNT = "test-account";
-process.env.CODECKS_TOKEN = "test-token";
+useInertEnvironmentCredentialProvider();
 
 type Json = Record<string, any>;
 const USER = "33333333-3333-4333-8333-333333333333";

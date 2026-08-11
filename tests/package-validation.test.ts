@@ -28,8 +28,13 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
   assert.ok(existsSync(path.join(root, registration)), `missing Pi registration target: ${registration}`);
 }
 
-const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "references/", "README.md", "CHANGELOG.md", "LICENSE"];
+const expectedFiles = [
+  "index.ts", "src/", "skills/", "prompts/",
+  "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md", "docs/testing.md",
+  "references/", "README.md", "CHANGELOG.md", "LICENSE",
+];
 assert.deepEqual(packageJson.files, expectedFiles);
+assert.equal(packageJson.files.includes("docs/release.md"), false, "maintainer-only release process must remain repository-only");
 for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
   assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
 }
@@ -48,7 +53,9 @@ assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.equal(packageJson.dependencies, undefined, "Codecks has no runtime package dependency on workflow composition.");
+assert.deepEqual(packageJson.dependencies, { typebox: "1.3.8" }, "TypeBox is a runtime import and must resolve for standalone installed packages.");
+assert.equal(packageJson.peerDependencies?.typebox, undefined, "runtime TypeBox must not rely on an optional peer.");
+assert.equal(packageJson.peerDependenciesMeta?.typebox, undefined, "runtime TypeBox must not rely on optional peer metadata.");
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], undefined);

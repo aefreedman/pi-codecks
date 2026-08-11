@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
+
+useInertEnvironmentCredentialProvider();
 
 type AnyRecord = Record<string, any>;
 type ToolModule = typeof import("../src/codecks-core.ts");
@@ -178,9 +181,6 @@ const withMockedCodecks = async (
 };
 
 const loadTools = async (): Promise<ToolModule> => {
-  process.env.CODECKS_ACCOUNT = "test-account";
-  process.env.CODECKS_TOKEN = "test-token";
-  delete process.env.CODECKS_DEFAULT_ASSIGNEE_ID;
   const core = await import("../src/codecks-core.ts");
   return new Proxy(core, {
     get(target, property, receiver) {
