@@ -91,7 +91,7 @@ try {
   }) as typeof fetch;
   const createArgs = { cards: [{ title: "Parity", content: "Body", assigneeId: USER_ID, effort: 3, priority: "high", tags: ["alpha"], putOnHand: true }], format: "json" };
   const preview = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: true }));
-  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false }));
+  const apply = parseResult(await invoke(core.card_bulk_create, { ...createArgs, dryRun: false, expectedPreviewFingerprint: preview.data.previewFingerprint }));
   assert.equal(preview.ok, true);
   assert.equal(apply.ok, true);
   assert.equal(preview.data.results.length, 0);

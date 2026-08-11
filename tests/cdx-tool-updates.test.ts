@@ -751,7 +751,8 @@ const testSingleAndBulkCreateUseIdenticalPayloads = async (tools: ToolModule): P
     };
     const singleCreate = getData(String(await tools.card_create.execute({ ...input, format: "json" })));
     assert.equal(singleCreate.cardType, "documentation", "single create should preserve the explicitly requested card type when dispatch returns only identity");
-    getData(String(await tools.card_bulk_create.execute({ cards: [input], dryRun: false, format: "json" })));
+    const bulkPreview = getData(String(await tools.card_bulk_create.execute({ cards: [input], dryRun: true, format: "json" })));
+    getData(String(await tools.card_bulk_create.execute({ cards: [input], dryRun: false, expectedPreviewFingerprint: bulkPreview.previewFingerprint, format: "json" })));
   });
   assert.equal(payloads.length, 2, "expected one single and one bulk create dispatch");
   assert.deepEqual(payloads[0], payloads[1]);

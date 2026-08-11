@@ -442,7 +442,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
   card_bulk_create: {
     parameters: Type.Object({
       cards: Type.Array(bulkCreateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card-create records. Use assigneeId (from codecks_user_lookup), never assignee." }),
-      deck: Type.Optional(cardRefSchema), milestone: Type.Optional(cardRefSchema), parentCardId: Type.Optional(cardRefSchema), dryRun: Type.Optional(Type.Boolean()), format: Type.Optional(outputFormatEnum),
+      deck: Type.Optional(cardRefSchema), milestone: Type.Optional(cardRefSchema), parentCardId: Type.Optional(cardRefSchema), dryRun: Type.Optional(Type.Boolean()), expectedPreviewFingerprint: Type.Optional(Type.String({ description: "Required for apply: previewFingerprint returned by the matching dry run." })), format: Type.Optional(outputFormatEnum),
     }, { additionalProperties: false }),
     prepareArguments(args) {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
@@ -454,7 +454,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_search for optional caller-controlled likely-match review before approval; bulk create never searches for duplicates.",
-      "Run codecks_card_bulk_create with dryRun=true before applying creates. Exact authorization in the user's request covers a matching apply; ask again only if previewed scope differs.",
+      "Run codecks_card_bulk_create with dryRun=true before applying creates, then pass its previewFingerprint as expectedPreviewFingerprint. Exact authorization in the user's request covers that matching apply; ask again only if previewed scope differs.",
       "Submit one approved bulk operation. The package paces physical requests at 40 per five seconds; do not manually chunk records or count requests.",
       "Bulk create stops at the first dispatch failure. Compact output includes exceptional records; full sanitized per-record details are written to the returned temporary artifact path.",
       "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request.",
@@ -1514,7 +1514,7 @@ export default function codecksTools(pi: ExtensionAPI) {
       "Do not mutate cards, milestones, Runs, or conversations without explicit user intent for that operation; local implementation completion is not a request to mark a card done or write a tracker update.",
       "Direct mutation-tool calls run only after their existing operation, target, and payload validation; no separate approval token or UI confirmation is requested by this package.",
       "Do not open comments or reviews for routine follow-up. Discover and reply to an existing review thread when appropriate; otherwise report in chat unless the user explicitly requests a tracker write.",
-      "Bulk create/update and effort workflows require preview or dry-run review plus explicit approval before application. For bulk create, exact authorization already present in the user's request covers an apply when the preview matches that scope.",
+      "Bulk create/update and effort workflows require preview or dry-run review plus explicit approval before application. Bulk create apply must pass the matching dry run's previewFingerprint as expectedPreviewFingerprint; exact authorization already present in the user's request covers that matching apply without a second approval interaction.",
       "In user-visible Codecks text, keep card references as plain $123 tokens without emphasis or code formatting.",
       "Archive, delete, and trash operations remain outside the Codecks tool surface.",
     ],
