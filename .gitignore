@@ -10,5 +10,3 @@ coverage/
 *.tgz
 .DS_Store
 Thumbs.db
-evals/bulk-create-workflow/latest-results.json
-.pi-package-development-skill-evals-bootstrap.lock

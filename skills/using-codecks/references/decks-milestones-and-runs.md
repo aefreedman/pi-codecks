@@ -26,7 +26,7 @@ Read the matching section when inspecting or updating these Codecks entities.
 - Use `codecks_run_delivered_effort` for cached `stats.finishStats` delivery reporting without card-by-card recalculation.
 - Use `codecks_run_average_effort` to average cached delivered effort across completed Runs. `minDeliveredEffort` defaults to `1`, excluding zero-effort vacation/break Runs.
 - Use `codecks_run_update` for a Run custom label (`sprints/updateSprint.name`) or description (`sprints/updateSprint.description`).
-- Use `codecks_card_update_run` for one card. For bounded multi-card assignment/removal, use `codecks_card_bulk_update` with `runId` or `clearRun` after reviewing a dry-run preview and [bulk-operations.md](bulk-operations.md).
+- Use `codecks_card_update_run` for one card. For bounded multi-card assignment/removal, use `codecks_card_bulk_update` with `runId` or `clearRun` after reviewing the tool's dry-run preview.
 - Numeric Run identifiers are Run/Sprint account sequences, not card short codes.
 
 For provenance-rich velocity analysis rather than ordinary Run operations, use the separate `codecks-velocity-reporting` skill.

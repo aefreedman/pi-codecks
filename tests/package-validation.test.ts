@@ -118,7 +118,6 @@ const testing = read("docs/testing.md");
 const release = read("docs/release.md");
 const usingCodecksReferences = [
   "card-operations.md",
-  "bulk-operations.md",
   "conversations-and-resolvables.md",
   "decks-milestones-and-runs.md",
   "fallback-security-and-profiles.md",
@@ -154,7 +153,6 @@ const bulkCreateContractSurfaces = [
   bulkCreateRegistration,
   bulkCreateLoader,
   readme.match(/^[^\n]*codecks_card_bulk_create[^\n]*$/gm)?.join("\n") ?? "",
-  `${read("skills/using-codecks/SKILL.md")}\n${read("skills/using-codecks/references/bulk-operations.md")}`.match(/^[^\n]*bulk-create[^\n]*$/gim)?.join("\n") ?? "",
 ].join("\\n");
 assert.ok(bulkCreateCore, "bulk-create core surface must be present");
 assert.ok(bulkCreateRegistration, "bulk-create registration contract must be present");

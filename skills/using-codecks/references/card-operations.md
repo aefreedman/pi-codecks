@@ -1,6 +1,6 @@
 # Card Search, Targeting, and Updates
 
-Read this reference for card lookup, creation, ordinary updates, lifecycle changes, effort workflows, and vision-board inspection. For multi-card create/update work, also read [bulk-operations.md](bulk-operations.md). For comments or Review/Blocker threads, read [conversations-and-resolvables.md](conversations-and-resolvables.md).
+Read this reference for card lookup, creation, ordinary updates, lifecycle changes, effort workflows, and vision-board inspection. For multi-card create/update work, use the specialized bulk tools directly. For comments or Review/Blocker threads, read [conversations-and-resolvables.md](conversations-and-resolvables.md).
 
 ## Targeting
 

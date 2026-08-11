@@ -259,7 +259,7 @@ Example:
 ## Included prompt and skill
 
 - prompt: `/codecks-inbox` - summarize the logged-in user's attention-worthy resolvables
-- skill: `using-codecks` - General Codecks workflow routing with task-specific references loaded only when relevant.
+- skill: `using-codecks` - Ordinary single-card, Deck, milestone, Run, conversation, credential, and fallback workflows.
 - skill: `codecks-velocity-reporting` - Dedicated historical velocity-report methodology and roster/output guidance.
 
 ## Resolvable replies and review follow-ups

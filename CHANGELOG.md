@@ -7,12 +7,17 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
-- Clarified agent guidance for pre-authorized bulk-create apply and compact-result interpretation, and added a package-owned behavioral eval for approval, success, partial-result, and negative-control workflows.
-- Bulk-create responses now keep successful per-record details out of agent context, preserve complete sanitized results in a restrictive temporary JSON artifact, and keep exceptional records inline. Exact user authorization can cover an apply when its dry-run matches the approved scope.
-- Bulk create now retries only definitely rejected HTTP 429 responses: at most twice, stopping after three consecutive 429s, respecting valid Codecks numeric-millisecond or HTTP-date Retry-After values within a fifteen-second recovery budget. Progress and result metrics now distinguish local/server waits, physical attempts, sanitized Retry-After parse/budget diagnostics, retry events, and continuation-safe records.
+## [0.11.0] - 2026-08-11
 
-- Simplified bulk card creation to normalized write intent and one per-record result contract. Removed implicit duplicate discovery, verification reads, dual schemas, compatibility payloads, and agent-managed pacing guidance.
-- Added shared observable 40-requests-per-five-seconds request pacing. Only validated `429 Retry-After` headers can create a bounded fifteen-second cooldown.
+### Added
+
+- Added shared observable 40-requests-per-five-seconds request pacing and bounded recovery for definitely rejected HTTP 429 responses. Recovery permits at most two retries, stops after three consecutive 429s, and respects valid Codecks numeric-millisecond or HTTP-date `Retry-After` values within a fifteen-second server-wait budget.
+- Added progress and result metrics for local/server waits, physical attempts, sanitized `Retry-After` diagnostics, retry events, and continuation-safe records.
+
+### Changed
+
+- Simplified bulk card creation to normalized write intent and one per-record result contract, removing implicit duplicate discovery, verification reads, dual schemas, compatibility payloads, and agent-managed pacing guidance.
+- Bulk-create responses now omit successful records from agent context, preserve complete sanitized details in a restrictive temporary JSON artifact, and keep exceptional records inline. Exact user authorization can cover an apply when its dry-run matches the authorized scope.
 - Single-card creation now trusts dispatch-returned identity and no longer searches or reads cards after dispatch.
 
 ## [0.10.0] - 2026-08-11
