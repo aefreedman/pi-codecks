@@ -1367,7 +1367,7 @@ export default function codecksTools(pi: ExtensionAPI) {
       "Do not mutate cards, milestones, Runs, or conversations without explicit user intent for that operation; local implementation completion is not a request to mark a card done or write a tracker update.",
       "Direct mutation-tool calls run only after their existing operation, target, and payload validation; no separate approval token or UI confirmation is requested by this package.",
       "Do not open comments or reviews for routine follow-up. Discover and reply to an existing review thread when appropriate; otherwise report in chat unless the user explicitly requests a tracker write.",
-      "Bulk create/update and effort workflows require preview or dry-run review plus explicit approval before application.",
+      "Bulk create/update and effort workflows require preview or dry-run review plus explicit approval before application. For bulk create, exact authorization already present in the user's request covers an apply when the preview matches that scope.",
       "In user-visible Codecks text, keep card references as plain $123 tokens without emphasis or code formatting.",
       "Archive, delete, and trash operations remain outside the Codecks tool surface.",
     ],

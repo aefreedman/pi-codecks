@@ -7,6 +7,7 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Clarified agent guidance for pre-authorized bulk-create apply and compact-result interpretation, and added a package-owned behavioral eval for approval, success, partial-result, and negative-control workflows.
 - Bulk-create responses now keep successful per-record details out of agent context, preserve complete sanitized results in a restrictive temporary JSON artifact, and keep exceptional records inline. Exact user authorization can cover an apply when its dry-run matches the approved scope.
 - Bulk create now retries only definitely rejected HTTP 429 responses: at most twice, stopping after three consecutive 429s, respecting valid Codecks numeric-millisecond or HTTP-date Retry-After values within a fifteen-second recovery budget. Progress and result metrics now distinguish local/server waits, physical attempts, sanitized Retry-After parse/budget diagnostics, retry events, and continuation-safe records.
 

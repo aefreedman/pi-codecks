@@ -1,6 +1,6 @@
 ---
 name: using-codecks
-description: Use for Codecks Free-plan core card workflows and deck-description, milestone, and Run operations, with safe query/dispatch fallback; excludes integrations, paid-plan features, and Journey automation.
+description: Use for Codecks card lookup and mutations, especially bulk card create/import preview, approval, apply, compact-result, partial-failure, and rate-limit workflows; also covers Free-plan Deck, milestone, Run, and safe fallback operations.
 allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_missing_effort codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_bulk_create codecks_card_bulk_update codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
@@ -33,7 +33,7 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 2. Identify an exact target. If multiple cards/entities match, ask the user to choose using a stable visible reference.
 3. Read the operation-specific reference below before preparing a write or interpreting incomplete evidence.
 4. For a mutation, verify that the user explicitly intends that tracker operation. Local implementation completion is not permission to update Codecks.
-5. Use dry-run/preview where the specialized workflow provides it, then apply only after the required review and explicit approval.
+5. Use dry-run/preview where the specialized workflow provides it, then apply only after the required review and explicit approval. For bulk create, exact authorization already present in the user's request covers an apply when the preview matches that scope; do not ask redundantly.
 6. Report structured partial, incomplete, indeterminate, or definitely-unsent outcomes accurately. Never replay a write that may already have succeeded.
 7. Use raw query/dispatch only under the fallback reference and only when no specialized tool covers the in-scope operation.
 

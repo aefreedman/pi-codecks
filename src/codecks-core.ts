@@ -7979,7 +7979,7 @@ const writeBulkCreateArtifact = async (details: Record<string, unknown>) => {
 };
 
 export const card_bulk_create = tool({
-    description: "Preview or create multiple Codecks cards with normalized, per-record outcomes.",
+    description: "Preview or create multiple Codecks cards. Compact results keep only exceptional records inline; complete sanitized per-record details are written to a temporary JSON artifact.",
     args: {
         cards: tool.schema.array(tool.schema.object({ correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(), deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional() })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."), format: outputFormatArg,

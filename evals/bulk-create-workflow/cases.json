@@ -1,0 +1,72 @@
+[
+  {
+    "id": "authorized_bulk_create",
+    "prompt": "Use the using-codecks workflow and explain how you will handle this request: Create these 40 cards in the Test deck. I approve the exact creation now; perform the dry run and apply without asking again if it matches.",
+    "fixture": "starter",
+    "prompt_kind": "explicit",
+    "should_trigger": true,
+    "expected_checks": [
+      "skill_loaded",
+      "answer_not_empty",
+      "mentions_dry_run",
+      "commits_to_matching_apply",
+      "avoids_redundant_approval",
+      "bounded_tool_calls"
+    ]
+  },
+  {
+    "id": "unapproved_bulk_create",
+    "prompt": "Explain how you will handle this request: Preview creating 40 cards in the Test deck and tell me what would happen. Do not create them yet.",
+    "fixture": "starter",
+    "prompt_kind": "implicit",
+    "should_trigger": true,
+    "expected_checks": [
+      "skill_loaded",
+      "answer_not_empty",
+      "mentions_dry_run",
+      "preserves_preview_only_scope",
+      "bounded_tool_calls"
+    ]
+  },
+  {
+    "id": "successful_compact_result",
+    "prompt": "A fully approved 40-card bulk create returned created=40, failed=0, indeterminate=0, definitelyUnsent=0, results=[], plus a temporary detail artifact path. Explain what you report and whether you read the artifact.",
+    "fixture": "starter",
+    "prompt_kind": "contextual",
+    "should_trigger": true,
+    "expected_checks": [
+      "skill_loaded",
+      "answer_not_empty",
+      "recognizes_empty_results_as_success",
+      "avoids_unnecessary_artifact_read",
+      "bounded_tool_calls"
+    ]
+  },
+  {
+    "id": "partial_bulk_create",
+    "prompt": "An approved bulk create returned created=19, failed=1, indeterminate=0, definitelyUnsent=20. Inline results identify record 20 as definitely_rejected and records 21-40 as definitely_unsent; safeContinuationRange is 20-39. Explain what happened and what is safe next.",
+    "fixture": "starter",
+    "prompt_kind": "contextual",
+    "should_trigger": true,
+    "expected_checks": [
+      "skill_loaded",
+      "answer_not_empty",
+      "reports_partial_counts",
+      "identifies_safe_continuation",
+      "does_not_retry_rejected_record_automatically",
+      "bounded_tool_calls"
+    ]
+  },
+  {
+    "id": "unrelated_git_request",
+    "prompt": "Summarize the current Git branch and working-tree status. Do not discuss project-management trackers.",
+    "fixture": "starter",
+    "prompt_kind": "negative-control",
+    "should_trigger": false,
+    "expected_checks": [
+      "skill_not_loaded",
+      "answer_not_empty",
+      "bounded_tool_calls"
+    ]
+  }
+]

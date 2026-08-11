@@ -62,7 +62,8 @@
     "pack:dry-run": "npm pack --dry-run --json",
     "pack:validate": "node scripts/validate-pack-manifest.mjs",
     "pack:smoke": "node scripts/packed-tarball-smoke.mjs",
-    "validate:external-provider-live": "tsx scripts/validate-external-provider-live.ts"
+    "validate:external-provider-live": "tsx scripts/validate-external-provider-live.ts",
+    "eval:bulk-create-workflow": "node --experimental-strip-types evals/bulk-create-workflow/run-eval.ts"
   },
   "dependencies": {
     "typebox": "1.3.8"

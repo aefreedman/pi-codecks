@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "skillName": "using-codecks",
+  "skillPath": "../../skills/using-codecks/SKILL.md",
+  "extensionPaths": [],
+  "allowExtensionExecution": false,
+  "tools": [
+    "read"
+  ],
+  "allowHostMutation": false,
+  "conditions": [
+    "available",
+    "baseline",
+    "forced"
+  ],
+  "trials": 1,
+  "timeoutMs": 600000,
+  "maxToolCalls": 20
+}
