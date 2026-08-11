@@ -47,27 +47,25 @@ try {
   assert.equal(calls, 0, "a malformed fourth record prevents every bulk dispatch");
 
   globalThis.fetch = (async (_input, init) => {
+    const query = JSON.parse(String(init?.body)).query as Record<string, unknown>;
+    assert.ok(Object.keys(query).some((key) => key.startsWith("card(")), `unexpected query: ${JSON.stringify(query)}`);
+    return response(cardPayload());
+  }) as typeof fetch;
+  const appliedArgs = { updates: [{ cardId: CARD_ID, title: "Valid — 😀", correlationKey: "import-row-1" }], format: "json" };
+  const preview = parseResult(await invoke(core.card_bulk_update, { ...appliedArgs, dryRun: true }));
+  globalThis.fetch = (async (_input, init) => {
     const url = String(_input);
     if (url.includes("/dispatch/cards/update")) return response({ data: { accepted: true } });
     const query = JSON.parse(String(init?.body)).query as Record<string, unknown>;
     assert.ok(Object.keys(query).some((key) => key.startsWith("card(")), `unexpected query: ${JSON.stringify(query)}`);
     return response(cardPayload());
   }) as typeof fetch;
-  const applied = parseResult(await invoke(core.card_bulk_update, {
-    dryRun: false,
-    updates: [{ cardId: CARD_ID, title: "Valid — 😀", correlationKey: "import-row-1" }],
-    format: "json",
-  }));
+  const applied = parseResult(await invoke(core.card_bulk_update, { ...appliedArgs, dryRun: false, expectedPreviewFingerprint: preview.data.previewFingerprint }));
   assert.equal(applied.ok, true);
-  const record = applied.data.results[0];
-  assert.equal(record.correlationKey, "import-row-1");
-  assert.match(record.actionKey, /^update:0:[a-f0-9]{24}$/);
-  assert.equal(record.status, "updated");
-  assert.equal(record.certainty, "dispatch_returned");
-  assert.equal(record.persistedVerified, null);
-  assert.equal(record.verificationState, "not_performed");
-  assert.equal(record.normalizedRequested.title, "Valid — 😀");
-  assert.deepEqual(record.dispatchReturned, { accepted: true });
+  assert.equal(applied.data.updated, 1);
+  assert.deepEqual(applied.data.results, []);
+  assert.equal(applied.data.metrics.dispatchRequests, 1);
+  assert.match(applied.data.artifact.path, /pi-codecks-bulk-update/);
 
   globalThis.fetch = (async () => response(deckPayload())) as typeof fetch;
   const deck = parseResult(await invoke(core.deck_get, { title: "Test Deck", format: "json" }));

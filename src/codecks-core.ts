@@ -235,7 +235,7 @@ const getDispatchPolicyMessage = (path: string): string | null =>
     return null;
 };
 
-type BulkCreateProgress = {
+type BulkMutationProgress = {
     stage: string;
     elapsedMs: number;
     recordsProcessed: number;
@@ -244,6 +244,8 @@ type BulkCreateProgress = {
     localGateWaitMs: number;
     serverCooldownWaitMs: number;
     created: number;
+    updated: number;
+    succeeded: number;
     failed: number;
     definitelyUnsent: number;
     pacingReason?: "local_window" | "server_cooldown";
@@ -262,13 +264,13 @@ type BulkCreateProgress = {
 };
 
 type OperationContext = {
-    onBulkCreateProgress?: (progress: BulkCreateProgress) => void;
+    onBulkMutationProgress?: (progress: BulkMutationProgress) => void;
     requestsAttempted: number;
     queueWaitMs: number;
     localGateWaitMs: number;
     serverCooldownWaitMs: number;
     credentialConfigPromise?: Promise<CodecksConfig>;
-    progressSnapshot?: { startedAt: number; stage: string; recordsProcessed: number; results: Record<string, unknown>[]; rateLimit?: Pick<BulkCreateProgress, "recordIndex" | "recordCount" | "retryAttempt" | "retryMax" | "retryAfterMs" | "retryAfterFormat" | "retryAfterParseStatus" | "retryAfterReason" | "rateLimitError" | "consecutive429"> };
+    progressSnapshot?: { startedAt: number; stage: string; recordsProcessed: number; results: Record<string, unknown>[]; rateLimit?: Pick<BulkMutationProgress, "recordIndex" | "recordCount" | "retryAttempt" | "retryMax" | "retryAfterMs" | "retryAfterFormat" | "retryAfterParseStatus" | "retryAfterReason" | "rateLimitError" | "consecutive429"> };
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
@@ -279,14 +281,14 @@ const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.g
 const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 const getOperationContext = (): OperationContext | undefined => operationContextStorage.getStore();
 
-const createOperationContext = (onBulkCreateProgress?: (progress: BulkCreateProgress) => void): OperationContext => ({ onBulkCreateProgress, requestsAttempted: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
+const createOperationContext = (onBulkMutationProgress?: (progress: BulkMutationProgress) => void): OperationContext => ({ onBulkMutationProgress, requestsAttempted: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
 
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
     fn: () => Promise<T>,
     workspaceRoot?: string,
-    onBulkCreateProgress?: (progress: BulkCreateProgress) => void,
-): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run(createOperationContext(onBulkCreateProgress), fn)));
+    onBulkMutationProgress?: (progress: BulkMutationProgress) => void,
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run(createOperationContext(onBulkMutationProgress), fn)));
 
 const withOperationContextIfMissing = <T>(fn: () => Promise<T>): Promise<T> =>
     getOperationContext() ? fn() : operationContextStorage.run(createOperationContext(), fn);
@@ -309,17 +311,17 @@ const noteOperationRequest = (wait: RateGateWait): void =>
     context.serverCooldownWaitMs += wait.serverWaitMs;
 };
 
-const emitBulkCreateProgress = (
+const emitBulkMutationProgress = (
     startedAt: number,
     stage: string,
     recordsProcessed: number,
     results: Record<string, unknown>[] = [],
-    pacing?: Pick<BulkCreateProgress, "pacingReason" | "pacingElapsedMs" | "pacingRemainingMs">,
+    pacing?: Pick<BulkMutationProgress, "pacingReason" | "pacingElapsedMs" | "pacingRemainingMs">,
     rateLimit?: NonNullable<OperationContext["progressSnapshot"]>["rateLimit"],
 ): void =>
 {
     const context = getOperationContext();
-    if (!context?.onBulkCreateProgress) return;
+    if (!context?.onBulkMutationProgress) return;
     if (!pacing) context.progressSnapshot = { startedAt, stage, recordsProcessed, results, rateLimit };
     const snapshot = pacing ? context.progressSnapshot : undefined;
     const effectiveStartedAt = snapshot?.startedAt ?? startedAt;
@@ -328,7 +330,7 @@ const emitBulkCreateProgress = (
     const effectiveResults = snapshot?.results ?? results;
     try
     {
-        context.onBulkCreateProgress({
+        context.onBulkMutationProgress({
             stage: effectiveStage,
             elapsedMs: Math.max(0, Date.now() - effectiveStartedAt),
             recordsProcessed: effectiveRecordsProcessed,
@@ -337,6 +339,8 @@ const emitBulkCreateProgress = (
             localGateWaitMs: context.localGateWaitMs,
             serverCooldownWaitMs: context.serverCooldownWaitMs,
             created: effectiveResults.filter((entry) => entry.status === "created").length,
+            updated: effectiveResults.filter((entry) => entry.status === "updated").length,
+            succeeded: effectiveResults.filter((entry) => entry.status === "created" || entry.status === "updated").length,
             failed: effectiveResults.filter((entry) => entry.status === "failed").length,
             definitelyUnsent: effectiveResults.filter((entry) => entry.status === "definitely_unsent").length,
             ...(snapshot?.rateLimit ?? rateLimit),
@@ -384,7 +388,7 @@ const enforceRateLimit = async (): Promise<RateGateWait> =>
     let activeWaitDeadline = 0;
     let accumulatedLocalWaitMs = 0;
     let accumulatedServerWaitMs = 0;
-    const publishWait = (reason: "local_window" | "server_cooldown") => emitBulkCreateProgress(waitStartedAt, `rate_gate_${reason}`, 0, [], { pacingReason: reason, pacingElapsedMs: Date.now() - waitStartedAt, pacingRemainingMs: Math.max(0, activeWaitDeadline - Date.now()) });
+    const publishWait = (reason: "local_window" | "server_cooldown") => emitBulkMutationProgress(waitStartedAt, `rate_gate_${reason}`, 0, [], { pacingReason: reason, pacingElapsedMs: Date.now() - waitStartedAt, pacingRemainingMs: Math.max(0, activeWaitDeadline - Date.now()) });
     try { while (true) {
         const now = Date.now();
         while (requestTimestamps.length > 0 && now - requestTimestamps[0] >= RATE_WINDOW_MS) requestTimestamps.shift();
@@ -7868,10 +7872,10 @@ const stableFingerprintValue = (value: unknown): unknown => {
     return value;
 };
 
-const bulkCreatePreviewFingerprint = (records: NormalizedBulkCreateRecord[]): string =>
+const bulkPreviewFingerprint = (operation: "card_bulk_create" | "card_bulk_update", records: Array<{ payload: Record<string, unknown> }>): string =>
     normalizedMutationFingerprint(stableFingerprintValue({
         version: 1,
-        operation: "card_bulk_create",
+        operation,
         records: records.map(({ payload }) => {
             const { sessionId: _sessionId, ...canonicalPayload } = payload;
             return canonicalPayload;
@@ -7978,10 +7982,10 @@ const markBulkCreateDefinitelyUnsent = (results: Record<string, unknown>[], afte
     }
 };
 
-const writeBulkCreateArtifact = async (details: Record<string, unknown>) => {
+const writeBulkArtifact = async (operation: "create" | "update", details: Record<string, unknown>) => {
     try
     {
-        const directory = await fs.mkdtemp(join(tmpdir(), "pi-codecks-bulk-create-"));
+        const directory = await fs.mkdtemp(join(tmpdir(), `pi-codecks-bulk-${operation}-`));
         const path = join(directory, "result.json");
         await fs.writeFile(path, `${JSON.stringify(details, null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
         return { path, format: "json", temporary: true };
@@ -8001,7 +8005,7 @@ export const card_bulk_create = tool({
     async execute(args) {
         return withOperationContextIfMissing(async () => {
         const format = args.format ?? "text"; const dryRun = args.dryRun !== false; const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : []; const startedAt = Date.now();
-        emitBulkCreateProgress(startedAt, "validating", 0);
+        emitBulkMutationProgress(startedAt, "validating", 0);
         const allowedArguments = new Set(["cards", "deck", "milestone", "parentCardId", "dryRun", "expectedPreviewFingerprint", "format"]);
         const topLevelErrors = Object.keys(args).filter((field) => !allowedArguments.has(field)).map((field) => `bulk create argument ${field} is unsupported.`);
         const structuralErrors = [...topLevelErrors, ...validateStrictBulkRecords(rawRecords, "create")];
@@ -8014,7 +8018,7 @@ export const card_bulk_create = tool({
         for (let index = 0; index < rawRecords.length; index++) {
             try {
                 normalized.push(await normalizeBulkCreateRecord(rawRecords[index] as BulkCreateRecord, defaults, index, user, normalizationContext));
-                emitBulkCreateProgress(startedAt, "normalizing", index + 1);
+                emitBulkMutationProgress(startedAt, "normalizing", index + 1);
             }
             catch (error)
             {
@@ -8028,7 +8032,7 @@ export const card_bulk_create = tool({
             }
         }
         if (normalizationErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map(x => x.message).join(" "), { indexedErrors: normalizationErrors, results: preflightOutcomeRecords(rawRecords, normalizationErrors), requestsAttempted: 0 });
-        const previewFingerprint = bulkCreatePreviewFingerprint(normalized);
+        const previewFingerprint = bulkPreviewFingerprint("card_bulk_create", normalized);
         if (!dryRun) {
             const expectedPreviewFingerprint = args.expectedPreviewFingerprint;
             const malformed = typeof expectedPreviewFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(expectedPreviewFingerprint);
@@ -8063,7 +8067,7 @@ export const card_bulk_create = tool({
             uniqueRecordsAttempted += 1;
             let retryAttempt = 0;
             while (true) {
-                emitBulkCreateProgress(startedAt, "dispatching", record.index, results, undefined, { recordIndex: record.index + 1, recordCount: normalized.length });
+                emitBulkMutationProgress(startedAt, "dispatching", record.index, results, undefined, { recordIndex: record.index + 1, recordCount: normalized.length });
                 try {
                     const identity = extractDispatchCardIdentity(unwrapData(await runDispatch("cards/create", record.payload)));
                     results[record.index].status = "created"; results[record.index].certainty = "dispatch_returned"; results[record.index].card = publicCardIdentity(identity);
@@ -8083,7 +8087,7 @@ export const card_bulk_create = tool({
                         plannedServerRecoveryWaitMs += retryAfterMs;
                         retryEvents.push({ index: record.index, retryAttempt, retryAfterMs, retryAfterFormat });
                         rateLimitEvents.push({ index: record.index, retryAttempt, retryAttempted: true, retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, reason: "Retrying after valid bounded Retry-After." });
-                        emitBulkCreateProgress(startedAt, "rate_limited_retrying", record.index, results, undefined, {
+                        emitBulkMutationProgress(startedAt, "rate_limited_retrying", record.index, results, undefined, {
                             recordIndex: record.index + 1, recordCount: normalized.length, retryAttempt, retryMax: BULK_CREATE_MAX_CONSECUTIVE_429 - 1,
                             retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, rateLimitError: "Codecks rejected the request with HTTP 429.", consecutive429,
                         });
@@ -8099,7 +8103,7 @@ export const card_bulk_create = tool({
                     results[record.index].error = { category, message: toErrorMessage(error), ...errorData };
                     safeContinuationStartIndex = record.index + 1 < rawRecords.length ? record.index + 1 : null;
                     markBulkCreateDefinitelyUnsent(results, record.index);
-                    emitBulkCreateProgress(startedAt, `stopped_${category}`, record.index, results, undefined, category === "rate_limited" ? {
+                    emitBulkMutationProgress(startedAt, `stopped_${category}`, record.index, results, undefined, category === "rate_limited" ? {
                         recordIndex: record.index + 1, recordCount: normalized.length, retryAttempt, retryMax: BULK_CREATE_MAX_CONSECUTIVE_429 - 1,
                         retryAfterMs, retryAfterFormat, retryAfterParseStatus, retryAfterReason, rateLimitError: toErrorMessage(error), consecutive429,
                     } : undefined);
@@ -8107,7 +8111,7 @@ export const card_bulk_create = tool({
                 }
             }
             if (results[record.index].status !== "created") break;
-            emitBulkCreateProgress(startedAt, "applying", record.index + 1, results);
+            emitBulkMutationProgress(startedAt, "applying", record.index + 1, results);
         }
         const count = (status: string) => results.filter(x => x.status === status).length;
         const operation = getOperationContext();
@@ -8127,11 +8131,11 @@ export const card_bulk_create = tool({
             safeContinuationRange: safeContinuationStartIndex === null ? null : { startIndex: safeContinuationStartIndex, endIndex: rawRecords.length - 1 },
         };
         const totals = { dryRun, count: rawRecords.length, created: count("created"), failed: count("failed"), indeterminate: count("indeterminate"), definitelyUnsent: count("definitely_unsent") };
-        const artifact = await writeBulkCreateArtifact({ action: "card-bulk-create", createdAt: new Date().toISOString(), ...totals, metrics, ...(dryRun ? { previewFingerprint } : {}), results });
+        const artifact = await writeBulkArtifact("create", { action: "card-bulk-create", createdAt: new Date().toISOString(), ...totals, metrics, ...(dryRun ? { previewFingerprint } : {}), results });
         const exceptionalResults = results.filter(result => result.status !== "created" && result.status !== "preview");
         const data = { ...totals, metrics, ...(dryRun ? { previewFingerprint } : {}), results: exceptionalResults, artifact };
         const lines = ["## Bulk Card Create", "", `Mode: ${dryRun ? "dry-run" : "apply"}`, ...(dryRun ? [`Preview Fingerprint: ${previewFingerprint}`] : []), `Records: ${rawRecords.length}`, `Created: ${data.created}`, `Failed: ${data.failed}`, `Indeterminate: ${data.indeterminate}`, `Definitely Unsent: ${data.definitelyUnsent}`, `Physical Requests: ${metrics.physicalRequests}`, `Local Gate Wait: ${metrics.localGateWaitMs}ms`, `Server Cooldown Wait: ${metrics.serverCooldownWaitMs}ms`, `429 Recovery: ${metrics.retryEvents.length} retry event(s), ${metrics.consecutive429}/${metrics.maxConsecutive429} final consecutive`, `Detailed Results: ${"path" in artifact ? artifact.path : "unavailable"}`, ...(exceptionalResults.length ? ["", ...exceptionalResults.map(x => `- #${Number(x.index) + 1}${x.correlationKey ? ` [${x.correlationKey}]` : ""} ${x.status}/${x.certainty}${x.error && isRecord(x.error) ? ` — ${String(x.error.message)}` : ""}`)] : [])];
-        emitBulkCreateProgress(startedAt, "completed", rawRecords.length, results);
+        emitBulkMutationProgress(startedAt, "completed", rawRecords.length, results);
         return toStructuredResult(format, "card-bulk-create", lines.join("\n"), data);
         });
     },
@@ -8298,15 +8302,19 @@ export const card_bulk_update = tool({
             parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearParent: tool.schema.boolean().optional(), mode: tool.schema.enum(["replace", "append", "prepend"]).optional(),
         })).min(1).max(100),
         dryRun: tool.schema.boolean().optional(),
+        expectedPreviewFingerprint: tool.schema.string().optional().describe("Required for apply: the previewFingerprint returned by the matching dry run."),
         continueOnError: tool.schema.boolean().optional(),
         format: outputFormatArg,
     },
     async execute(args)
     {
+        return withOperationContextIfMissing(async () => {
         const format = args.format ?? "text";
         const dryRun = args.dryRun !== false;
         const continueOnError = args.continueOnError !== false;
         const rawRecords = Array.isArray(args.updates) ? args.updates as unknown[] : [];
+        const startedAt = Date.now();
+        emitBulkMutationProgress(startedAt, "validating", 0);
         const structuralErrors = validateStrictBulkRecords(rawRecords, "update");
         if (structuralErrors.length > 0)
         {
@@ -8344,9 +8352,10 @@ export const card_bulk_update = tool({
                     contentMode: value.mode,
                     current: value.current,
                     proposed: value.proposed,
-                    status: "ready",
+                    status: dryRun ? "preview" : "ready",
                     certainty: "not_dispatched",
                 };
+                emitBulkMutationProgress(startedAt, "normalizing", index + 1, results);
             }
             catch (error)
             {
@@ -8384,41 +8393,62 @@ export const card_bulk_update = tool({
             });
         }
 
+        const previewFingerprint = bulkPreviewFingerprint("card_bulk_update", normalized);
+        const normalizationRequests = getOperationContext()?.requestsAttempted ?? 0;
         if (!dryRun)
         {
-            for (const value of normalized)
+            const expected = args.expectedPreviewFingerprint;
+            const malformed = typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected);
+            if (malformed || expected !== previewFingerprint)
             {
-                try
-                {
-                    const response = unwrapData(await runDispatch("cards/update", value.payload));
-                    results[value.index].status = "updated";
-                    results[value.index].certainty = "dispatch_returned";
-                    results[value.index].dispatchReturned = truncateStructuredValue(response).value;
-                }
-                catch (error)
-                {
-                    const outcome = classifyMutationOutcome(error);
-                    results[value.index].status = outcome;
-                    results[value.index].certainty = outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected";
-                    results[value.index].error = {
-                        category: error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
-                        message: toErrorMessage(error),
-                        ...getOperationErrorData(error),
-                        retried: false,
-                    };
-                    if (outcome === "indeterminate")
-                    {
-                        results[value.index].reconciliation = { actionKey: results[value.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
-                        markDefinitelyUnsent(results, value.index);
-                        break;
-                    }
-                    if (!continueOnError)
-                    {
-                        markDefinitelyUnsent(results, value.index);
-                        break;
-                    }
-                }
+                return toStructuredErrorResult(format, "card-bulk-update", "validation_error", malformed
+                    ? "expectedPreviewFingerprint is required for apply and must be a SHA-256 fingerprint returned by the matching dry run."
+                    : "expectedPreviewFingerprint does not match the normalized bulk-update preview; no cards were dispatched.", {
+                    actualPreviewFingerprint: previewFingerprint, recordCount: normalized.length, requestsAttempted: normalizationRequests, dispatchRequests: 0,
+                    results: normalized.map(value => ({ index: value.index, correlationKey: value.correlationKey, status: "definitely_unsent", certainty: "definitely_unsent" })),
+                });
             }
+        }
+        const retryEvents: Array<{ index: number; retryAttempt: number; retryAfterMs: number; retryAfterFormat?: "codecks_milliseconds" | "http_date" }> = [];
+        const rateLimitEvents: Array<Record<string, unknown>> = [];
+        let consecutive429 = 0; let plannedServerRecoveryWaitMs = 0; let uniqueRecordsAttempted = 0; let safeContinuationStartIndex: number | null = null;
+        if (!dryRun) for (const value of normalized)
+        {
+            uniqueRecordsAttempted += 1;
+            let retryAttempt = 0;
+            while (true) try
+            {
+                emitBulkMutationProgress(startedAt, "dispatching", value.index, results, undefined, { recordIndex: value.index + 1, recordCount: normalized.length });
+                const response = unwrapData(await runDispatch("cards/update", value.payload));
+                results[value.index].status = "updated"; results[value.index].certainty = "dispatch_returned"; results[value.index].dispatchReturned = truncateStructuredValue(response).value; consecutive429 = 0;
+                break;
+            }
+            catch (error)
+            {
+                const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+                const errorData = getOperationErrorData(error); const retryAfterMs = typeof errorData.retryAfterMs === "number" ? errorData.retryAfterMs : undefined;
+                const retryAfterFormat = errorData.retryAfterFormat === "codecks_milliseconds" || errorData.retryAfterFormat === "http_date" ? errorData.retryAfterFormat : undefined;
+                if (category === "rate_limited") consecutive429 += 1;
+                else consecutive429 = 0;
+                if (category === "rate_limited" && retryAfterMs !== undefined && consecutive429 < BULK_CREATE_MAX_CONSECUTIVE_429 && plannedServerRecoveryWaitMs + retryAfterMs <= MAX_SERVER_COOLDOWN_MS)
+                {
+                    retryAttempt += 1; plannedServerRecoveryWaitMs += retryAfterMs; retryEvents.push({ index: value.index, retryAttempt, retryAfterMs, retryAfterFormat });
+                    rateLimitEvents.push({ index: value.index, retryAttempt, retryAttempted: true, retryAfterMs, retryAfterFormat, reason: "Retrying after valid bounded Retry-After." });
+                    emitBulkMutationProgress(startedAt, "rate_limited_retrying", value.index, results, undefined, { recordIndex: value.index + 1, recordCount: normalized.length, retryAttempt, retryMax: BULK_CREATE_MAX_CONSECUTIVE_429 - 1, retryAfterMs, retryAfterFormat, consecutive429 });
+                    continue;
+                }
+                if (category === "rate_limited") rateLimitEvents.push({ index: value.index, retryAttempt, retryAttempted: false, retryAfterMs, retryAfterFormat, reason: "Retry was not attempted." });
+                const outcome = category === "rate_limit_queue_aborted" ? "definitely_unsent" : classifyMutationOutcome(error);
+                results[value.index].status = outcome; results[value.index].certainty = outcome === "indeterminate" ? "possibly_applied" : outcome === "definitely_unsent" ? "definitely_unsent" : "definitely_rejected";
+                results[value.index].error = { category, message: toErrorMessage(error), ...errorData, retried: retryAttempt > 0 };
+                const canContinue = outcome === "failed" && category !== "rate_limited" && continueOnError;
+                if (canContinue) break;
+                if (outcome === "indeterminate") results[value.index].reconciliation = { actionKey: results[value.index].actionKey, retry: "do_not_retry", reason: "The request may have reached Codecks; reconcile before any new write." };
+                markDefinitelyUnsent(results, value.index); safeContinuationStartIndex = value.index + 1 < rawRecords.length ? value.index + 1 : null;
+                emitBulkMutationProgress(startedAt, `stopped_${category}`, value.index, results); break;
+            }
+            if (results[value.index].status !== "updated" && !(results[value.index].status === "failed" && continueOnError)) break;
+            emitBulkMutationProgress(startedAt, "applying", value.index + 1, results);
         }
 
         const updated = results.filter((entry) => entry.status === "updated").length;
@@ -8426,21 +8456,12 @@ export const card_bulk_update = tool({
         const indeterminate = results.filter((entry) => entry.status === "indeterminate").length;
         const definitelyUnsent = results.filter((entry) => entry.status === "definitely_unsent").length;
         const pending = results.filter((entry) => entry.status === "ready").length;
-        const lines = [
-            "## Bulk Card Update",
-            "",
-            `Mode: ${dryRun ? "dry-run" : "apply"}`,
-            `Records: ${rawRecords.length}`,
-            `Updated: ${updated}`,
-            `Failed/Invalid: ${failed}`,
-            `Indeterminate: ${indeterminate}`,
-            `Definitely Unsent: ${definitelyUnsent}`,
-            "",
-            ...results.map((entry) => {
-                const target = entry.target as NormalizedBulkUpdateRecord["target"] | undefined;
-                return `- #${Number(entry.index) + 1} ${entry.status}: ${target?.cardRef ?? target?.cardId ?? entry.cardId ?? "(missing)"} ${target?.title ?? ""} — ${(entry.updatedFields as string[] | undefined)?.join(", ") ?? "invalid"}`;
-            }),
-        ];
+        const operation = getOperationContext();
+        const metrics = { elapsedMs: Math.max(0, Date.now() - startedAt), physicalRequests: operation?.requestsAttempted ?? 0, normalizationRequests, dispatchRequests: Math.max(0, (operation?.requestsAttempted ?? 0) - normalizationRequests), uniqueRecordsAttempted, localGateWaitMs: operation?.localGateWaitMs ?? 0, serverCooldownWaitMs: operation?.serverCooldownWaitMs ?? 0, consecutive429, maxConsecutive429: BULK_CREATE_MAX_CONSECUTIVE_429, serverRecoveryWaitBudgetMs: MAX_SERVER_COOLDOWN_MS, retryEvents, rateLimitEvents, safeContinuationRange: safeContinuationStartIndex === null ? null : { startIndex: safeContinuationStartIndex, endIndex: rawRecords.length - 1 } };
+        const artifact = await writeBulkArtifact("update", { action: "card-bulk-update", createdAt: new Date().toISOString(), dryRun, count: rawRecords.length, updated, failed, indeterminate, definitelyUnsent, metrics, ...(dryRun ? { previewFingerprint } : {}), results });
+        const exceptionalResults = results.filter(entry => entry.status !== "updated" && entry.status !== "preview");
+        const lines = ["## Bulk Card Update", "", `Mode: ${dryRun ? "dry-run" : "apply"}`, ...(dryRun ? [`Preview Fingerprint: ${previewFingerprint}`] : []), `Records: ${rawRecords.length}`, `Updated: ${updated}`, `Failed/Invalid: ${failed}`, `Indeterminate: ${indeterminate}`, `Definitely Unsent: ${definitelyUnsent}`, `Physical Requests: ${metrics.physicalRequests}`, `Local Gate Wait: ${metrics.localGateWaitMs}ms`, `Server Cooldown Wait: ${metrics.serverCooldownWaitMs}ms`, `429 Recovery: ${metrics.retryEvents.length} retry event(s), ${metrics.consecutive429}/${metrics.maxConsecutive429} final consecutive`, `Detailed Results: ${"path" in artifact ? artifact.path : "unavailable"}`, ...exceptionalResults.map(entry => `- #${Number(entry.index) + 1} ${entry.status}/${entry.certainty}`)];
+        emitBulkMutationProgress(startedAt, "completed", rawRecords.length, results);
         return toStructuredResult(format, "card-bulk-update", lines.join("\n"), {
             responseSchemaVersion: 1,
             dryRun,
@@ -8457,7 +8478,11 @@ export const card_bulk_update = tool({
             pending,
             continueOnError,
             ambiguousMutationsRetried: false,
-            results,
+            metrics,
+            ...(dryRun ? { previewFingerprint } : {}),
+            results: exceptionalResults,
+            artifact,
+        });
         });
     },
 });

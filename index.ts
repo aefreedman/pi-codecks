@@ -464,6 +464,7 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     parameters: Type.Object({
       updates: Type.Array(bulkUpdateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card updates. Each item needs cardId and at least one supported update field." }),
       dryRun: Type.Optional(Type.Boolean()),
+      expectedPreviewFingerprint: Type.Optional(Type.String({ description: "Required for apply: previewFingerprint returned by the matching dry run." })),
       continueOnError: Type.Optional(Type.Boolean()),
       format: Type.Optional(outputFormatEnum),
     }),
@@ -477,9 +478,10 @@ const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
     promptGuidelines: [
       ...CARD_REFERENCE_WRITE_GUIDELINES,
       "Use codecks_card_bulk_update for CSV/import-style card updates after mapping rows into card update objects.",
-      "Run codecks_card_bulk_update with dryRun=true before applying broad tracker edits.",
+      "Run codecks_card_bulk_update with dryRun=true before applying broad tracker edits, then pass its previewFingerprint as expectedPreviewFingerprint.",
       "Use runId/clearRun and parentCardId/clearParent for bounded multi-card Run and parent changes; effort, priority, and tags are also supported.",
-      "A batch apply makes one non-retried mutation attempt per valid record and reports indexed applied/failed counts.",
+      "The package paces requests at 40 per five seconds and retries only definitely rejected HTTP 429 responses within its bounded recovery budget. It never retries ambiguous writes; continueOnError applies only to definitely rejected non-429 failures.",
+      "Compact output includes exceptional records; full sanitized per-record details are written to a returned temporary artifact.",
     ],
   },
   card_update: {
@@ -1379,8 +1381,9 @@ function summarizeCodecksResult(exportName: string, resultText: string, structur
 }
 
 function renderCodecksCall(exportName: string, args: Record<string, unknown>, theme: RenderTheme): TextLikeComponent {
-  if (exportName === "card_bulk_create") {
-    const count = Array.isArray(args.cards) ? args.cards.length : 0;
+  if (exportName === "card_bulk_create" || exportName === "card_bulk_update") {
+    const records = exportName === "card_bulk_create" ? args.cards : args.updates;
+    const count = Array.isArray(records) ? records.length : 0;
     const mode = args.dryRun === false ? "apply" : "dry-run";
     return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))} ${themed(theme, "accent", mode)} · ${count} card${count === 1 ? "" : "s"}`);
   }
@@ -1397,13 +1400,15 @@ function renderCodecksResult(
 ): TextLikeComponent {
   if (options?.isPartial) {
     const progress = result?.details?.progress;
-    if (exportName === "card_bulk_create" && progress && typeof progress === "object") {
+    if ((exportName === "card_bulk_create" || exportName === "card_bulk_update") && progress && typeof progress === "object") {
       const value = progress as Record<string, unknown>;
       const number = (key: string) => typeof value[key] === "number" ? value[key] : 0;
       const stage = typeof value.stage === "string" ? value.stage : "running";
       const pacing = typeof value.pacingReason === "string" ? ` · pacing ${value.pacingReason}: ${number("pacingElapsedMs")}ms elapsed, ~${number("pacingRemainingMs")}ms remaining` : "";
       const retry = typeof value.retryAttempt === "number" ? ` · rate limited record ${number("recordIndex")}/${number("recordCount")}, retry ${number("retryAttempt")}/${number("retryMax")} after ${number("retryAfterMs")}ms (${String(value.retryAfterFormat ?? "unknown")}; ${String(value.retryAfterParseStatus ?? "unknown")}${typeof value.retryAfterReason === "string" ? `: ${value.retryAfterReason}` : ""})` : "";
-      return textComponent(themed(theme, "warning", `Bulk create ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued (${number("localGateWaitMs")}ms local / ${number("serverCooldownWaitMs")}ms server)${pacing}${retry} · ${number("created")} created / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
+      const operation = exportName === "card_bulk_create" ? "create" : "update";
+      const success = exportName === "card_bulk_create" ? `${number("created")} created` : `${number("updated")} updated`;
+      return textComponent(themed(theme, "warning", `Bulk ${operation} ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued (${number("localGateWaitMs")}ms local / ${number("serverCooldownWaitMs")}ms server)${pacing}${retry} · ${success} / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
     }
     return textComponent(themed(theme, "warning", "Running Codecks request..."));
   }
@@ -1472,7 +1477,7 @@ export default function codecksTools(pi: ExtensionAPI) {
           async () => coreTool.execute(executionParams),
           ctx.cwd ?? process.cwd(),
           onUpdate ? (progress) => {
-            const prefix = exportName === "card_bulk_create" ? "Bulk create" : "Codecks request";
+            const prefix = exportName === "card_bulk_create" ? "Bulk create" : exportName === "card_bulk_update" ? "Bulk update" : "Codecks request";
             const pacing = progress.pacingReason
               ? `; pacing ${progress.pacingReason}, ${progress.pacingElapsedMs ?? 0}ms elapsed, about ${progress.pacingRemainingMs ?? 0}ms remaining`
               : "";

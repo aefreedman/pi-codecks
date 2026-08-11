@@ -7,6 +7,12 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.11.3] - 2026-08-11
+
+### Changed
+
+- Brought bulk card-update parity with bulk create: fingerprint-bound previews, bounded explicit-429 recovery, pacing metrics/progress, compact results, temporary sanitized detail artifacts, and continuation-safe mutation outcomes.
+
 ## [0.11.2] - 2026-08-11
 
 ### Fixed
