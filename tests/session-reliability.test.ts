@@ -124,7 +124,8 @@ try {
     return response(runPayload(key!));
   }) as typeof fetch;
   const runUpdates = Array.from({ length: 31 }, () => ({ cardId: CARD_ID, runId: 116, effort: 5, priority: "medium", tags: ["run-116"] }));
-  const batch = parseResult(await invoke(core.card_bulk_update, { updates: runUpdates, dryRun: false, continueOnError: true, format: "json" }));
+  const updatePreview = parseResult(await invoke(core.card_bulk_update, { updates: runUpdates, dryRun: true, format: "json" }));
+  const batch = parseResult(await invoke(core.card_bulk_update, { updates: runUpdates, dryRun: false, expectedPreviewFingerprint: updatePreview.data.previewFingerprint, continueOnError: true, format: "json" }));
   assert.equal(batch.ok, true);
   assert.equal(batch.data.count, 31);
   assert.equal(batch.data.updated, 6);
@@ -133,12 +134,11 @@ try {
   assert.equal(batch.data.definitelyUnsent, 24);
   assert.equal(batch.data.ambiguousMutationsRetried, false);
   assert.equal(mutationAttempts, 7, "an ambiguous mutation stops later dispatches and is never retried");
-  assert.equal(batch.data.results[6].status, "indeterminate");
-  assert.equal(batch.data.results[6].reconciliation.retry, "do_not_retry");
-  assert.equal(batch.data.results[7].status, "definitely_unsent");
-  assert.equal(batch.data.results[0].proposed.run.accountSeq, 116);
-  assert.equal(batch.data.results[0].target.cardRef.startsWith("$"), true);
-  assert.equal(batch.data.results[0].target.accountSeqRef, "seq:2481");
+  assert.equal(batch.data.results[0].index, 6);
+  assert.equal(batch.data.results[0].status, "indeterminate");
+  assert.equal(batch.data.results[0].reconciliation.retry, "do_not_retry");
+  assert.equal(batch.data.results[1].index, 7);
+  assert.equal(batch.data.results[1].status, "definitely_unsent");
 
   for (const parallelCount of [8, 10]) {
     let active = 0;

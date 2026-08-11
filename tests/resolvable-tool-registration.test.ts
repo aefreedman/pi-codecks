@@ -87,7 +87,7 @@ assertProperties("codecks_card_update_run", ["cardId", "runId", "sprintId", "cle
 assertRequired("codecks_card_update_run", ["cardId"]);
 assertProperties("codecks_card_bulk_create", ["cards", "deck", "milestone", "parentCardId", "dryRun", "expectedPreviewFingerprint", "format"]);
 assertRequired("codecks_card_bulk_create", ["cards"]);
-assertProperties("codecks_card_bulk_update", ["updates", "dryRun", "continueOnError", "format"]);
+assertProperties("codecks_card_bulk_update", ["updates", "dryRun", "expectedPreviewFingerprint", "continueOnError", "format"]);
 assertRequired("codecks_card_bulk_update", ["updates"]);
 
 assertProperties("codecks_card_reply_resolvable", ["resolvableId", "cardId", "context", "content", "format"]);
