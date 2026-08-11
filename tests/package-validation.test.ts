@@ -28,8 +28,13 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
   assert.ok(existsSync(path.join(root, registration)), `missing Pi registration target: ${registration}`);
 }
 
-const expectedFiles = ["index.ts", "src/", "skills/", "prompts/", "docs/", "references/", "README.md", "CHANGELOG.md", "LICENSE"];
+const expectedFiles = [
+  "index.ts", "src/", "skills/", "prompts/",
+  "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md", "docs/testing.md",
+  "references/", "README.md", "CHANGELOG.md", "LICENSE",
+];
 assert.deepEqual(packageJson.files, expectedFiles);
+assert.equal(packageJson.files.includes("docs/release.md"), false, "maintainer-only release process must remain repository-only");
 for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
   assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
 }
@@ -41,12 +46,16 @@ assert.doesNotMatch(packageJson.scripts?.test ?? "", /integration|CODECKS_/i);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-tool-validation|CODECKS_/i);
 assert.match(packageJson.scripts?.["pack:validate"] ?? "", /validate-pack-manifest/);
 assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
+assert.match(packageJson.scripts?.["validate:external-provider-live"] ?? "", /validate-external-provider-live/);
 assert.match(packageJson.scripts?.["test:characterization"] ?? "", /bulk-create-characterization/);
+assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-readonly-auth-contract/);
 assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.equal(packageJson.dependencies, undefined, "Codecks has no runtime package dependency on workflow composition.");
+assert.deepEqual(packageJson.dependencies, { typebox: "1.3.8" }, "TypeBox is a runtime import and must resolve for standalone installed packages.");
+assert.equal(packageJson.peerDependencies?.typebox, undefined, "runtime TypeBox must not rely on an optional peer.");
+assert.equal(packageJson.peerDependenciesMeta?.typebox, undefined, "runtime TypeBox must not rely on optional peer metadata.");
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], undefined);
@@ -57,6 +66,10 @@ assert.equal(packageJson.bundledDependencies, undefined);
 assert.ok(existsSync(path.join(root, "references/cg-changelog/codecks-workflow.md")), "missing mapped Codecks changelog reference");
 assert.equal(existsSync(path.join(root, "src/mutation-authorization.ts")), false, "mutation authorization module must not be packaged");
 assert.equal(existsSync(path.join(root, "tests/codecks-mutation-authorization.test.ts")), false, "obsolete mutation authorization tests must stay removed");
+assert.equal(existsSync(path.join(root, "src/codecks-readonly-auth-contract.ts")), false, "retired fixed authentication contract must stay removed");
+assert.equal(existsSync(path.join(root, "src/integrations/codecks-readonly-auth-client.mjs")), false, "retired fixed authentication child must stay removed");
+assert.equal(existsSync(path.join(root, "tests/codecks-readonly-auth-contract.test.ts")), false, "retired fixed authentication tests must stay removed");
+assert.doesNotMatch(read("index.ts"), /resolveCodecksReadonlyAuthClientExecutable|codecks-readonly-auth/);
 
 const publicCi = read(".github/workflows/ci.yml");
 const integrationWorkflow = read(".github/workflows/integration.yml");
@@ -164,6 +177,17 @@ assert.match(readme, /npm ci && npm test/);
 assert.match(testing, /credential-free/i);
 assert.match(testing, /npm run test:integration/);
 assert.match(testing, /CODECKS_TEST_DECK/);
+assert.match(testing, /validate:external-provider-live/);
+assert.match(testing, /PI_CODECKS_ALLOW_LIVE_VALIDATION=1/);
+assert.match(readme, /CODECKS_CREDENTIAL_PROVIDER=external-helper/);
+assert.match(readme, /PI_CODECKS_ALLOW_LIVE_VALIDATION=1/);
+assert.match(read("SECURITY.md"), /PI_CODECKS_ALLOW_LIVE_VALIDATION=1/);
+assert.match(readme, /ambient/i);
+assert.match(readme, /never falls back/i);
+assert.match(readme, /absolute/i);
+assert.match(read("SECURITY.md"), /not a secret broker/i);
+assert.match(read("docs/external-credential-helper-protocol.md"), /manager-neutral/i);
+assert.doesNotMatch(packageFacingDocs, /codecks-readonly-auth|read-only authentication contract/i);
 assert.match(contributing, /fork|pull request/i);
 assert.match(release, /trusted publishing/i);
 assert.match(release, /npm publish --dry-run --access public/);

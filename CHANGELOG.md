@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.10.0] - 2026-08-11
+
+### Fixed
+
+- Declared TypeBox as a runtime dependency so standalone npm-installed extensions resolve their schema runtime without relying on an optional peer supplied by a host.
+- Classified a structurally valid exact identity response with `_root.loggedInUser` explicitly `null` or the literal empty string as the existing redacted `authentication_rejected` result. Missing/incompatible roots, whitespace-only strings, and other nonempty identities that cannot normalize to an ID remain `malformed_response`; HTTP `401`/`403` behavior is unchanged.
+- Bounded the optional external-provider live-validation launcher's public `durationMs` diagnostic to `0..60000` while retaining its fixed redacted result contract.
+- Hardened external-helper execution against mixed-case inherited credential/reference variables, pre- and post-settlement stream errors, synchronous abort/kill/close races, and throwing or stalled injected termination paths. Termination remains best-effort; caller settlement is independent of child/taskkill completion.
+- Hardened the optional external-provider live-validation launcher to require exact `CODECKS_CREDENTIAL_PROVIDER=external-helper` and explicit `PI_CODECKS_ALLOW_LIVE_VALIDATION=1` before invoking a helper or fetch. Missing or wrong values fail with fixed invalid configuration and never select or fall back to ambient environment credentials.
+
+### Added
+
+- Added a built-in explicitly selected `onepassword` credential provider. It packages the fixed `op run --no-masking -- <current Node child>` adapter, requires no `pi-onepassword` installation or helper module, resolves a canonical absolute executable once from explicit startup `PATH` entries (or an optional absolute override), sanitizes credential-manager and ambient Codecks settings, and fails closed without fallback. Deterministic and packed-consumer coverage exercises executable discovery, ambiguity and current-directory exclusion, masking-sensitive invocation, sanitization, and normal inert Codecks requests without network access.
+- Added an explicit provider-neutral `external-helper` credential provider. It runs a trusted absolute `.js`/`.mjs` Node helper without a shell, exchanges one bounded version-1 stdin/stdout JSON message, sanitizes inherited Codecks credential variables, bounds timeout/output, makes bounded best-effort termination attempts on cancellation, and fails closed without environment fallback.
+- Added deterministic fake-helper coverage and public adapter-author protocol documentation for helper request/response validation, output/error redaction, cancellation, timeout, and adversarial child-process behavior.
+- Extended installed-tarball smoke coverage with an inert external helper that proves packed helper success, inherited credential sanitization, and fail-closed malformed output without network access.
+- Added an internal asynchronous Codecks credential-provider boundary with the environment provider as the compatibility default. Credential/config resolution is lazy and shared only within each top-level tool operation; retries and multi-request operations do not re-resolve it.
+- Added deterministic credential characterization coverage for environment precedence, profile/base configuration, missing values, rejected references, provider fail-closed behavior, and per-operation request resolution.
+- Added a repository-only external-provider live-validation launcher that uses the normal provider-selected credential and exact-read identity path, accepts configuration only from the environment, emits one redacted fixed-category JSON status line, and exits successfully only when authenticated. Deterministic injected-fetch coverage proves this path without network access.
+- Added migration and security-boundary guidance for the default ambient environment provider, built-in 1Password provider, and explicit fail-closed external-helper provider.
+
 ## [0.9.1] - 2026-08-05
 
 ### Fixed

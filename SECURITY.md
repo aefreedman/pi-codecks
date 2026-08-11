@@ -10,7 +10,7 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 
 ## Credential and data handling
 
-`pi-codecks` expects credentials through environment variables supplied before Pi starts. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data.
+`pi-codecks` resolves credentials through its internal provider boundary. The default `environment` provider reads environment variables supplied before Pi starts. This compatibility path is ambient within the Pi process: unrelated same-process extensions or subprocesses may inherit its token. It is not an isolation boundary. Repository files, examples, fixtures, screenshots, logs, and workflow definitions must never contain live credentials or private account data. See [Configuration and migration](README.md#configuration) for the user-facing provider choice.
 
 - Use a dedicated non-production account and disposable fixture scope for live integration validation.
 - Keep live tests outside public pull-request CI.
@@ -18,7 +18,15 @@ For ordinary bugs without sensitive details, use the public issue tracker.
 - Never paste raw Codecks responses into public reports; provide a minimal redacted shape instead.
 - If a credential may have been exposed, revoke or rotate it before sharing further details.
 
-The package rejects unresolved secret-reference placeholders. Resolve secrets through an explicit secret integration, then pass the resulting value through the supported environment variables.
+The environment provider rejects unresolved profile secret-reference placeholders. Resolve secrets before launch, then pass the resulting value through the supported environment variables.
+
+Users may explicitly select the built-in `CODECKS_CREDENTIAL_PROVIDER=onepassword` provider with `PI_CODECKS_ONEPASSWORD_REFERENCE` and process-only `OP_SERVICE_ACCOUNT_TOKEN`. It resolves either the optional absolute `PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE` override or one unambiguous canonical executable from non-empty startup `PATH` entries, then uses a fixed `op run --no-masking -- <current Node child>` protocol. The reference, Codecks credentials, conflicting 1Password session/Connect/service-account variables, and Node injection variables are removed before invoking `op`; provider failures never fall back to ambient Codecks tokens. `--no-masking` is deliberately required only for the private bounded protocol, not public output. This does not isolate trusted extensions or same-user processes.
+
+Users may alternatively select `CODECKS_CREDENTIAL_PROVIDER=external-helper` with an absolute trusted `.js`/`.mjs` `CODECKS_CREDENTIAL_HELPER_MODULE`. The package runs that module through the current Node executable without a shell or caller/model-selected arguments; its bounded versioned stdin/stdout exchange and adapter-author requirements are documented in [the external helper protocol](docs/external-credential-helper-protocol.md). Global/profile Codecks direct-token and secret-reference variables plus profile/provider/helper selectors are removed case-insensitively from the helper's inherited environment. Helper stdout/stderr, paths, manager references, and credentials are never included in public errors or tool results. A selected helper is authoritative: invalid configuration, malformed output, nonzero exit, timeout, cancellation, or launch failure fails closed and never falls back to an ambient token. This reduces accidental Codecks-token inheritance; it does not isolate trusted extensions or same-user processes.
+
+The helper path and manager configuration are trusted launcher settings, not model-facing input or authorization. `pi-codecks` is not a secret broker and does not promise helper discovery, a cross-operation credential cache, refresh/lease handling, automatic 401 retry, isolation from malicious extensions, or protection from same-user process inspection.
+
+The optional `validate:external-provider-live` launcher is separately authorized live work, not a general credential check. It fails closed before helper execution or fetch unless the process has both exact `CODECKS_CREDENTIAL_PROVIDER=external-helper` and non-secret `PI_CODECKS_ALLOW_LIVE_VALIDATION=1`. It never permits the `environment` provider or ambient-token fallback. Do not set the acknowledgement in public CI; use only separately authorized non-production credentials.
 
 ## Supported versions
 

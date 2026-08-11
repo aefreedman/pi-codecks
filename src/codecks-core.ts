@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { resolveExternalHelperCredential } from "./codecks-external-helper";
+import { resolveOnePasswordCredential } from "./codecks-onepassword";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, relative, resolve } from "path";
@@ -25,6 +27,35 @@ type CodecksConfig = {
     token: string;
     baseUrl: string;
 };
+
+type CodecksFetch = typeof fetch;
+
+export type CodecksExternalProviderCheckCategory =
+    | "authenticated"
+    | "authentication_rejected"
+    | "invalid_configuration"
+    | "malformed_response"
+    | "unavailable";
+
+export type CodecksExternalProviderCheckResult = Readonly<{
+    category: CodecksExternalProviderCheckCategory;
+}>;
+
+type CodecksCredentialRequest = Readonly<{
+    account: string;
+    profileKey?: string;
+    signal: AbortSignal;
+}>;
+
+type CodecksCredential = Readonly<{
+    token: string;
+    providerId: string;
+}>;
+
+interface CodecksCredentialProvider {
+    readonly id: string;
+    resolve(request: CodecksCredentialRequest): Promise<CodecksCredential>;
+}
 
 type CodecksUser = {
     id?: string | number;
@@ -224,6 +255,7 @@ type OperationContext = {
     onBulkCreateProgress?: (progress: BulkCreateProgress) => void;
     requestsAttempted: number;
     queueWaitMs: number;
+    credentialConfigPromise?: Promise<CodecksConfig>;
 };
 
 const abortSignalStorage = new AsyncLocalStorage<AbortSignal | undefined>();
@@ -392,8 +424,8 @@ const firstNonEmpty = (...values: Array<string | undefined | null>): string | un
 const throwUnsupportedTokenRef = (profileKey: string): never =>
 {
     throw new Error(
-        `Codecks profile '${profileKey}' uses a TOKEN_REF/TOKEN_OP_REF value, but pi-codecks no longer executes 1Password helpers directly. `
-        + "Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.",
+        `Codecks profile '${profileKey}' uses a TOKEN_REF/TOKEN_OP_REF value, which is not supported by the environment provider. `
+        + "Select CODECKS_CREDENTIAL_PROVIDER=onepassword or set CODECKS_TOKEN / CODECKS_PROFILE_<PROFILE>_TOKEN.",
     );
 };
 
@@ -425,34 +457,90 @@ const getBaseConfig = (): CodecksBaseConfig =>
     return { account, baseUrl, profileKey };
 };
 
-const getConfig = (): CodecksConfig =>
-{
-    const base = getBaseConfig();
-    const profileKey = base.profileKey;
-    const profileTokenOpRef = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN_OP_REF"), getProfileEnv(profileKey, "TOKEN_REF")) : undefined;
-    const profileTokenDirect = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN"), getProfileEnv(profileKey, "API_TOKEN")) : undefined;
-    const globalToken = firstNonEmpty(process.env.CODECKS_TOKEN, process.env.CODECKS_API_TOKEN);
-    if (profileTokenOpRef)
+const environmentCredentialProvider: CodecksCredentialProvider = {
+    id: "environment",
+    async resolve({ profileKey }): Promise<CodecksCredential>
     {
-        throwUnsupportedTokenRef(profileKey ?? "default");
-    }
-
-    const token = firstNonEmpty(profileTokenDirect, globalToken);
-
-    if (!token)
-    {
-        if (profileKey)
+        const profileTokenOpRef = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN_OP_REF"), getProfileEnv(profileKey, "TOKEN_REF")) : undefined;
+        const profileTokenDirect = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "TOKEN"), getProfileEnv(profileKey, "API_TOKEN")) : undefined;
+        const globalToken = firstNonEmpty(process.env.CODECKS_TOKEN, process.env.CODECKS_API_TOKEN);
+        if (profileTokenOpRef)
         {
-            throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
+            throwUnsupportedTokenRef(profileKey ?? "default");
         }
-        throw new Error("Missing Codecks credentials. Set CODECKS_TOKEN (or CODECKS_API_TOKEN) and CODECKS_ACCOUNT (subdomain), or configure CODECKS_PROFILE.");
+
+        const token = firstNonEmpty(profileTokenDirect, globalToken);
+        if (!token)
+        {
+            if (profileKey)
+            {
+                throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
+            }
+            throw new Error("Missing Codecks credentials. Set CODECKS_TOKEN (or CODECKS_API_TOKEN) and CODECKS_ACCOUNT (subdomain), or configure CODECKS_PROFILE.");
+        }
+
+        return { token, providerId: "environment" };
+    },
+};
+
+const getCredentialProvider = (): CodecksCredentialProvider =>
+{
+    const selector = firstNonEmpty(process.env.CODECKS_CREDENTIAL_PROVIDER);
+    if (!selector || selector === "environment")
+    {
+        return environmentCredentialProvider;
     }
 
-    return {
+    if (selector === "onepassword")
+    {
+        return {
+            id: "onepassword",
+            async resolve(request): Promise<CodecksCredential>
+            {
+                return resolveOnePasswordCredential(request);
+            },
+        };
+    }
+
+    if (selector === "external-helper")
+    {
+        return {
+            id: "external-helper",
+            async resolve(request): Promise<CodecksCredential>
+            {
+                const credential = await resolveExternalHelperCredential(request);
+                return { token: credential.token, providerId: credential.providerId };
+            },
+        };
+    }
+
+    throw new Error("Unsupported Codecks credential provider. Set CODECKS_CREDENTIAL_PROVIDER=environment, onepassword, or external-helper.");
+};
+
+let testCredentialProvider: CodecksCredentialProvider | undefined;
+
+const resolveAuthenticatedConfig = async (): Promise<CodecksConfig> =>
+{
+    const provider = testCredentialProvider ?? getCredentialProvider();
+    const base = getBaseConfig();
+    const signal = getActiveAbortSignal() ?? new AbortController().signal;
+    const credential = await provider.resolve({
         account: base.account,
-        token,
-        baseUrl: base.baseUrl,
-    };
+        profileKey: base.profileKey,
+        signal,
+    });
+    return { account: base.account, baseUrl: base.baseUrl, token: credential.token };
+};
+
+const getAuthenticatedConfig = (): Promise<CodecksConfig> =>
+{
+    const context = getOperationContext();
+    if (!context)
+    {
+        return resolveAuthenticatedConfig();
+    }
+    context.credentialConfigPromise ??= resolveAuthenticatedConfig();
+    return context.credentialConfigPromise;
 };
 
 const DEFAULT_QUERY_CARD_FIELDS = ["cardId", "accountSeq", "title", "status", "derivedStatus", "isDoc"];
@@ -1833,6 +1921,16 @@ export const __test = {
     validateMutationText,
     snapshotAttachmentSource,
     assertUnchangedAttachmentSource,
+    getBaseConfig,
+    resolveEnvironmentCredential: (base: CodecksBaseConfig) => environmentCredentialProvider.resolve({
+        account: base.account,
+        profileKey: base.profileKey,
+        signal: new AbortController().signal,
+    }),
+    resolveAuthenticatedConfig,
+    resolveExternalHelperCredential,
+    resolveOnePasswordCredential,
+    setCredentialProviderForTests: (provider?: CodecksCredentialProvider) => { testCredentialProvider = provider; },
 };
 
 const normalizeUserId = (value: string): string => value.trim().toLowerCase();
@@ -2101,7 +2199,7 @@ const formatCardUrl = (shortCode?: string): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/card/${shortCode.replace("$", "")}`;
 };
 
@@ -2112,7 +2210,7 @@ const formatRunUrl = (accountSeq?: number): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/sprint/${accountSeq}`;
 };
 
@@ -2123,7 +2221,7 @@ const formatMilestoneUrl = (accountSeq?: number): string =>
         return "";
     }
 
-    const config = getConfig();
+    const config = getBaseConfig();
     return `https://${config.account}.codecks.io/milestones/${accountSeq}`;
 };
 
@@ -2236,7 +2334,7 @@ const detectContentType = (filePath: string, override?: string): string =>
 
 const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
     const queueWaitMs = await enforceRateLimit();
@@ -3287,6 +3385,7 @@ const requestJson = async (
     init: RequestInit,
     config: CodecksConfig,
     retryPolicy: CodecksRequestRetryPolicy,
+    fetchImplementation: CodecksFetch = fetch,
 ): Promise<unknown> =>
 {
     const externalSignal = getActiveAbortSignal();
@@ -3326,7 +3425,7 @@ const requestJson = async (
         let response: Response;
         try
         {
-            response = await fetch(`${config.baseUrl}${path}`, {
+            response = await fetchImplementation(`${config.baseUrl}${path}`, {
                 ...init,
                 headers: {
                     "Content-Type": "application/json",
@@ -3431,7 +3530,7 @@ const requestJson = async (
 
 const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
@@ -3440,13 +3539,16 @@ const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
 
 // Identity verification is diagnostic, so it must make one physical request rather
 // than inheriting normal read retries.
-const runExactReadQuery = async (query: Record<string, unknown>): Promise<unknown> =>
+const runExactReadQuery = async (
+    query: Record<string, unknown>,
+    fetchImplementation: CodecksFetch = fetch,
+): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
-    }, config, "exact-read");
+    }, config, "exact-read", fetchImplementation);
 };
 
 const runDispatch = async (
@@ -3454,7 +3556,7 @@ const runDispatch = async (
     payload: Record<string, unknown>,
 ): Promise<unknown> =>
 {
-    const config = getConfig();
+    const config = await getAuthenticatedConfig();
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -3582,29 +3684,92 @@ const handCardFields = [
     { user: ["id", "name", "fullName"] },
 ];
 
-const fetchLoggedInUser = async (): Promise<CodecksUser> =>
-{
-    const query = {
-        _root: [
-            {
-                loggedInUser: ["id", "name", "fullName"],
-            },
-        ],
-    };
+const LOGGED_IN_USER_IDENTITY_QUERY = Object.freeze({
+    _root: [
+        {
+            loggedInUser: ["id", "name", "fullName"],
+        },
+    ],
+});
 
-    const payload = await runQuery(query);
+const getLoggedInUserFromPayload = (payload: unknown): CodecksUser | undefined =>
+{
     const data = unwrapData(payload) as Record<string, unknown> | undefined;
     const root = getRoot(payload);
     const userMap = getEntityMap(data, "user");
     const resolved = resolveFromMap(root?.loggedInUser, userMap);
-    const user = normalizeEntity((resolved ?? root?.loggedInUser) as CodecksUser | CodecksUser[] | undefined);
+    return normalizeEntity((resolved ?? root?.loggedInUser) as CodecksUser | CodecksUser[] | undefined);
+};
 
+const isExplicitlyEmptyIdentity = (value: unknown): boolean =>
+    value === null || value === undefined || value === "";
+
+/**
+ * The exact identity query convention makes an explicitly present `null`,
+ * `undefined`, or literal empty-string `loggedInUser` relation an
+ * authentication rejection. A missing relation is deliberately not treated the
+ * same way: it could indicate an incompatible or truncated response, so it
+ * remains malformed rather than masking that fault.
+ */
+const classifyExternalProviderIdentityPayload = (payload: unknown): CodecksExternalProviderCheckCategory =>
+{
+    const data = unwrapData(payload);
+    if (!isRecord(data) || !isRecord(data._root))
+    {
+        return "malformed_response";
+    }
+
+    const root = data._root;
+    if (!Object.prototype.hasOwnProperty.call(root, "loggedInUser"))
+    {
+        return "malformed_response";
+    }
+
+    if (isExplicitlyEmptyIdentity(root.loggedInUser))
+    {
+        return "authentication_rejected";
+    }
+
+    const user = getLoggedInUserFromPayload(payload);
+    return user?.id ? "authenticated" : "malformed_response";
+};
+
+const fetchLoggedInUser = async (): Promise<CodecksUser> =>
+{
+    const user = getLoggedInUserFromPayload(await runQuery(LOGGED_IN_USER_IDENTITY_QUERY));
     if (!user?.id)
     {
         throw new Error("Unable to resolve logged-in user from Codecks.");
     }
-
     return user;
+};
+
+/**
+ * Repository-only live validation uses this fixed identity read to exercise the
+ * production credential-provider and exact-read paths. `fetchImplementation`
+ * is injectable only for deterministic no-network tests.
+ */
+export const runExternalProviderIdentityCheck = async (
+    fetchImplementation: CodecksFetch = fetch,
+): Promise<CodecksExternalProviderCheckResult> =>
+{
+    try
+    {
+        return { category: classifyExternalProviderIdentityPayload(await runExactReadQuery(LOGGED_IN_USER_IDENTITY_QUERY, fetchImplementation)) };
+    }
+    catch (error)
+    {
+        const message = toErrorMessage(error);
+        if (/Codecks API error (?:401|403)\b/.test(message))
+        {
+            return { category: "authentication_rejected" };
+        }
+        if (/^(?:Missing Codecks|Invalid CODECKS_PROFILE|Unsupported Codecks credential provider|External Codecks credential helper configuration is invalid\.)/.test(message))
+        {
+            return { category: "invalid_configuration" };
+        }
+        return { category: "unavailable" };
+    }
 };
 
 type LookupResult =
@@ -9342,7 +9507,7 @@ export const velocity_observations_update = tool({
 
         try
         {
-            const config = getConfig();
+            const config = getBaseConfig();
             const path = await resolveWorkspacePath(getActiveWorkspaceRoot(), args.observationsPath, "output");
             let existing: ObservationCache | undefined;
             try { existing = validateObservationCache(JSON.parse(await fs.readFile(path, "utf8")), config.account); }

@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import registerCodecks from "../index.ts";
 import { __test as codecksTest } from "../src/codecks-core.ts";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 
-process.env.CODECKS_ACCOUNT = "test-account";
-process.env.CODECKS_TOKEN = "test-token";
+useInertEnvironmentCredentialProvider();
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 
 type Tool = { parameters?: { properties?: Record<string, unknown> }; execute: (...args: any[]) => Promise<any> };

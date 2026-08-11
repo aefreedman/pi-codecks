@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 import { loadRegisteredTools } from "./pi-tool-harness.ts";
 import * as core from "../src/codecks-core.ts";
 
-process.env.CODECKS_ACCOUNT = "test-account";
-process.env.CODECKS_TOKEN = "test-token";
+useInertEnvironmentCredentialProvider();
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 
 const ACCOUNT_ID = "account-test";

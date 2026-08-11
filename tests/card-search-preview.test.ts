@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 
+useInertEnvironmentCredentialProvider();
 process.env.CODECKS_ACCOUNT = "example";
-process.env.CODECKS_TOKEN = "test-token";
 
 const core = await import("../src/codecks-core.ts");
 

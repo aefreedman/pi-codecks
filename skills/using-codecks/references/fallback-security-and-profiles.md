@@ -31,5 +31,5 @@ Do not attempt archive, delete, or trash writes through raw dispatch. Those oper
 
 - Prefer `CODECKS_PROFILE` with profile-scoped variables instead of rewriting global variables per call.
 - Use `CODECKS_PROFILE_<KEY>_ACCOUNT`, optional `CODECKS_PROFILE_<KEY>_API_BASE`, and `CODECKS_PROFILE_<KEY>_TOKEN` or `CODECKS_PROFILE_<KEY>_API_TOKEN`.
-- Secret-reference placeholders are not resolved by `pi-codecks`. Resolve them through `pi-onepassword` or another explicit integration before launching Pi, then provide a direct token environment variable.
+- Secret-reference placeholders are not supported by the `environment` provider. Select the built-in `onepassword` provider for a configured 1Password reference, or provide a direct token environment variable.
 - Keep raw API tokens in a secret manager and out of repository files.
