@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { packageRoot, pack, runNpm } from "./package-archive.mjs";
+import { packageRoot, pack, parsePackResult, runNpm } from "./package-archive.mjs";
 
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-pack-smoke-"));
 const archiveDir = path.join(tempRoot, "archive");
@@ -27,6 +27,21 @@ try {
   const archivePath = path.join(archiveDir, packed.filename);
   assert.ok(existsSync(archivePath), "expected npm pack to create a tarball in the temporary directory");
 
+  // Supply the exact locked runtime dependency as a local tarball so this
+  // consumer test remains network-free even on a cold CI npm cache. The
+  // candidate package must still declare TypeBox in dependencies for npm to
+  // place and resolve it in the neutral installation.
+  const typeboxPacked = parsePackResult(runNpm([
+    "pack",
+    "--json",
+    "--ignore-scripts",
+    "--pack-destination",
+    archiveDir,
+    path.join(packageRoot, "node_modules", "typebox"),
+  ]).stdout);
+  const typeboxArchivePath = path.join(archiveDir, typeboxPacked.filename);
+  assert.ok(existsSync(typeboxArchivePath), "expected npm pack to create the locked TypeBox tarball");
+
   const cleanEnv = { ...process.env, npm_config_offline: "true" };
   for (const key of Object.keys(cleanEnv)) {
     if (key.startsWith("CODECKS_") || key.startsWith("PI_CODECKS_")) {
@@ -35,7 +50,7 @@ try {
   }
 
   runNpm(
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", archivePath],
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", typeboxArchivePath, archivePath],
     { cwd: consumerDir, env: cleanEnv },
   );
 
