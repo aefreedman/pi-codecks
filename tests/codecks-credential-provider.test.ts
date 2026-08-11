@@ -46,7 +46,7 @@ try {
 
   process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF = "inert-operation-reference";
   await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), {
-    message: "Codecks profile 'alpha-prod' uses a TOKEN_REF/TOKEN_OP_REF value, but pi-codecks no longer executes 1Password helpers directly. Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.",
+    message: "Codecks profile 'alpha-prod' uses a TOKEN_REF/TOKEN_OP_REF value, which is not supported by the environment provider. Select CODECKS_CREDENTIAL_PROVIDER=onepassword or set CODECKS_TOKEN / CODECKS_PROFILE_<PROFILE>_TOKEN.",
   });
   delete process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF;
   process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF = "inert-reference";
@@ -80,7 +80,7 @@ try {
   process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
   await assert.rejects(core.__test.resolveAuthenticatedConfig(), /External Codecks credential helper configuration is invalid\./);
   process.env.CODECKS_CREDENTIAL_PROVIDER = "unknown-provider";
-  await assert.rejects(core.__test.resolveAuthenticatedConfig(), /Unsupported Codecks credential provider\. Set CODECKS_CREDENTIAL_PROVIDER=environment or remove it\./);
+  await assert.rejects(core.__test.resolveAuthenticatedConfig(), /Unsupported Codecks credential provider\. Set CODECKS_CREDENTIAL_PROVIDER=environment, onepassword, or external-helper\./);
 
   delete process.env.CODECKS_CREDENTIAL_PROVIDER;
   let resolutions = 0;

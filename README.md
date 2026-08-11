@@ -127,7 +127,22 @@ export CODECKS_TOKEN=<your-codecks-api-token>
 
 `CODECKS_SUBDOMAIN`, `CODECKS_API_TOKEN`, and `CODECKS_API_BASE` remain supported. Profiles use `CODECKS_PROFILE` and `CODECKS_PROFILE_<PROFILE>_*`; profile account and API-base values take precedence over global values, and profile direct token values take precedence when the `environment` provider is active. `environment` is selected when `CODECKS_CREDENTIAL_PROVIDER` is absent (or can be selected explicitly with `CODECKS_CREDENTIAL_PROVIDER=environment`), so existing environment-only setups need no migration.
 
-This compatibility path intentionally leaves its token ambient in the Pi process: unrelated same-process extensions or subprocesses may inherit it. It is not an isolation boundary. `pi-codecks` does not interpret credential-manager reference syntax; resolve a secret before launch into a supported environment token, or use an external helper.
+This compatibility path intentionally leaves its token ambient in the Pi process: unrelated same-process extensions or subprocesses may inherit it. It is not an isolation boundary.
+The environment provider does not resolve secret-reference placeholders; select the built-in provider when appropriate.
+
+### Built-in 1Password provider
+
+Select the built-in provider explicitly; it is never auto-selected merely because `op` is installed:
+
+```bash
+export CODECKS_CREDENTIAL_PROVIDER=onepassword
+export PI_CODECKS_ONEPASSWORD_REFERENCE=op://<vault>/<item>/<field>
+export OP_SERVICE_ACCOUNT_TOKEN=<service-account-token>
+# Optional absolute executable pin (otherwise one unambiguous startup PATH entry is used):
+export PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE=/absolute/path/to/op
+```
+
+No `pi-onepassword` installation or helper-module path is required. The reference and selector are trusted user configuration, while `OP_SERVICE_ACCOUNT_TOKEN` is process-only secret input. When no executable override is supplied, `pi-codecks` resolves `op` once from non-empty entries in the PATH present at process startup, canonicalizes it to an absolute path, and fails closed if discovery is missing, invalid, or ambiguous. It never implicitly searches the current directory. The fixed private invocation is `op run --no-masking -- <current Node child>`; `--no-masking` is required so the bounded trusted protocol can receive the credential. The provider sanitizes ambient Codecks credentials and fails closed rather than falling back to them.
 
 ### External credential helper
 
@@ -140,7 +155,7 @@ export CODECKS_CREDENTIAL_HELPER_MODULE=/absolute/path/to/codecks-helper.mjs
 
 The module path must be an existing **absolute** `.js` or `.mjs` file. `pi-codecks` starts it with the current Node executable, no shell, and no caller- or model-selected arguments. The helper receives bounded non-secret account/profile metadata on stdin and returns one bounded version-1 credential response on stdout. A selected helper is authoritative: invalid configuration, launch failure, malformed or extra output, nonzero exit, timeout, or cancellation fails closed. It never falls back to ambient tokens, profile tokens, or another provider.
 
-Migrate without changing Codecks tools: leave account/profile/API-base configuration in place, put manager-specific authentication and references in the adapter's trusted launcher/user configuration, then set the two selector variables above. There is no adapter auto-discovery; adapters publish a stable package-relative helper path, while the launcher resolves it to an absolute path. See the public [adapter-author protocol](docs/external-credential-helper-protocol.md) for the exchange, environment sanitization, and manager-neutral setup requirements.
+This advanced extension point remains for intentional non-1Password integrations such as another credential manager or enterprise adapter. There is no adapter auto-discovery; adapters publish a stable package-relative helper path, while the launcher resolves it to an absolute path. See the public [adapter-author protocol](docs/external-credential-helper-protocol.md) for the exchange, environment sanitization, and manager-neutral setup requirements.
 
 The helper path and manager-specific settings are trusted launcher/user configuration, never model-facing tool input. The helper environment removes Codecks credential/reference and provider-selector variables case-insensitively; stderr is bounded and discarded. This reduces accidental inheritance but does not isolate trusted extensions or same-user processes. `pi-codecks` has no credential-manager dependency and does not provide a secret broker, helper discovery, cross-operation credential cache, refresh/lease protocol, automatic 401 retry, or a model-facing credential operation. Review [Security](SECURITY.md) before configuring live credentials.
 

@@ -17,7 +17,7 @@ type HelperRequest = Readonly<{
 
 type HelperCredential = Readonly<{
     token: string;
-    providerId: "external-helper";
+    providerId: "external-helper" | "onepassword";
 }>;
 
 type SpawnProcess = (
@@ -45,6 +45,9 @@ type ExternalHelperOptions = Readonly<{
     spawnProcess?: SpawnProcess;
     validateModule?: (modulePath: string) => Promise<void>;
     termination?: TerminationOptions;
+    /** Private built-in providers may supply a sanitized trusted environment. */
+    environment?: NodeJS.ProcessEnv;
+    providerId?: "external-helper" | "onepassword";
 }>;
 
 const FAILURE = Object.freeze({
@@ -320,7 +323,7 @@ export const resolveExternalHelperCredential = async (
             }
             try
             {
-                settle(undefined, { token: parseResponse(Buffer.concat(stdout)), providerId: "external-helper" });
+                settle(undefined, { token: parseResponse(Buffer.concat(stdout)), providerId: options.providerId ?? "external-helper" });
             }
             catch (error)
             {
@@ -332,7 +335,7 @@ export const resolveExternalHelperCredential = async (
         {
             child = spawnProcess(process.execPath, [modulePath], {
                 cwd: process.cwd(),
-                env: sanitizeHelperEnvironment(process.env),
+                env: sanitizeHelperEnvironment(options.environment ?? process.env),
                 shell: false,
                 detached: process.platform !== "win32",
                 windowsHide: true,

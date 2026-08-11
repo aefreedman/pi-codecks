@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,6 +54,8 @@ try {
     "index.ts",
     "src/codecks-core.ts",
     "src/codecks-external-helper.ts",
+    "src/codecks-onepassword.ts",
+    "src/integrations/codecks-onepassword-credential-helper.mjs",
     "docs/external-credential-helper-protocol.md",
     "skills/using-codecks/SKILL.md",
     "skills/codecks-velocity-reporting/SKILL.md",
@@ -153,7 +155,45 @@ console.log("installed external helper succeeds and fails closed");
   assert.equal(helperResult.status, 0, `installed external-helper smoke failed:\n${helperResult.stdout}\n${helperResult.stderr}`);
   assert.match(helperResult.stdout, /installed external helper succeeds and fails closed/);
 
-  console.log("Packed tarball smoke test passed in a credential-free temporary project with inert external-helper coverage.");
+  const packedOpPath = path.join(consumerDir, "inert-packed-op");
+  writeFileSync(packedOpPath, `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+const [command, flag, delimiter, child, ...childArgs] = process.argv.slice(2);
+if (command !== "run" || flag !== "--no-masking" || delimiter !== "--" || !child || process.env.OP_SERVICE_ACCOUNT_TOKEN !== "packed-inert-service-token") process.exit(64);
+if (process.env.PACKED_OP_MODE === "malformed") { process.stdout.write("not-json"); process.exit(0); }
+const nested = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "packed-inert-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
+nested.stdout.pipe(process.stdout); nested.stderr.pipe(process.stderr); nested.once("close", (status) => process.exit(status ?? 1));
+`);
+  chmodSync(packedOpPath, 0o755);
+  const onepasswordSmokePath = path.join(consumerDir, "onepassword-smoke.mjs");
+  writeFileSync(onepasswordSmokePath, `
+import assert from "node:assert/strict";
+import * as core from "./node_modules/@aefree/pi-codecks/src/codecks-core.ts";
+
+process.env.CODECKS_ACCOUNT = "packed-onepassword-account";
+process.env.CODECKS_TOKEN = "ambient-token-that-must-not-be-used";
+process.env.CODECKS_CREDENTIAL_PROVIDER = "onepassword";
+process.env.PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE = ${JSON.stringify(packedOpPath)};
+process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "op://inert/vault/item";
+process.env.OP_SERVICE_ACCOUNT_TOKEN = "packed-inert-service-token";
+globalThis.fetch = async (_input, init) => {
+  assert.equal(init.headers["X-Auth-Token"], "packed-inert-onepassword-token");
+  return new Response(JSON.stringify({ data: {} }), { status: 200 });
+};
+await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+process.env.PACKED_OP_MODE = "malformed";
+await assert.rejects(core.__test.resolveAuthenticatedConfig(), /External Codecks credential helper is unavailable/);
+console.log("installed built-in onepassword provider succeeds with --no-masking and fails closed");
+`);
+  const onepasswordResult = spawnSync(process.execPath, ["--import", tsxLoader, onepasswordSmokePath], {
+    cwd: consumerDir,
+    env: cleanEnv,
+    encoding: "utf8",
+  });
+  assert.equal(onepasswordResult.status, 0, `installed onepassword smoke failed:\n${onepasswordResult.stdout}\n${onepasswordResult.stderr}`);
+  assert.match(onepasswordResult.stdout, /installed built-in onepassword provider succeeds with --no-masking and fails closed/);
+
+  console.log("Packed tarball smoke test passed in a credential-free temporary project with inert external-helper and built-in onepassword coverage.");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -14,7 +14,7 @@ npm run pack:smoke
 npm run pack:dry-run
 ```
 
-`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment. The repository-only external-provider launcher has an injected-fetch test that verifies the normal credential-provider selection and one fixed exact-read identity query without opening a socket.
+`npm test` runs unit, fixture, registration, schema-lifecycle, rendering, transport, and package-metadata tests. Built-in 1Password coverage uses an inert fake manager to prove the exact `op run --no-masking -- <current Node child>` path, executable override validation, sanitization, and no-fallback behavior; it never contacts 1Password or Codecks. These checks use local fakes and must not contact Codecks even when credentials happen to exist in the caller's environment. The repository-only external-provider launcher has an injected-fetch test that verifies the normal credential-provider selection and one fixed exact-read identity query without opening a socket.
 
 `npm run pack:validate` checks the npm dry-run manifest against the public allow-list, verifies required Pi resources, rejects private/local paths, and scans packed text for high-confidence sensitive-content patterns.
 

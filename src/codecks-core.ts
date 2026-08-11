@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
+import { resolveOnePasswordCredential } from "./codecks-onepassword";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, relative, resolve } from "path";
@@ -423,8 +424,8 @@ const firstNonEmpty = (...values: Array<string | undefined | null>): string | un
 const throwUnsupportedTokenRef = (profileKey: string): never =>
 {
     throw new Error(
-        `Codecks profile '${profileKey}' uses a TOKEN_REF/TOKEN_OP_REF value, but pi-codecks no longer executes 1Password helpers directly. `
-        + "Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.",
+        `Codecks profile '${profileKey}' uses a TOKEN_REF/TOKEN_OP_REF value, which is not supported by the environment provider. `
+        + "Select CODECKS_CREDENTIAL_PROVIDER=onepassword or set CODECKS_TOKEN / CODECKS_PROFILE_<PROFILE>_TOKEN.",
     );
 };
 
@@ -490,6 +491,17 @@ const getCredentialProvider = (): CodecksCredentialProvider =>
         return environmentCredentialProvider;
     }
 
+    if (selector === "onepassword")
+    {
+        return {
+            id: "onepassword",
+            async resolve(request): Promise<CodecksCredential>
+            {
+                return resolveOnePasswordCredential(request);
+            },
+        };
+    }
+
     if (selector === "external-helper")
     {
         return {
@@ -502,7 +514,7 @@ const getCredentialProvider = (): CodecksCredentialProvider =>
         };
     }
 
-    throw new Error("Unsupported Codecks credential provider. Set CODECKS_CREDENTIAL_PROVIDER=environment or remove it.");
+    throw new Error("Unsupported Codecks credential provider. Set CODECKS_CREDENTIAL_PROVIDER=environment, onepassword, or external-helper.");
 };
 
 let testCredentialProvider: CodecksCredentialProvider | undefined;
@@ -1917,6 +1929,7 @@ export const __test = {
     }),
     resolveAuthenticatedConfig,
     resolveExternalHelperCredential,
+    resolveOnePasswordCredential,
     setCredentialProviderForTests: (provider?: CodecksCredentialProvider) => { testCredentialProvider = provider; },
 };
 
