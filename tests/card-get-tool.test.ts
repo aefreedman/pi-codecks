@@ -297,6 +297,39 @@ const testBareNumericNotFoundSuggestsExplicitSequence = async (tools: ToolModule
   });
 };
 
+const testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes = async (tools: ToolModule): Promise<void> => {
+  let callCount = 0;
+  const second = buildCard({ cardId: "mock-card-second-id", accountSeq: 43, title: "Second retrieval card" });
+  await withMockedFetch((query) => {
+    callCount += 1;
+    const cardsRelation = getAccountRelation(query, "cards");
+    assert.ok(cardsRelation, `expected batch account sequence query: ${JSON.stringify(query)}`);
+    assert.match(cardsRelation.key, /\"accountSeq\":\[42,43\]/);
+    return jsonResponse({ data: buildSearchPayload([buildCard(), second], cardsRelation.key) });
+  }, async () => {
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF, "$12h", CARD_REF] });
+    const data = getData(String(result));
+    assert.equal(data.requested, 3);
+    assert.equal(data.uniqueReferences, 2);
+    assert.equal(data.found, 3);
+    assert.equal(data.missing, 0);
+    assert.equal(data.complete, true);
+    assert.equal(callCount, 1, "batch retrieval should use one Codecks query and one operation credential");
+    assert.ok(Array.isArray(data.items));
+    assert.equal((data.items as AnyRecord[])[2].requestedRef, CARD_REF, "duplicate inputs retain their output position");
+  });
+};
+
+const testBatchGetRejectsUnsupportedIdentifiersWithoutFetch = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => {
+    throw new Error("card_get_batch should not call the API for unsupported identifiers");
+  }, async () => {
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_ID] });
+    const error = getError(String(result));
+    assert.equal(error.category, "validation_error");
+  });
+};
+
 const testValidationRequiresCardIdOrTitle = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get should not call the API when required inputs are missing");
@@ -316,6 +349,8 @@ await testSemanticApiErrorsReturnApiError(tools);
 await testCardMapFallbackDoesNotBecomeCard(tools);
 await testZeroAccountSeqIsPreserved(tools);
 await testBareNumericNotFoundSuggestsExplicitSequence(tools);
+await testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes(tools);
+await testBatchGetRejectsUnsupportedIdentifiersWithoutFetch(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");
