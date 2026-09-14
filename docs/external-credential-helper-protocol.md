@@ -53,3 +53,13 @@ The helper inherits a sanitized environment. `pi-codecks` case-insensitively rem
 The trusted launcher chooses the helper path and manager configuration. The protocol keeps tokens out of Pi tool arguments, helper argv, public results, and normal diagnostics, but it does not protect against malicious installed extensions, trusted same-user processes, or memory inspection. JavaScript credentials cannot be reliably zeroed; helpers and callers should keep them short-lived.
 
 Version 1 deliberately has no secret broker or daemon, adapter discovery, package-manager lookup, credential cache across top-level operations, refresh/lease metadata, automatic re-resolution, automatic 401 retry, account override, or model-facing credential API. This advanced external-helper protocol remains manager-neutral; the separate built-in `onepassword` provider is not routed through a user-supplied module path.
+
+## Built-in 1Password diagnostic envelope
+
+This section is not part of the external-helper v1 protocol. Only the package-bundled 1Password helper may emit this private nonzero-exit stdout envelope after conservatively recognizing its known rate-limit diagnostic:
+
+```json
+{"version":1,"kind":"credential_error","category":"rate_limited"}
+```
+
+The parent enables parsing only for its internal built-in provider invocation, requires exactly these three fields, and never accepts the envelope as credentials. User-configured external helpers retain v1 success-only semantics: their nonzero stdout is discarded and reported as a generic helper failure. The envelope contains no retry duration, secret reference, account, path, raw diagnostic, or manager metadata; it does not trigger an automatic retry.

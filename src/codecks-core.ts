@@ -962,6 +962,7 @@ type ErrorCategory =
     | "request_timeout"
     | "rate_limited"
     | "scan_queue_full"
+    | "credential_rate_limited"
     | "file_error"
     | "api_error";
 
@@ -1059,6 +1060,10 @@ const sanitizeErrorPayload = (payload: unknown): string =>
 
     return "";
 };
+
+const isCredentialRateLimitedError = (error: unknown): boolean =>
+    typeof error === "object" && error !== null
+    && (error as { credentialCategory?: unknown }).credentialCategory === "credential_rate_limited";
 
 const classifyApiErrorCategory = (message: string): ErrorCategory =>
 {
@@ -6772,8 +6777,13 @@ export const card_get = tool({
         }
         catch (error)
         {
-            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-            return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), getOperationErrorData(error));
+            const category = isCredentialRateLimitedError(error)
+                ? "credential_rate_limited"
+                : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), {
+                ...getOperationErrorData(error),
+                ...(isCredentialRateLimitedError(error) ? { provider: "onepassword", stage: "credential_retrieval", retryable: true, requestSent: false } : {}),
+            });
         }
     },
 });
@@ -6833,9 +6843,12 @@ export const card_get_batch = tool({
         }
         catch (error)
         {
-            const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
+            const category = isCredentialRateLimitedError(error)
+                ? "credential_rate_limited"
+                : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
             return toStructuredErrorResult(format, "card-get-batch", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
+                ...(isCredentialRateLimitedError(error) ? { provider: "onepassword", stage: "credential_retrieval", retryable: true, requestSent: false } : {}),
                 requested: requested.length,
                 complete: false,
                 unqueried: requested,

@@ -77,6 +77,7 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
         modulePath: CHILD_PATH,
         environment,
         providerId: "onepassword",
+        trustedBuiltInErrorEnvelope: true,
     });
     return { token: credential.token, providerId: "onepassword" };
 };

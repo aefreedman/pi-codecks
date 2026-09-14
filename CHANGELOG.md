@@ -9,6 +9,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added a trusted built-in-only 1Password rate-limit envelope that maps the known safe diagnostic to `credential_rate_limited` without exposing manager diagnostics or changing third-party external-helper v1 behavior.
 - Added `codecks_card_get_batch` for up to 25 exact short-code or account-sequence card references in one structured read, with duplicate-preserving item outcomes and explicit incomplete failure results. UUID and mixed-reference batches remain unsupported pending API-contract evidence.
 - Added deterministic credential-resolution characterization that distinguishes independent top-level operations from Codecks HTTP attempts without contacting a credential manager or Codecks.
 

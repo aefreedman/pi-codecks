@@ -58,6 +58,9 @@ try {
   assert.equal(capture.requestText, JSON.stringify({ version: 1, service: "codecks", account: "profile-helper-account", profile: "alpha-prod" }));
   assert.equal(capture.extraArgCount, 0, "helper receives only its module argv");
   assert.deepEqual(capture.codecksCredentialKeys, [], "direct/global/profile credentials and selectors do not reach the helper");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"rate_limited"}')), "credential_rate_limited");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"rate_limited","secret":"inert-helper-token"}')), undefined, "unexpected fields cannot carry diagnostics");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"authentication_failed"}')), undefined, "unknown categories remain untrusted");
   assert.deepEqual(__externalHelperTest.sanitizeHelperEnvironment({
     cOdEcKs_ToKeN: "mixed-direct",
     CoDeCkS_ApI_ToKeN: "mixed-api",
