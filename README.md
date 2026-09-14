@@ -144,6 +144,10 @@ export PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE=/absolute/path/to/op
 
 No `pi-onepassword` installation or helper-module path is required. The reference and selector are trusted user configuration, while `OP_SERVICE_ACCOUNT_TOKEN` is process-only secret input. When no executable override is supplied, `pi-codecks` resolves `op` once from non-empty entries in the PATH present at process startup, canonicalizes it to an absolute path, and fails closed if discovery is missing, invalid, or ambiguous. It never implicitly searches the current directory. The fixed private invocation is `op run --no-masking -- <current Node child>`; `--no-masking` is required so the bounded trusted protocol can receive the credential. The provider sanitizes ambient Codecks credentials and fails closed rather than falling back to them.
 
+A positively identified built-in provider rate limit starts a process-local fixed 60-second local backoff (up to 64 configurations). This is not a 1Password reset estimate, does not retry automatically, and does not coordinate other Pi processes. Unknown helper failures do not start a backoff. The process-local state is keyed by a private digest of the effective account/profile/API, executable, reference, and service-account configuration; no raw identity or digest is exposed.
+
+Cross-operation credential reuse is disabled by default. To explicitly opt in, set `CODECKS_ONEPASSWORD_REUSE_TTL_MS` to an integer from `1` through `300000`; `60000` is the recommended explicit opt-in. `0` or an unset value disables reuse. Reuse is process-local, stores no credential on disk, bounds entries to 64, shares concurrent same-configuration resolution, and starts its TTL only after success. Configuration changes create a distinct private identity, but already-dispatched work is not revoked and JavaScript memory cannot guarantee zeroization. Reuse never changes the environment provider or third-party helper behavior.
+
 ### External credential helper
 
 To narrow accidental ambient Codecks-token inheritance, explicitly select a trusted local adapter before launching Pi:

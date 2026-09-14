@@ -9,6 +9,8 @@ and this project follows semantic versioning for public package releases.
 
 ### Added
 
+- Added an opt-in process-local built-in 1Password credential-reuse TTL (`CODECKS_ONEPASSWORD_REUSE_TTL_MS`), disabled by default and bounded to 1..300000 milliseconds and 64 entries.
+- Added a fixed 60-second process-local built-in 1Password rate-limit backoff, bounded to 64 configurations and clearly separate from an unknown provider reset time.
 - Added a trusted built-in-only 1Password rate-limit envelope that maps the known safe diagnostic to `credential_rate_limited` without exposing manager diagnostics or changing third-party external-helper v1 behavior.
 - Added `codecks_card_get_batch` for up to 25 exact short-code or account-sequence card references in one structured read, with duplicate-preserving item outcomes and explicit incomplete failure results. UUID and mixed-reference batches remain unsupported pending API-contract evidence.
 - Added deterministic credential-resolution characterization that distinguishes independent top-level operations from Codecks HTTP attempts without contacting a credential manager or Codecks.
