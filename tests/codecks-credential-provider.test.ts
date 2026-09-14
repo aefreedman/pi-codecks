@@ -121,10 +121,20 @@ try {
   assert.equal(fetchCalls, 2, "concurrent distinct operations make their own authenticated requests");
   assert.equal(resolutions, 4, "concurrent distinct operations resolve credentials independently");
 
+  // A delegated review can create many fresh top-level operations. This test
+  // counts credential resolutions separately from Codecks HTTP attempts; it
+  // deliberately makes no claim about a credential manager's internal calls.
+  fetchCalls = 0;
+  await Promise.all(Array.from({ length: 17 }, () =>
+    core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } })),
+  ));
+  assert.equal(fetchCalls, 17, "seventeen distinct operations make seventeen Codecks HTTP attempts");
+  assert.equal(resolutions, 21, "seventeen distinct operations make seventeen credential resolutions");
+
   fetchCalls = 0;
   await core.query.execute({ query: { _root: [] } });
   assert.equal(fetchCalls, 1, "direct execution outside an operation context makes an authenticated request");
-  assert.equal(resolutions, 5, "direct execution outside an operation context resolves credentials");
+  assert.equal(resolutions, 22, "direct execution outside an operation context resolves credentials");
 
   fetchCalls = 0;
   globalThis.fetch = (async (_input, init) => {
@@ -136,7 +146,7 @@ try {
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
   assert.equal(fetchCalls, 2, "read retry makes two authenticated requests");
-  assert.equal(resolutions, 6, "retry shares its operation credential resolution");
+  assert.equal(resolutions, 23, "retry shares its operation credential resolution");
 
   fetchCalls = 0;
   globalThis.fetch = (async (_input, init) => {
@@ -146,7 +156,7 @@ try {
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/update", payload: { id: "fixture" }, format: "json" }));
   assert.equal(fetchCalls, 1, "representative mutation makes one authenticated request");
-  assert.equal(resolutions, 7, "mutation resolves once in its distinct operation");
+  assert.equal(resolutions, 24, "mutation resolves once in its distinct operation");
 
   console.log("Codecks credential-provider characterization tests passed");
 } finally {

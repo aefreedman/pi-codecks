@@ -7,6 +7,10 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+### Added
+
+- Added deterministic credential-resolution characterization that distinguishes independent top-level operations from Codecks HTTP attempts without contacting a credential manager or Codecks.
+
 ## [0.11.3] - 2026-08-11
 
 ### Changed
