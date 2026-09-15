@@ -11,9 +11,10 @@ let resolvedExecutable: string | undefined;
 const MAX_PROCESS_LOCAL_ENTRIES = 64;
 const UNKNOWN_RATE_LIMIT_BACKOFF_MS = 60_000;
 
-type CachedCredential = { token: string; expiresAt: number };
+type CachedCredential = { token: string; expiresAt: number; generation: string };
 type Cooldown = { until: number };
 const credentialCache = new Map<string, CachedCredential>();
+let nextCredentialGeneration = 0;
 const resolvingCredentials = new Map<string, Promise<{ token: string; providerId: "onepassword" }>>();
 const cooldowns = new Map<string, Cooldown>();
 
@@ -117,7 +118,16 @@ const reference = (): string =>
     return value;
 };
 
-export const resolveOnePasswordCredential = async (request: Request): Promise<{ token: string; providerId: "onepassword" }> =>
+export const evictOnePasswordCredentialGeneration = (generation: unknown): void =>
+{
+    if (typeof generation !== "string") return;
+    for (const [key, entry] of credentialCache)
+    {
+        if (entry.generation === generation) credentialCache.delete(key);
+    }
+};
+
+export const resolveOnePasswordCredential = async (request: Request): Promise<{ token: string; providerId: "onepassword"; credentialGeneration?: string }> =>
 {
     const executable = resolveOnePasswordExecutable();
     const secretReference = reference();
@@ -129,7 +139,7 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
 
     const ttlMs = reuseTtlMs();
     const cached = credentialCache.get(key);
-    if (ttlMs > 0 && cached && cached.expiresAt > now) return { token: cached.token, providerId: "onepassword" };
+    if (ttlMs > 0 && cached && cached.expiresAt > now) return { token: cached.token, providerId: "onepassword", credentialGeneration: cached.generation };
     if (cached) credentialCache.delete(key);
 
     const resolve = async (): Promise<{ token: string; providerId: "onepassword" }> => {
@@ -138,8 +148,8 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
             const credential = await resolveExternalHelperCredential({ ...request, signal: ttlMs > 0 ? new AbortController().signal : request.signal }, {
                 modulePath: CHILD_PATH, environment, providerId: "onepassword", trustedBuiltInErrorEnvelope: true,
             });
-            const result = { token: credential.token, providerId: "onepassword" as const };
-            if (ttlMs > 0) { evictOldest(credentialCache); credentialCache.set(key, { token: result.token, expiresAt: Date.now() + ttlMs }); }
+            const result = { token: credential.token, providerId: "onepassword" as const, credentialGeneration: `${key}:${++nextCredentialGeneration}` };
+            if (ttlMs > 0) { evictOldest(credentialCache); credentialCache.set(key, { token: result.token, expiresAt: Date.now() + ttlMs, generation: result.credentialGeneration }); }
             return result;
         } catch (error) {
             if (typeof error === "object" && error !== null && (error as { credentialCategory?: unknown }).credentialCategory === "credential_rate_limited") {
@@ -159,6 +169,9 @@ export const __onepasswordTest = {
     resetExecutable: (): void => { resolvedExecutable = undefined; },
     childPath: CHILD_PATH,
     failure: FAILURE,
-    resetProcessLocalState: (): void => { credentialCache.clear(); resolvingCredentials.clear(); cooldowns.clear(); },
+    resetProcessLocalState: (): void => { credentialCache.clear(); resolvingCredentials.clear(); cooldowns.clear(); nextCredentialGeneration = 0; },
+    evictOnePasswordCredentialGeneration,
     getProcessLocalState: () => ({ cacheEntries: credentialCache.size, cooldownEntries: cooldowns.size }),
+    seedCachedCredentialForTests: (key: string, generation: string) => { credentialCache.set(key, { token: "inert-test-token", expiresAt: Number.MAX_SAFE_INTEGER, generation }); },
+    cachedGenerationsForTests: () => [...credentialCache.values()].map((entry) => entry.generation),
 };

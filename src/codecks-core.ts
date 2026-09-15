@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
-import { resolveOnePasswordCredential } from "./codecks-onepassword";
+import { evictOnePasswordCredentialGeneration, resolveOnePasswordCredential } from "./codecks-onepassword";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "path";
@@ -27,6 +27,8 @@ type CodecksConfig = {
     account: string;
     token: string;
     baseUrl: string;
+    credentialProviderId?: string;
+    credentialGeneration?: unknown;
 };
 
 type CodecksFetch = typeof fetch;
@@ -51,6 +53,7 @@ type CodecksCredentialRequest = Readonly<{
 type CodecksCredential = Readonly<{
     token: string;
     providerId: string;
+    credentialGeneration?: unknown;
 }>;
 
 interface CodecksCredentialProvider {
@@ -565,7 +568,13 @@ const resolveAuthenticatedConfig = async (): Promise<CodecksConfig> =>
         profileKey: base.profileKey,
         signal,
     });
-    return { account: base.account, baseUrl: base.baseUrl, token: credential.token };
+    return {
+        account: base.account,
+        baseUrl: base.baseUrl,
+        token: credential.token,
+        ...(credential.providerId === "onepassword" ? { credentialProviderId: credential.providerId } : {}),
+        ...(credential.credentialGeneration !== undefined ? { credentialGeneration: credential.credentialGeneration } : {}),
+    };
 };
 
 const getAuthenticatedConfig = (): Promise<CodecksConfig> =>
@@ -3534,6 +3543,13 @@ const requestJson = async (
         ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
         recoveryHint: "Retry after the bounded fifteen-second recovery window.",
     });
+        // Only a definite HTTP 401 rejects authentication. A 403 can be a
+        // permission decision, so it must not evict a reusable credential.
+        if (response.status === 401 && config.credentialProviderId === "onepassword")
+        {
+            evictOnePasswordCredentialGeneration(config.credentialGeneration);
+        }
+
         const text = await response.text();
         let payload: unknown = text;
 

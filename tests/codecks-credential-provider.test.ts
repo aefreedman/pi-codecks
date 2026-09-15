@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import * as core from "../src/codecks-core.ts";
+import { __onepasswordTest } from "../src/codecks-onepassword.ts";
 
 const ENV_KEYS = [
   "CODECKS_ACCOUNT", "CODECKS_SUBDOMAIN", "CODECKS_API_BASE", "CODECKS_TOKEN", "CODECKS_API_TOKEN",
@@ -157,6 +158,28 @@ try {
   await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/update", payload: { id: "fixture" }, format: "json" }));
   assert.equal(fetchCalls, 1, "representative mutation makes one authenticated request");
   assert.equal(resolutions, 24, "mutation resolves once in its distinct operation");
+
+  __onepasswordTest.resetProcessLocalState();
+  __onepasswordTest.seedCachedCredentialForTests("old", "generation-old");
+  __onepasswordTest.seedCachedCredentialForTests("new", "generation-new");
+  core.__test.setCredentialProviderForTests({
+    id: "onepassword",
+    async resolve() { return { token: "same-token", providerId: "onepassword", credentialGeneration: "generation-old" }; },
+  });
+  fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls += 1;
+    return new Response("unauthorized", { status: 401, statusText: "Unauthorized" });
+  }) as typeof fetch;
+  const rejected401 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+  assert.match(String(rejected401), /Codecks API error 401/);
+  assert.deepEqual(__onepasswordTest.cachedGenerationsForTests(), ["generation-new"], "a 401 evicts only the credential generation used by that request");
+  assert.equal(fetchCalls, 1, "authentication rejection does not replay the request");
+
+  globalThis.fetch = (async () => new Response("forbidden", { status: 403, statusText: "Forbidden" })) as typeof fetch;
+  const rejected403 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+  assert.match(String(rejected403), /Codecks API error 403/);
+  assert.deepEqual(__onepasswordTest.cachedGenerationsForTests(), ["generation-new"], "generic 403 permission failures do not evict credentials");
 
   console.log("Codecks credential-provider characterization tests passed");
 } finally {
