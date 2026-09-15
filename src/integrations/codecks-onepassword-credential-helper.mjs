@@ -41,8 +41,13 @@ async function main() {
   validateRequest(request);
   overall.throwIfAborted();
   const configuration = readConfiguration();
-  const output = await runOp(configuration, overall);
-  const response = parseFixedChildResponse(output);
+  const opResult = await runOp(configuration, overall);
+  if (opResult.rateLimited) {
+    await writeResponse({ version: 1, kind: "credential_error", category: "rate_limited" }, overall);
+    process.exitCode = 1;
+    return;
+  }
+  const response = parseFixedChildResponse(opResult.output);
   await writeResponse(response, overall);
 }
 
@@ -221,6 +226,7 @@ function runOp(configuration, overall) {
     let stderrBytes = 0;
     let outputBytes = 0;
     const stdout = [];
+    const stderr = [];
     let terminationDeadline;
     let unsubscribe = () => {};
 
@@ -263,10 +269,11 @@ function runOp(configuration, overall) {
       if (kind === "stdout") {
         stdoutBytes += buffer.length;
         if (!stopping && stdoutBytes <= STDOUT_LIMIT_BYTES && outputBytes <= OUTPUT_LIMIT_BYTES) stdout.push(buffer);
-      } else stderrBytes += buffer.length;
-      // A successful fixed child is silent on stderr. Any byte is a failure,
-      // while all streams remain bounded before being discarded.
-      if (stderrBytes > 0 || stdoutBytes > STDOUT_LIMIT_BYTES || stderrBytes > STDERR_LIMIT_BYTES || outputBytes > OUTPUT_LIMIT_BYTES) fail();
+      } else {
+        stderrBytes += buffer.length;
+        if (stderrBytes <= STDERR_LIMIT_BYTES) stderr.push(buffer);
+      }
+      if (stdoutBytes > STDOUT_LIMIT_BYTES || stderrBytes > STDERR_LIMIT_BYTES || outputBytes > OUTPUT_LIMIT_BYTES) fail();
     };
 
     unsubscribe = overall.onAbort(stop);
@@ -287,10 +294,13 @@ function runOp(configuration, overall) {
       child.stderr?.once("error", fail);
       child.once("error", fail);
       child.once("close", (code) => {
-        if (stopping || code !== 0 || stderrBytes !== 0) {
+        if (stopping) {
           overall.abort();
           finish(new Error());
-        } else finish(undefined, Buffer.concat(stdout).toString("utf8"));
+        } else if (code !== 0 || stderrBytes !== 0) {
+          const diagnostic = Buffer.concat(stderr).toString("utf8");
+          finish(undefined, { output: "", rateLimited: code !== 0 && isRateLimitedDiagnostic(diagnostic) });
+        } else finish(undefined, { output: Buffer.concat(stdout).toString("utf8"), rateLimited: false });
       });
       if (overall.aborted) stop();
     } catch {
@@ -298,6 +308,10 @@ function runOp(configuration, overall) {
       finish(new Error());
     }
   });
+}
+
+function isRateLimitedDiagnostic(value) {
+  return /too many requests\.\s*your client has been rate-limited\./i.test(value);
 }
 
 function terminate(child) {

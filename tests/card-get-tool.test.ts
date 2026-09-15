@@ -297,6 +297,98 @@ const testBareNumericNotFoundSuggestsExplicitSequence = async (tools: ToolModule
   });
 };
 
+const testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes = async (tools: ToolModule): Promise<void> => {
+  let callCount = 0;
+  const second = buildCard({ cardId: "mock-card-second-id", accountSeq: 43, title: "Second retrieval card" });
+  await withMockedFetch((query) => {
+    callCount += 1;
+    const cardsRelation = getAccountRelation(query, "cards");
+    assert.ok(cardsRelation, `expected batch account sequence query: ${JSON.stringify(query)}`);
+    assert.match(cardsRelation.key, /\"accountSeq\":\[(?:42,43|42)\]/);
+    return jsonResponse({ data: buildSearchPayload(cardsRelation.key.includes("43") ? [buildCard(), second] : [buildCard()], cardsRelation.key) });
+  }, async () => {
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF, "seq:43", CARD_REF] });
+    const data = getData(String(result));
+    assert.equal(data.requested, 3);
+    assert.equal(data.uniqueReferences, 2);
+    assert.equal(data.found, 3);
+    assert.equal(data.missing, 0);
+    assert.equal(data.complete, true);
+    assert.equal(callCount, 1, "batch retrieval should use one Codecks query and one operation credential");
+    assert.ok(Array.isArray(data.items));
+    assert.equal((data.items as AnyRecord[])[2].requestedRef, CARD_REF, "duplicate inputs retain their output position");
+    const textResult = await tools.card_get_batch.execute({ cardIds: [CARD_REF], format: "text" });
+    assert.match(String(textResult), /Structured retrieval card/);
+    assert.match(String(textResult), /Structured JSON contains full card details/);
+  });
+};
+
+const testBatchGetRejectsOversizedResponseAsIncomplete = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => new Response("x".repeat(2 * 1024 * 1024 + 1), { headers: { "Content-Length": "1" } }), async () => {
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF] });
+    const error = getError(String(result));
+    assert.match(String(error.message), /response exceeded/);
+    assert.equal(error.complete, false);
+    assert.deepEqual(error.failed, [CARD_REF]);
+    assert.deepEqual(error.unqueried, []);
+    assert.equal(error.category, "response_too_large");
+  });
+};
+
+const testBatchGetRejectsUnsupportedIdentifiersWithoutFetch = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => {
+    throw new Error("card_get_batch should not call the API for unsupported identifiers");
+  }, async () => {
+    for (const cardIds of [[CARD_ID], [], ["seq:9007199254740992"], Array.from({ length: 26 }, () => CARD_REF)]) {
+      const result = await tools.card_get_batch.execute({ cardIds });
+      const error = getError(String(result));
+      assert.equal(error.category, "validation_error");
+    }
+  });
+};
+
+const testBatchRequiresExplicitCompleteCollection = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => jsonResponse({ data: { card: { stray: buildCard() } } }), async () => {
+    const error = getError(String(await tools.card_get_batch.execute({ cardIds: [CARD_REF] })));
+    assert.equal(error.complete, false);
+    assert.deepEqual(error.failed, [CARD_REF]);
+  });
+  await withMockedFetch(query => jsonResponse({ data: buildSearchPayload([], getAccountRelation(query, "cards")!.key) }), async () => {
+    const data = getData(String(await tools.card_get_batch.execute({ cardIds: [CARD_REF] })));
+    assert.equal(data.complete, true);
+    assert.equal(data.missing, 1, "only an explicit empty relation confirms missing");
+  });
+};
+
+const testEquivalentWorkloadCounts = async (tools: ToolModule): Promise<void> => {
+  let credentials = 0, requests = 0;
+  tools.__test.setCredentialProviderForTests({ id: "fixture", resolve: async () => { credentials++; return { token: "inert", providerId: "fixture" }; } });
+  try {
+    await withMockedFetch(query => {
+      requests++;
+      const relation = getAccountRelation(query, "cards")!;
+      const sequences = JSON.parse(relation.key.match(/\"accountSeq\":(\[[^\]]*\])/)![1]) as number[];
+      return jsonResponse({ data: buildSearchPayload(sequences.map(seq => buildCard({ accountSeq: seq, cardId: `fixture-${seq}` })), relation.key) });
+    }, async () => {
+      for (const size of [17, 28, 37]) {
+        const refs = Array.from({ length: size }, (_, index) => `seq:${index + 1}`);
+        credentials = 0; requests = 0; tools.__test.resetRateGate();
+        for (const cardId of refs) getData(String(await tools.runWithAbortSignal(undefined, () => tools.card_get.execute({ cardId }))));
+        assert.equal(credentials, size); assert.equal(requests, size);
+        credentials = 0; requests = 0; tools.__test.resetRateGate();
+        const returned: unknown[] = [];
+        for (let start = 0; start < size; start += 25) {
+          const data = getData(String(await tools.card_get_batch.execute({ cardIds: refs.slice(start, start + 25) })));
+          assert.equal(data.complete, true);
+          returned.push(...(data.items as AnyRecord[]).map(item => (item.card as AnyRecord).accountSeq));
+        }
+        assert.equal(credentials, Math.ceil(size / 25)); assert.equal(requests, Math.ceil(size / 25));
+        assert.deepEqual(returned, refs.map((_, index) => index + 1));
+      }
+    });
+  } finally { tools.__test.setCredentialProviderForTests(); tools.__test.resetRateGate(); }
+};
+
 const testValidationRequiresCardIdOrTitle = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get should not call the API when required inputs are missing");
@@ -316,6 +408,11 @@ await testSemanticApiErrorsReturnApiError(tools);
 await testCardMapFallbackDoesNotBecomeCard(tools);
 await testZeroAccountSeqIsPreserved(tools);
 await testBareNumericNotFoundSuggestsExplicitSequence(tools);
+await testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes(tools);
+await testBatchGetRejectsOversizedResponseAsIncomplete(tools);
+await testBatchGetRejectsUnsupportedIdentifiersWithoutFetch(tools);
+await testBatchRequiresExplicitCompleteCollection(tools);
+await testEquivalentWorkloadCounts(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");

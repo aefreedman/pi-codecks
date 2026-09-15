@@ -59,11 +59,11 @@ function serializedActiveMetadataCharacters(harness: PiToolHarness): number {
 }
 
 async function main(): Promise<void> {
-  assert.equal(publicToolNames.length, 42, "the default surface must include 42 tools");
+  assert.equal(publicToolNames.length, 43, "the default surface must include 43 tools");
 
   await withMode(undefined, async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.equal(harness.registry.size, 43, "42 default Codecks tools plus the loader should be registered");
+    assert.equal(harness.registry.size, 44, "43 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
   });

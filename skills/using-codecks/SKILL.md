@@ -1,7 +1,7 @@
 ---
 name: using-codecks
 description: Use for ordinary single-card Codecks lookup and mutation, Deck descriptions, milestones, Runs, attachments, conversations, credentials, and safe query/dispatch fallback. Excludes multi-card bulk create/import/update workflows.
-allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
+allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_batch codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # Using Codecks
@@ -44,7 +44,8 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 - Do not add comments, replies, Reviews, or Blockers without explicit user intent for that tracker write.
 - Do not mark a card Done unless the user explicitly requests that status transition.
 - Confirm destructive actions and multi-card mutations. Archive/delete/trash remain unavailable rather than raw-dispatch fallbacks.
-- Do not fan out broad parallel account scans. Incomplete, cancelled, timed-out, or queue-rejected searches are not evidence of absence.
+- Do not fan out broad parallel account scans. For many known cards, prefer bounded batches; if single-card reads are necessary, keep only one outstanding read per cooperating workflow and inspect its result before dispatching more. Incomplete, cancelled, timed-out, or queue-rejected searches are not evidence of absence.
+- Stop newly scheduled same-configuration work on a credential-provider failure and report it to the parent, including parent verification reads and new child reviews. Do not blindly retry a generic helper failure or relabel it as rate limiting. These are orchestration instructions, not a cross-process enforcement guarantee.
 - Never expose credentials, cookies, or authentication headers.
 
 ## Reference routing

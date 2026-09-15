@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as core from "../src/codecks-core.ts";
@@ -58,6 +58,9 @@ try {
   assert.equal(capture.requestText, JSON.stringify({ version: 1, service: "codecks", account: "profile-helper-account", profile: "alpha-prod" }));
   assert.equal(capture.extraArgCount, 0, "helper receives only its module argv");
   assert.deepEqual(capture.codecksCredentialKeys, [], "direct/global/profile credentials and selectors do not reach the helper");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"rate_limited"}')), "credential_rate_limited");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"rate_limited","secret":"inert-helper-token"}')), undefined, "unexpected fields cannot carry diagnostics");
+  assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"authentication_failed"}')), undefined, "unknown categories remain untrusted");
   assert.deepEqual(__externalHelperTest.sanitizeHelperEnvironment({
     cOdEcKs_ToKeN: "mixed-direct",
     CoDeCkS_ApI_ToKeN: "mixed-api",
@@ -118,6 +121,26 @@ try {
   const cancelling = resolveExternalHelperCredential({ account: "helper-account", signal: abortController.signal }, { modulePath: fixture, timeoutMs: 5_000 });
   setTimeout(() => abortController.abort(), 10);
   await expectFailure(cancelling, "External Codecks credential helper cancelled.");
+
+  // The same bytes are trusted only on the private built-in invocation and nonzero exit.
+  const envelopeHelper = path.join(tempRoot, "envelope.mjs");
+  const envelope = { version: 1, kind: "credential_error", category: "rate_limited" };
+  for (const [trusted, code, body, expected] of [
+    [false, 1, envelope, undefined],
+    [true, 1, envelope, "credential_rate_limited"],
+    [true, 0, envelope, undefined],
+    [true, 1, { ...envelope, secret: sentinel }, undefined],
+    [true, 1, { ...envelope, version: 2 }, undefined],
+  ] as const) {
+    writeFileSync(envelopeHelper, `process.stdin.resume(); process.stdin.on('end', () => { process.stdout.write(${JSON.stringify(JSON.stringify(body))}); process.exitCode = ${code}; });`);
+    await assert.rejects(resolveExternalHelperCredential({ account: "fixture", signal: new AbortController().signal }, {
+      modulePath: envelopeHelper, trustedBuiltInErrorEnvelope: trusted,
+    }), (error: unknown) => {
+      assert.equal((error as { credentialCategory?: string }).credentialCategory, expected);
+      assert.doesNotMatch(String(error), /inert-helper-token|fixture/);
+      return true;
+    });
+  }
 
   const fakeChild = (behavior: "spawn" | "write" | "premature") => {
     const child = new EventEmitter() as any;

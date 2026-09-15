@@ -48,6 +48,8 @@ type ExternalHelperOptions = Readonly<{
     /** Private built-in providers may supply a sanitized trusted environment. */
     environment?: NodeJS.ProcessEnv;
     providerId?: "external-helper" | "onepassword";
+    /** Enables parsing only for the fixed bundled 1Password helper invocation. */
+    trustedBuiltInErrorEnvelope?: boolean;
 }>;
 
 const FAILURE = Object.freeze({
@@ -60,11 +62,11 @@ const FAILURE = Object.freeze({
 
 type FailureKind = keyof typeof FAILURE;
 
-class ExternalHelperError extends Error
+export class ExternalHelperError extends Error
 {
-    constructor(readonly kind: FailureKind)
+    constructor(readonly kind: FailureKind, readonly credentialCategory?: "credential_rate_limited")
     {
-        super(FAILURE[kind]);
+        super(credentialCategory === "credential_rate_limited" ? "1Password rate-limited credential retrieval. Wait before retrying." : FAILURE[kind]);
         this.name = "ExternalHelperError";
     }
 }
@@ -124,6 +126,23 @@ const makeRequest = (request: HelperRequest, maxRequestBytes: number): string =>
     const encoded = JSON.stringify(payload);
     if (Buffer.byteLength(encoded) > maxRequestBytes) fail("configuration");
     return encoded;
+};
+
+const parseTrustedBuiltInErrorEnvelope = (stdout: Buffer): "credential_rate_limited" | undefined =>
+{
+    const text = stdout.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(stdout)) return undefined;
+    try
+    {
+        const parsed: unknown = JSON.parse(text);
+        if (isRecord(parsed)
+            && Object.keys(parsed).length === 3
+            && parsed.version === EXTERNAL_HELPER_PROTOCOL_VERSION
+            && parsed.kind === "credential_error"
+            && parsed.category === "rate_limited") return "credential_rate_limited";
+    }
+    catch { /* untrusted or malformed output remains unavailable */ }
+    return undefined;
 };
 
 const parseResponse = (stdout: Buffer): string =>
@@ -318,7 +337,10 @@ export const resolveExternalHelperCredential = async (
             if (settled || stopping) return;
             if (code !== 0 || !stdinFinished)
             {
-                settle(new ExternalHelperError("unavailable"));
+                const credentialCategory = options.trustedBuiltInErrorEnvelope && code !== 0
+                    ? parseTrustedBuiltInErrorEnvelope(Buffer.concat(stdout))
+                    : undefined;
+                settle(new ExternalHelperError("unavailable", credentialCategory));
                 return;
             }
             try
@@ -386,5 +408,6 @@ export const __externalHelperTest = {
     FAILURE,
     sanitizeHelperEnvironment,
     parseResponse,
+    parseTrustedBuiltInErrorEnvelope,
     terminateProcessTree,
 };
