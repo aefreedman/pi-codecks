@@ -5,6 +5,7 @@ import { __onepasswordTest } from "../src/codecks-onepassword.ts";
 const ENV_KEYS = [
   "CODECKS_ACCOUNT", "CODECKS_SUBDOMAIN", "CODECKS_API_BASE", "CODECKS_TOKEN", "CODECKS_API_TOKEN",
   "CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE",
+  "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "CODECKS_ONEPASSWORD_REUSE_TTL_MS",
   "CODECKS_PROFILE_ALPHA_PROD_ACCOUNT", "CODECKS_PROFILE_ALPHA_PROD_SUBDOMAIN", "CODECKS_PROFILE_ALPHA_PROD_API_BASE",
   "CODECKS_PROFILE_ALPHA_PROD_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_API_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF",
 ] as const;
@@ -159,13 +160,16 @@ try {
   assert.equal(fetchCalls, 1, "representative mutation makes one authenticated request");
   assert.equal(resolutions, 24, "mutation resolves once in its distinct operation");
 
-  __onepasswordTest.resetProcessLocalState();
-  __onepasswordTest.seedCachedCredentialForTests("old", "generation-old");
-  __onepasswordTest.seedCachedCredentialForTests("new", "generation-new");
-  core.__test.setCredentialProviderForTests({
-    id: "onepassword",
-    async resolve() { return { token: "same-token", providerId: "onepassword", credentialGeneration: "generation-old" }; },
-  });
+  core.__test.setCredentialProviderForTests();
+  process.env.CODECKS_CREDENTIAL_PROVIDER = "onepassword";
+  process.env.PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE = process.execPath;
+  process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "op://fixture/item/field";
+  process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = "1000";
+  let helperCalls = 0;
+  __onepasswordTest.setLifecycleDependenciesForTests({ resolve: async () => {
+    helperCalls++;
+    return { token: "same-token", providerId: "onepassword" };
+  } });
   fetchCalls = 0;
   globalThis.fetch = (async () => {
     fetchCalls += 1;
@@ -173,17 +177,23 @@ try {
   }) as typeof fetch;
   const rejected401 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
   assert.match(String(rejected401), /Codecks API error 401/);
-  assert.deepEqual(__onepasswordTest.cachedGenerationsForTests(), ["generation-new"], "a 401 evicts only the credential generation used by that request");
+  assert.equal(__onepasswordTest.getProcessLocalState().cacheEntries, 0, "401 evicts the actual resolved generation");
   assert.equal(fetchCalls, 1, "authentication rejection does not replay the request");
+  assert.equal(helperCalls, 1);
 
   globalThis.fetch = (async () => new Response("forbidden", { status: 403, statusText: "Forbidden" })) as typeof fetch;
   const rejected403 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
   assert.match(String(rejected403), /Codecks API error 403/);
-  assert.deepEqual(__onepasswordTest.cachedGenerationsForTests(), ["generation-new"], "generic 403 permission failures do not evict credentials");
+  assert.equal(helperCalls, 2, "operation after 401 launches a fresh helper");
+  assert.equal(__onepasswordTest.getProcessLocalState().cacheEntries, 1, "generic 403 permission failures do not evict credentials");
+  await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+  assert.equal(helperCalls, 2, "403 retains the reusable credential");
 
   console.log("Codecks credential-provider characterization tests passed");
 } finally {
   core.__test.setCredentialProviderForTests();
+  __onepasswordTest.resetLifecycleDependenciesForTests();
+  __onepasswordTest.resetExecutable();
   globalThis.fetch = originalFetch;
   clearEnvironment();
   for (const [key, value] of savedEnvironment) {

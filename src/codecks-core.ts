@@ -47,6 +47,7 @@ export type CodecksExternalProviderCheckResult = Readonly<{
 type CodecksCredentialRequest = Readonly<{
     account: string;
     profileKey?: string;
+    baseUrl?: string;
     signal: AbortSignal;
 }>;
 
@@ -566,6 +567,7 @@ const resolveAuthenticatedConfig = async (): Promise<CodecksConfig> =>
     const credential = await provider.resolve({
         account: base.account,
         profileKey: base.profileKey,
+        baseUrl: base.baseUrl,
         signal,
     });
     return {
