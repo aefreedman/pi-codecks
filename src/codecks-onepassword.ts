@@ -17,6 +17,8 @@ const credentialCache = new Map<string, CachedCredential>();
 let nextCredentialGeneration = 0;
 const resolvingCredentials = new Map<string, Promise<{ token: string; providerId: "onepassword" }>>();
 const cooldowns = new Map<string, Cooldown>();
+let testNow: (() => number) | undefined;
+let testResolver: ((request: Request) => Promise<{ token: string; providerId: "onepassword" }>) | undefined;
 
 type Request = Readonly<{ account: string; profileKey?: string; signal: AbortSignal }>;
 
@@ -132,7 +134,7 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
     const executable = resolveOnePasswordExecutable();
     const secretReference = reference();
     const key = privateConfigurationKey(request, executable, secretReference);
-    const now = Date.now();
+    const now = (testNow ?? Date.now)();
     const cooldown = cooldowns.get(key);
     if (cooldown && cooldown.until > now) throw new OnePasswordCredentialError("credential_rate_limited");
     if (cooldown) cooldowns.delete(key);
@@ -145,11 +147,13 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
     const resolve = async (): Promise<{ token: string; providerId: "onepassword" }> => {
         const environment: NodeJS.ProcessEnv = { ...process.env, PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE: executable, PI_CODECKS_ONEPASSWORD_REFERENCE: secretReference };
         try {
-            const credential = await resolveExternalHelperCredential({ ...request, signal: ttlMs > 0 ? new AbortController().signal : request.signal }, {
-                modulePath: CHILD_PATH, environment, providerId: "onepassword", trustedBuiltInErrorEnvelope: true,
-            });
+            const credential = testResolver
+                ? await testResolver({ ...request, signal: ttlMs > 0 ? new AbortController().signal : request.signal })
+                : await resolveExternalHelperCredential({ ...request, signal: ttlMs > 0 ? new AbortController().signal : request.signal }, {
+                    modulePath: CHILD_PATH, environment, providerId: "onepassword", trustedBuiltInErrorEnvelope: true,
+                });
             const result = { token: credential.token, providerId: "onepassword" as const, credentialGeneration: `${key}:${++nextCredentialGeneration}` };
-            if (ttlMs > 0) { evictOldest(credentialCache); credentialCache.set(key, { token: result.token, expiresAt: Date.now() + ttlMs, generation: result.credentialGeneration }); }
+            if (ttlMs > 0) { evictOldest(credentialCache); credentialCache.set(key, { token: result.token, expiresAt: (testNow ?? Date.now)() + ttlMs, generation: result.credentialGeneration }); }
             return result;
         } catch (error) {
             if (typeof error === "object" && error !== null && (error as { credentialCategory?: unknown }).credentialCategory === "credential_rate_limited") {
@@ -174,4 +178,6 @@ export const __onepasswordTest = {
     getProcessLocalState: () => ({ cacheEntries: credentialCache.size, cooldownEntries: cooldowns.size }),
     seedCachedCredentialForTests: (key: string, generation: string) => { credentialCache.set(key, { token: "inert-test-token", expiresAt: Number.MAX_SAFE_INTEGER, generation }); },
     cachedGenerationsForTests: () => [...credentialCache.values()].map((entry) => entry.generation),
+    setLifecycleDependenciesForTests: (input?: { now?: () => number; resolve?: (request: Request) => Promise<{ token: string; providerId: "onepassword" }> }) => { testNow = input?.now; testResolver = input?.resolve; },
+    resetLifecycleDependenciesForTests: () => { testNow = undefined; testResolver = undefined; }, 
 };

@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as core from "../src/codecks-core.ts";
-import { __onepasswordTest } from "../src/codecks-onepassword.ts";
+import { __onepasswordTest, resolveOnePasswordCredential } from "../src/codecks-onepassword.ts";
 
 const temporary = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-onepassword-"));
 const op = path.join(temporary, "op");
-const keys = ["CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_CREDENTIAL_PROVIDER", "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "OP_SERVICE_ACCOUNT_TOKEN"] as const;
+const keys = ["CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_CREDENTIAL_PROVIDER", "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "OP_SERVICE_ACCOUNT_TOKEN", "CODECKS_ONEPASSWORD_REUSE_TTL_MS"] as const;
 const saved = new Map(keys.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 
@@ -76,6 +76,23 @@ try {
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+  let now = 1000;
+  let resolutions = 0;
+  process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = "1000";
+  __onepasswordTest.resetProcessLocalState();
+  __onepasswordTest.setLifecycleDependenciesForTests({ now: () => now, resolve: async () => ({ token: `inert-${++resolutions}`, providerId: "onepassword" }) });
+  const first = await resolveOnePasswordCredential({ account: "inert-account", signal: new AbortController().signal });
+  const reused = await resolveOnePasswordCredential({ account: "inert-account", signal: new AbortController().signal });
+  assert.equal(first.token, reused.token, "enabled reuse starts after successful resolution");
+  assert.equal(resolutions, 1);
+  now += 1000;
+  await resolveOnePasswordCredential({ account: "inert-account", signal: new AbortController().signal });
+  assert.equal(resolutions, 2, "expired reuse resolves afresh");
+  process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = "0";
+  await resolveOnePasswordCredential({ account: "inert-account", signal: new AbortController().signal });
+  assert.equal(resolutions, 3, "default/disabled reuse does not cache");
+  __onepasswordTest.resetLifecycleDependenciesForTests();
+
   // The fake returns the token only when it observes the exact fixed invocation.
   const childSource = await (await import("node:fs/promises")).readFile(__onepasswordTest.childPath, "utf8");
   assert.match(childSource, /\["run", "--no-masking", "--", process\.execPath/);
