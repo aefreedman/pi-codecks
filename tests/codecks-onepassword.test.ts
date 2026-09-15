@@ -158,6 +158,24 @@ try {
   process.chdir(originalCwd);
   __onepasswordTest.resetLifecycleDependenciesForTests();
 
+  // Fresh child processes do not share provider cache state even with identical effective configuration.
+  const processFixture = path.join(temporary, "process-isolation.mjs");
+  writeFileSync(processFixture, `
+import { __onepasswordTest, resolveOnePasswordCredential } from ${JSON.stringify(onepasswordModule)};
+let calls = 0;
+__onepasswordTest.setLifecycleDependenciesForTests({ resolve: async () => { calls++; return { token: 'inert-process', providerId: 'onepassword' }; } });
+const request = { account: 'fixture', signal: new AbortController().signal };
+await resolveOnePasswordCredential(request); await resolveOnePasswordCredential(request);
+process.stdout.write(String(calls));
+`);
+  for (let index = 0; index < 2; index++) {
+    const child = spawnSync(process.execPath, ["--import", tsxLoader, processFixture], {
+      cwd: originalCwd, env: { ...process.env, CODECKS_ONEPASSWORD_REUSE_TTL_MS: "60000", PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE: process.execPath }, encoding: "utf8",
+    });
+    assert.equal(child.status, 0, "fresh-process fixture must execute");
+    assert.equal(child.stdout, "1", "each fresh process resolves once despite identical configuration and two calls");
+  }
+
   // The fake returns the token only when it observes the exact fixed invocation.
   const childSource = await (await import("node:fs/promises")).readFile(__onepasswordTest.childPath, "utf8");
   assert.match(childSource, /\["run", "--no-masking", "--", process\.execPath/);

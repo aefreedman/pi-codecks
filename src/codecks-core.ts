@@ -6849,7 +6849,7 @@ export const card_get = tool({
 export const card_get_batch = tool({
     description: "Fetch up to 25 exact Codecks card short-code or account-sequence references in one structured read.",
     args: {
-        cardIds: tool.schema.array(tool.schema.union([tool.schema.string(), tool.schema.number()])).min(1).max(MAX_BATCH_CARD_GET_REFS).describe("Exact short-code or seq:<accountSeq> references. UUID and mixed-reference batches are not supported."),
+        cardIds: tool.schema.array(tool.schema.union([tool.schema.string(), tool.schema.number()])).min(1).max(MAX_BATCH_CARD_GET_REFS).describe("Exact short-code and/or seq:<accountSeq> references. Batches containing any UUID are not supported."),
         format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
     },
     async execute(args)
@@ -6867,7 +6867,7 @@ export const card_get_batch = tool({
         const invalid = parsed.find(({ value, identifier }) => !value || value.length > 128 || !Number.isSafeInteger(identifier.accountSeq) || identifier.accountSeq! < 0);
         if (invalid)
         {
-            return toStructuredErrorResult(format, "card-get-batch", "validation_error", "cardIds must contain exact short-code or seq:<accountSeq> references. UUID and mixed-reference batches are not supported.", { cardId: invalid.value || null });
+            return toStructuredErrorResult(format, "card-get-batch", "validation_error", "cardIds must contain exact short-code and/or seq:<accountSeq> references. Batches containing any UUID are not supported.", { cardId: invalid.value || null });
         }
 
         const accountSeqs = [...new Set(parsed.map(({ identifier }) => identifier.accountSeq as number))] as number[];

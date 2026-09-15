@@ -307,7 +307,7 @@ const testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes = async (tools: T
     assert.match(cardsRelation.key, /\"accountSeq\":\[(?:42,43|42)\]/);
     return jsonResponse({ data: buildSearchPayload(cardsRelation.key.includes("43") ? [buildCard(), second] : [buildCard()], cardsRelation.key) });
   }, async () => {
-    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF, "$12h", CARD_REF] });
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF, "seq:43", CARD_REF] });
     const data = getData(String(result));
     assert.equal(data.requested, 3);
     assert.equal(data.uniqueReferences, 2);
@@ -339,7 +339,7 @@ const testBatchGetRejectsUnsupportedIdentifiersWithoutFetch = async (tools: Tool
   await withMockedFetch(() => {
     throw new Error("card_get_batch should not call the API for unsupported identifiers");
   }, async () => {
-    for (const cardIds of [[CARD_ID], [], Array.from({ length: 26 }, () => CARD_REF)]) {
+    for (const cardIds of [[CARD_ID], [], ["seq:9007199254740992"], Array.from({ length: 26 }, () => CARD_REF)]) {
       const result = await tools.card_get_batch.execute({ cardIds });
       const error = getError(String(result));
       assert.equal(error.category, "validation_error");

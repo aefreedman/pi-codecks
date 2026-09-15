@@ -22,6 +22,28 @@ npm run pack:dry-run
 
 Public GitHub Actions run only these safe checks. Forked pull requests never receive Codecks secrets.
 
+### Credential-efficiency evidence
+
+`card-get-tool.test.ts` compares equivalent full-card retrieval using an injected credential provider and mocked Codecks transport. With reuse disabled:
+
+| Cards | Individual credential resolutions / HTTP attempts | Sequential batches (maximum 25) |
+| --- | --- | --- |
+| 17 | 17 / 17 | 1 / 1 |
+| 28 | 28 / 28 | 2 / 2 |
+| 37 | 37 / 37 | 2 / 2 |
+
+These are client credential-resolution and Codecks-fetch counts, not measured 1Password internal HTTP counts or proof of live API support. The state-machine suite separately verifies enabled in-flight coalescing, TTL, cancellation, bounded cooldown, configuration changes, and late-completion precedence. Provider tests use fresh subprocesses to confirm independent process-local lifetimes. The inert fake-`op` fixture drives the actual bundled adapter, asserting helper execution rather than merely accepting an error string; transport tests distinguish its trusted envelope from identical third-party bytes. The bounded-reader suite checks exact limits, absent/misleading Content-Length, abort, stalled cancellation, and timeout cleanup.
+
+### Cooperating-orchestrator scenario (manual guidance check)
+
+This scenario checks the instructions in the card-operations reference, not package-enforced agent behavior:
+
+1. Assign a private configuration the public workflow label `credential-scope-1`; schedule one batch (or one necessary single read), leaving later groups and parent verification unscheduled.
+2. Substitute a safe child `credential_rate_limited` result. Verify the example workflow stops future same-label groups, including fresh children and parent verification, while retaining earlier successes and already-dispatched outcomes. Report unknown provider retry timing; do not interpret local backoff as a reset estimate.
+3. Repeat with `credential_helper_unavailable`: stop and diagnose rather than blindly retry, but do not create or claim rate-limit evidence. Confirm the report contains no token, reference, account identity, private digest, or raw diagnostic.
+
+Package cooldown and cache tests cannot establish that arbitrary deployed agents obey these instructions. There is no cross-process circuit breaker; cooperating parents remain responsible for scheduling.
+
 ## Optional external-provider live validation
 
 `npm run validate:external-provider-live` is a repository-only launcher for optional, separately authorized maintainer work or a trusted adapter wrapper. It is not normal package validation or public-CI work. It reads configuration only from the process environment and makes one fixed authenticated exact-read identity query only when **both** `CODECKS_CREDENTIAL_PROVIDER=external-helper` and the non-secret acknowledgement `PI_CODECKS_ALLOW_LIVE_VALIDATION=1` match exactly. Any missing or different value returns the fixed `invalid_configuration` category before it invokes a helper or fetch; the launcher never selects or falls back to the ambient `environment` provider, even if Codecks tokens exist. It accepts no request, model, or command-line configuration surface. Its only stdout is one redacted JSON line with fixed `status`, `category`, and `durationMs`; `durationMs` is clamped to `0..60000`. HTTP `401`/`403` and `_root.loggedInUser` explicitly `null` or the literal empty string in an otherwise valid identity response report `authentication_rejected`. A missing identity property, nonobject/missing root, whitespace-only string, incompatible shape, or other nonempty unresolvable identity reports `malformed_response`; missing is intentionally conservative because it is not the API's explicit unauthenticated convention. It never prints caught errors, stacks, account/profile/helper paths, tokens, references, API bodies, or vendor diagnostics. It exits `0` only for `authenticated`.
