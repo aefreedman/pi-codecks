@@ -62,7 +62,7 @@ const FAILURE = Object.freeze({
 
 type FailureKind = keyof typeof FAILURE;
 
-class ExternalHelperError extends Error
+export class ExternalHelperError extends Error
 {
     constructor(readonly kind: FailureKind, readonly credentialCategory?: "credential_rate_limited")
     {

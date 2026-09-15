@@ -299,7 +299,7 @@ function runOp(configuration, overall) {
           finish(new Error());
         } else if (code !== 0 || stderrBytes !== 0) {
           const diagnostic = Buffer.concat(stderr).toString("utf8");
-          finish(undefined, { output: "", rateLimited: isRateLimitedDiagnostic(diagnostic) });
+          finish(undefined, { output: "", rateLimited: code !== 0 && isRateLimitedDiagnostic(diagnostic) });
         } else finish(undefined, { output: Buffer.concat(stdout).toString("utf8"), rateLimited: false });
       });
       if (overall.aborted) stop();

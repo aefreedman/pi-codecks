@@ -145,6 +145,16 @@ try {
   now = 60000;
   await assert.rejects(resolveOnePasswordCredential(request), safeLimit);
   assert.equal(readFileSync(launches, "utf8"), "xx", "expiry permits the next caller to resolve without automatic retry");
+  for (const [diagnostic, exitCode] of [[sentinel + " rate 429 unavailable", 1], ["Too many requests. Your client has been rate-limited.", 0]] as const) {
+    __onepasswordTest.resetProcessLocalState();
+    writeFileSync(fakeOpScript, `process.stderr.write(${JSON.stringify(diagnostic)}); process.exitCode = ${exitCode};`);
+    await assert.rejects(resolveOnePasswordCredential(request), (error: unknown) => {
+      assert.equal((error as { credentialCategory: string }).credentialCategory, "credential_helper_unavailable");
+      assert.doesNotMatch(String(error), /PRIVATE_DIAGNOSTIC_SENTINEL|429/);
+      return true;
+    });
+    assert.equal(__onepasswordTest.getProcessLocalState().cooldownEntries, 0, "unknown failure or zero-exit warning cannot create a cooldown");
+  }
   process.chdir(originalCwd);
   __onepasswordTest.resetLifecycleDependenciesForTests();
 

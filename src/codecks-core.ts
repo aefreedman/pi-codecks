@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
 import { evictOnePasswordCredentialGeneration, resolveOnePasswordCredential } from "./codecks-onepassword";
 import { BoundedResponseError, readBoundedResponse } from "./codecks-bounded-response";
+import { CodecksCredentialError } from "./codecks-credential-error";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "path";
@@ -989,14 +990,14 @@ const toStructuredErrorResult = (
     data?: Record<string, unknown>,
 ): string =>
 {
-    const sanitizedMessage = sanitizeValue(message);
+    const sanitizedMessage = sanitizeValue(message) + (data?.provider === "onepassword" && data?.requestSent === false ? " No request was sent to Codecks." : "");
     if (format !== "json")
     {
         return sanitizedMessage;
     }
 
     const sanitizedData = data
-        ? truncateStructuredValue(data).value as Record<string, unknown>
+        ? truncateStructuredValue(data, 0, action === "card-get-batch" ? { maxDepth: 5, maxArrayItems: 25, maxObjectKeys: 30, maxStringLength: 4000 } : undefined).value as Record<string, unknown>
         : {};
     const payload: Record<string, unknown> = {
         ok: false,
@@ -1077,11 +1078,10 @@ const sanitizeErrorPayload = (payload: unknown): string =>
 };
 
 const isCredentialRateLimitedError = (error: unknown): boolean =>
-    typeof error === "object" && error !== null
-    && (error as { credentialCategory?: unknown }).credentialCategory === "credential_rate_limited";
+    error instanceof CodecksCredentialError && error.credentialCategory === "credential_rate_limited";
 
-const credentialRateLimitData = (): Record<string, unknown> => ({
-    provider: "onepassword", stage: "credential_retrieval", retryable: true,
+const credentialErrorData = (error: CodecksCredentialError): Record<string, unknown> => ({
+    category: error.credentialCategory, provider: error.provider, stage: error.stage, retryable: error.retryable,
     ...(getOperationContext() ? { requestSent: getOperationContext()!.requestsDispatched > 0 } : {}),
 });
 
@@ -1130,9 +1130,11 @@ const classifyApiErrorCategory = (message: string): ErrorCategory =>
     return "api_error";
 };
 
-const getOperationErrorData = (error: unknown): Record<string, unknown> => error instanceof CodecksOperationError
-    ? { ...error.details, recoveryHint: error.details.recoveryHint ?? "Retry sequentially with a narrower scope." }
-    : {};
+const getOperationErrorData = (error: unknown): Record<string, unknown> => error instanceof CodecksCredentialError
+    ? credentialErrorData(error)
+    : error instanceof CodecksOperationError
+        ? { ...error.details, recoveryHint: error.details.recoveryHint ?? "Retry sequentially with a narrower scope." }
+        : {};
 
 const truncateStructuredValue = (
     value: unknown,
@@ -2409,6 +2411,8 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
     const queueWaitMs = await enforceRateLimit();
     noteOperationRequest(queueWaitMs);
 
+    const context = getOperationContext();
+    if (context) context.requestsDispatched++;
     const response = await fetch(`${config.baseUrl}/s3/sign?objectName=${encodeURIComponent(fileName)}`, {
         method: "GET",
         headers: {
@@ -6837,7 +6841,6 @@ export const card_get = tool({
                 : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
             return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
-                ...(isCredentialRateLimitedError(error) ? credentialRateLimitData() : {}),
             });
         }
     },
@@ -6861,7 +6864,7 @@ export const card_get_batch = tool({
         const requestsBefore = getOperationContext()!.requestsDispatched;
         const requested = args.cardIds.map((value) => String(value).trim());
         const parsed = requested.map((value) => ({ value, identifier: parseCardIdentifier(value) }));
-        const invalid = parsed.find(({ value, identifier }) => !value || identifier.accountSeq === undefined);
+        const invalid = parsed.find(({ value, identifier }) => !value || value.length > 128 || !Number.isSafeInteger(identifier.accountSeq) || identifier.accountSeq! < 0);
         if (invalid)
         {
             return toStructuredErrorResult(format, "card-get-batch", "validation_error", "cardIds must contain exact short-code or seq:<accountSeq> references. UUID and mixed-reference batches are not supported.", { cardId: invalid.value || null });
@@ -6916,7 +6919,6 @@ export const card_get_batch = tool({
                 : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
             return toStructuredErrorResult(format, "card-get-batch", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
-                ...(isCredentialRateLimitedError(error) ? credentialRateLimitData() : {}),
                 requested: requested.length,
                 complete: false,
                 failed: getOperationContext()!.requestsDispatched > requestsBefore ? requested : [],
@@ -8827,7 +8829,7 @@ export const deck_get = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
     },
 });
@@ -8866,7 +8868,7 @@ export const deck_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "deck-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "deck-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if (deck.kind !== "resolved")
@@ -9000,7 +9002,7 @@ export const milestone_list = tool({
         catch (error)
         {
             const message = toErrorMessage(error);
-            return toStructuredErrorResult(format, "milestone-list", classifyApiErrorCategory(message), message);
+            return toStructuredErrorResult(format, "milestone-list", classifyApiErrorCategory(message), message, getOperationErrorData(error));
         }
     },
 });
@@ -9065,7 +9067,7 @@ export const milestone_get = tool({
         catch (error)
         {
             const message = toErrorMessage(error);
-            return toStructuredErrorResult(format, "milestone-get", classifyApiErrorCategory(message), message);
+            return toStructuredErrorResult(format, "milestone-get", classifyApiErrorCategory(message), message, getOperationErrorData(error));
         }
     },
 });
@@ -9099,7 +9101,7 @@ export const milestone_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "milestone-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "milestone-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if (milestone.kind !== "resolved")
@@ -9412,7 +9414,7 @@ export const run_list = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-list", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-list", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const titleFilter = String(args.title ?? "").trim().toLowerCase();
@@ -9480,7 +9482,7 @@ export const run_get = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if (!run)
@@ -9543,7 +9545,7 @@ export const run_delivered_effort = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-delivered-effort", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-delivered-effort", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if ("error" in result)
@@ -9616,7 +9618,7 @@ export const run_average_effort = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-average-effort", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-average-effort", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if ("error" in result)
@@ -9705,7 +9707,7 @@ export const run_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-update", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if (!run)
@@ -9797,7 +9799,7 @@ export const card_update_run = tool({
             }
             catch (error)
             {
-                return toStructuredErrorResult(format, "card-update-run", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+                return toStructuredErrorResult(format, "card-update-run", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
             }
 
             if (!run)

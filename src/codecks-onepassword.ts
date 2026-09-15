@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveExternalHelperCredential } from "./codecks-external-helper";
-import { OnePasswordState } from "./codecks-onepassword-state";
+import { ExternalHelperError, resolveExternalHelperCredential } from "./codecks-external-helper";
+import { OnePasswordState, OnePasswordStateError } from "./codecks-onepassword-state";
+import { CodecksCredentialError } from "./codecks-credential-error";
 
 const FAILURE = "Codecks 1Password credential provider configuration is invalid.";
 const CHILD_PATH = fileURLToPath(new URL("./integrations/codecks-onepassword-credential-helper.mjs", import.meta.url));
@@ -16,7 +17,7 @@ let testResolver: ((request: Request) => Promise<{ token: string; providerId: "o
 
 type Request = Readonly<{ account: string; profileKey?: string; baseUrl?: string; signal: AbortSignal }>;
 
-const fail = (): never => { throw new Error(FAILURE); };
+const fail = (): never => { throw new CodecksCredentialError("credential_configuration_invalid"); };
 
 const canonicalExecutable = (candidate: string): string | undefined =>
 {
@@ -104,11 +105,35 @@ export const resolveOnePasswordCredential = async (request: Request): Promise<{ 
     // Capture effective environment now; asynchronous work must never adopt a later configuration.
     const environment: NodeJS.ProcessEnv = { ...process.env, PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE: executable, PI_CODECKS_ONEPASSWORD_REFERENCE: secretReference };
     const resolver = testResolver;
-    return state.resolve(key, scope, ttlMs, request.signal, signal => resolver
-        ? resolver({ ...request, signal })
-        : resolveExternalHelperCredential({ ...request, signal }, {
-            modulePath: CHILD_PATH, environment, providerId: "onepassword", trustedBuiltInErrorEnvelope: true,
-        }));
+    try
+    {
+        return await state.resolve(key, scope, ttlMs, request.signal, signal => resolver
+            ? resolver({ ...request, signal })
+            : resolveExternalHelperCredential({ ...request, signal }, {
+                modulePath: CHILD_PATH, environment, providerId: "onepassword", trustedBuiltInErrorEnvelope: true,
+            }));
+    }
+    catch (error)
+    {
+        if (error instanceof CodecksCredentialError) throw error;
+        if (error instanceof OnePasswordStateError)
+        {
+            switch (error.credentialCategory)
+            {
+                case "credential_rate_limited": case "credential_helper_timeout": case "credential_cancelled": case "credential_capacity":
+                    throw new CodecksCredentialError(error.credentialCategory);
+            }
+        }
+        if (error instanceof ExternalHelperError)
+        {
+            if (error.credentialCategory === "credential_rate_limited") throw new CodecksCredentialError("credential_rate_limited");
+            const categories = { configuration: "credential_configuration_invalid", unavailable: "credential_helper_unavailable",
+                protocol: "credential_helper_protocol_error", timedOut: "credential_helper_timeout", cancelled: "credential_cancelled" } as const;
+            throw new CodecksCredentialError(categories[error.kind]);
+        }
+        // Never transport an unknown helper diagnostic or infer authentication/permission from exit status.
+        throw new CodecksCredentialError("credential_helper_unavailable");
+    }
 };
 
 export const __onepasswordTest = {

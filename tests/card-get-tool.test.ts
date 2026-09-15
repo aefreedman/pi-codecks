@@ -360,6 +360,35 @@ const testBatchRequiresExplicitCompleteCollection = async (tools: ToolModule): P
   });
 };
 
+const testEquivalentWorkloadCounts = async (tools: ToolModule): Promise<void> => {
+  let credentials = 0, requests = 0;
+  tools.__test.setCredentialProviderForTests({ id: "fixture", resolve: async () => { credentials++; return { token: "inert", providerId: "fixture" }; } });
+  try {
+    await withMockedFetch(query => {
+      requests++;
+      const relation = getAccountRelation(query, "cards")!;
+      const sequences = JSON.parse(relation.key.match(/\"accountSeq\":(\[[^\]]*\])/)![1]) as number[];
+      return jsonResponse({ data: buildSearchPayload(sequences.map(seq => buildCard({ accountSeq: seq, cardId: `fixture-${seq}` })), relation.key) });
+    }, async () => {
+      for (const size of [17, 28, 37]) {
+        const refs = Array.from({ length: size }, (_, index) => `seq:${index + 1}`);
+        credentials = 0; requests = 0; tools.__test.resetRateGate();
+        for (const cardId of refs) getData(String(await tools.runWithAbortSignal(undefined, () => tools.card_get.execute({ cardId }))));
+        assert.equal(credentials, size); assert.equal(requests, size);
+        credentials = 0; requests = 0; tools.__test.resetRateGate();
+        const returned: unknown[] = [];
+        for (let start = 0; start < size; start += 25) {
+          const data = getData(String(await tools.card_get_batch.execute({ cardIds: refs.slice(start, start + 25) })));
+          assert.equal(data.complete, true);
+          returned.push(...(data.items as AnyRecord[]).map(item => (item.card as AnyRecord).accountSeq));
+        }
+        assert.equal(credentials, Math.ceil(size / 25)); assert.equal(requests, Math.ceil(size / 25));
+        assert.deepEqual(returned, refs.map((_, index) => index + 1));
+      }
+    });
+  } finally { tools.__test.setCredentialProviderForTests(); tools.__test.resetRateGate(); }
+};
+
 const testValidationRequiresCardIdOrTitle = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get should not call the API when required inputs are missing");
@@ -383,6 +412,7 @@ await testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes(tools);
 await testBatchGetRejectsOversizedResponseAsIncomplete(tools);
 await testBatchGetRejectsUnsupportedIdentifiersWithoutFetch(tools);
 await testBatchRequiresExplicitCompleteCollection(tools);
+await testEquivalentWorkloadCounts(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");

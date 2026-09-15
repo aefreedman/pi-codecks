@@ -15,6 +15,12 @@ and this project follows semantic versioning for public package releases.
 - Added `codecks_card_get_batch` for up to 25 exact short-code or account-sequence card references in one structured read, with duplicate-preserving item outcomes and explicit incomplete failure results. UUID and mixed-reference batches remain unsupported pending API-contract evidence.
 - Added deterministic credential-resolution characterization that distinguishes independent top-level operations from Codecks HTTP attempts without contacting a credential manager or Codecks.
 
+### Fixed
+
+- Protect built-in credential generations against late 401s, configuration changes, abandoned callers, stale completions, and cooldown bypass; validate lifecycle behavior with controlled clocks/promises and an inert bundled-helper fixture.
+- Preserve safe built-in credential error categories and dispatch accounting without guessing provider reset times or forwarding diagnostics.
+- Enforce the 2 MiB batch response ceiling during streaming, bound body-read cancellation/deadlines, and distinguish failed/unqueried inputs from confirmed missing cards.
+
 ## [0.11.3] - 2026-08-11
 
 ### Changed
