@@ -124,4 +124,93 @@ let independent = 0;
 await Promise.all([new OnePasswordState(), new OnePasswordState()].map(s => s.resolve("a", "a", 1000, signal(), async () => { independent++; return { token: "inert" }; })));
 assert.equal(independent, 2);
 state.clear(); timed.clear();
+// Idle expiry uses controlled timers; cancelled callbacks can be replayed to model stale delivery.
+{
+    let clock = 0;
+    const timers: { callback: () => void; at: number; handle: ReturnType<typeof setTimeout>; active: boolean }[] = [];
+    const idle = new OnePasswordState({
+        now: () => clock,
+        schedule: (callback, milliseconds) => {
+            const handle = setTimeout(() => {}, 1_000_000);
+            timers.push({ callback, at: clock + milliseconds, handle, active: true });
+            return handle;
+        },
+        cancel: handle => {
+            clearTimeout(handle);
+            const timer = timers.find(item => item.handle === handle);
+            assert.ok(timer);
+            timer.active = false;
+        },
+    });
+    const advance = (milliseconds: number) => {
+        clock += milliseconds;
+        for (const timer of timers.filter(item => item.active && item.at <= clock)) timer.callback();
+    };
+    const activeTimers = () => timers.filter(item => item.active);
+    const read = (key = "a", scope = key, ttl = 1000) => idle.resolve(key, scope, ttl, signal(), async () => ({ token: "inert" }));
+    try
+    {
+        const delayed = deferred<{ token: string }>();
+        const pending = idle.resolve("a", "a", 1000, signal(), () => delayed.promise);
+        await tick(); advance(500);
+        delayed.resolve({ token: "inert" }); await pending;
+        assert.equal(activeTimers().length, 1, "resolver deadline is replaced by one expiry timer");
+        assert.equal(activeTimers()[0].handle.hasRef(), false, "expiry must not keep Node alive");
+        advance(999); assert.equal(idle.counts().cacheEntries, 1);
+        advance(1); assert.equal(idle.counts().cacheEntries, 0, "idle cache expires without another lookup");
+        assert.equal(activeTimers().length, 0);
+
+        const first = await read(); const stale = activeTimers()[0];
+        idle.evict(first.credentialGeneration);
+        assert.equal(stale.active, false, "401 eviction cancels expiry");
+        const replacement = await read();
+        stale.callback();
+        assert.equal(idle.counts().cacheEntries, 1, "stale expiry cannot remove a replacement");
+        assert.equal((await read()).credentialGeneration, replacement.credentialGeneration);
+        assert.equal(activeTimers().length, 1);
+
+        const lazy = activeTimers()[0];
+        clock += 1000; // Delay timer delivery to exercise the lookup-time safeguard.
+        const refreshed = await read();
+        assert.equal(lazy.active, false);
+        lazy.callback();
+        assert.equal((await read()).credentialGeneration, refreshed.credentialGeneration);
+
+        for (const change of ["configuration", "policy", "disabled", "clear"])
+        {
+            idle.clear(); await read(); const expiry = activeTimers()[0];
+            if (change === "configuration") await read("b", "a");
+            else if (change === "policy") await read("a", "a", 2000);
+            else if (change === "disabled") await read("a", "a", 0);
+            else idle.clear();
+            assert.equal(expiry.active, false, `${change} cancels the old timer`);
+            const count = idle.counts().cacheEntries;
+            expiry.callback();
+            assert.equal(idle.counts().cacheEntries, count, `${change} tolerates stale delivery`);
+            assert.equal(activeTimers().length, count, "no expiry timers for uncached credentials");
+        }
+
+        idle.clear();
+        const rateFailure = deferred<{ token: string }>();
+        const earlier = idle.resolve("a", "a", 0, signal(), () => rateFailure.promise);
+        const earlierCheck = assert.rejects(earlier, /safe provider limit/);
+        await tick(); await read();
+        const cachedExpiry = activeTimers().find(timer => timer.at === clock + 1000)!;
+        rateFailure.reject(limit()); await earlierCheck;
+        assert.equal(cachedExpiry.active, false, "late rate limit cancels cached expiry");
+        assert.equal(idle.counts().cacheEntries, 0);
+        assert.equal(activeTimers().length, 0);
+
+        idle.clear(); await read(); const removed = activeTimers()[0];
+        for (let i = 0; i < 64; i++) await read(String(i));
+        assert.equal(removed.active, false, "capacity eviction cancels expiry");
+        assert.equal(activeTimers().length, 64);
+        idle.clear(); assert.equal(activeTimers().length, 0, "clear cancels every expiry timer");
+    }
+    finally
+    {
+        idle.clear();
+        for (const timer of timers) clearTimeout(timer.handle);
+    }
+}
 console.log("Codecks 1Password state-machine tests passed");

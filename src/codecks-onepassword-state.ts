@@ -5,6 +5,7 @@ type Flight = { controller: AbortController; promise: Promise<OnePasswordCredent
 type Entry = {
     key: string; scope: string; epoch: number; current: boolean;
     cached?: { value: OnePasswordCredential; expiresAt: number; ttlMs: number };
+    expiryTimer?: ReturnType<typeof setTimeout>;
     cooldownUntil: number; flights: Set<Flight>; shared?: Flight; ttlMs?: number;
 };
 export class OnePasswordStateError extends Error
@@ -31,11 +32,25 @@ export class OnePasswordState
         cancel?: (timer: ReturnType<typeof setTimeout>) => void;
     } = {}) {}
     private now(): number { return (this.options.now ?? Date.now)(); }
+    private clearCached(entry: Entry): void
+    {
+        if (entry.expiryTimer !== undefined) (this.options.cancel ?? clearTimeout)(entry.expiryTimer);
+        entry.expiryTimer = undefined;
+        entry.cached = undefined;
+    }
+    private scheduleExpiry(entry: Entry, generation: string, ttlMs: number): void
+    {
+        // Capture only the generation, not the credential value, in the timer closure.
+        entry.expiryTimer = (this.options.schedule ?? ((callback, milliseconds) => setTimeout(callback, milliseconds)))(() => {
+            if (entry.cached?.value.credentialGeneration === generation) this.clearCached(entry);
+        }, ttlMs);
+        entry.expiryTimer.unref?.();
+    }
     private invalidate(entry: Entry): void
     {
         entry.current = false;
         entry.epoch++;
-        entry.cached = undefined;
+        this.clearCached(entry);
         entry.shared = undefined;
     }
     private remove(entry: Entry): void
@@ -99,7 +114,9 @@ export class OnePasswordState
                 const value: OnePasswordCredential = { token: credential.token, providerId: "onepassword", credentialGeneration: randomUUID() };
                 if (ttlMs > 0 && this.isCurrent(entry, epoch) && entry.cooldownUntil <= this.now())
                 {
+                    this.clearCached(entry);
                     entry.cached = { value, expiresAt: this.now() + ttlMs, ttlMs };
+                    this.scheduleExpiry(entry, value.credentialGeneration, ttlMs);
                 }
                 return value;
             }
@@ -111,7 +128,7 @@ export class OnePasswordState
                     // A positive result still applies to this exact configuration after a scope switch.
                     entry.cooldownUntil = Math.max(entry.cooldownUntil, this.now() + 60_000);
                     entry.epoch++;
-                    entry.cached = undefined;
+                    this.clearCached(entry);
                     entry.shared = undefined;
                 }
                 throw error;
@@ -159,10 +176,10 @@ export class OnePasswordState
             {
                 entry.epoch++;
                 entry.shared = undefined;
-                entry.cached = undefined;
+                this.clearCached(entry);
             }
             entry.ttlMs = ttlMs;
-            if (entry.cached && (entry.cached.expiresAt <= this.now() || entry.cached.ttlMs !== ttlMs)) entry.cached = undefined;
+            if (entry.cached && (entry.cached.expiresAt <= this.now() || entry.cached.ttlMs !== ttlMs)) this.clearCached(entry);
             if (ttlMs > 0 && entry.cached) return Promise.resolve(entry.cached.value);
             const flight = ttlMs > 0 && entry.shared && !entry.shared.controller.signal.aborted ? entry.shared : this.start(entry, ttlMs, load);
             if (ttlMs > 0) entry.shared = flight;
@@ -177,7 +194,7 @@ export class OnePasswordState
         {
             if (entry.cached?.value.credentialGeneration === generation)
             {
-                entry.cached = undefined;
+                this.clearCached(entry);
                 entry.epoch++;
                 entry.shared = undefined;
             }

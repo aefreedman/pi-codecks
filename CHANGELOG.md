@@ -17,6 +17,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Release idle cached 1Password credential references with generation-checked, unreferenced expiry timers; cancel timers on invalidation and retain lookup-time expiry checks. Timer execution depends on the event loop and does not guarantee memory zeroization.
 - Protect built-in credential generations against late 401s, configuration changes, abandoned callers, stale completions, and cooldown bypass; validate lifecycle behavior with controlled clocks/promises and an inert bundled-helper fixture.
 - Preserve safe built-in credential error categories and dispatch accounting without guessing provider reset times or forwarding diagnostics.
 - Enforce the 2 MiB batch response ceiling during streaming, bound body-read cancellation/deadlines, and distinguish failed/unqueried inputs from confirmed missing cards.
