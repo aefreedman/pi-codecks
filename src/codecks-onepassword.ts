@@ -179,5 +179,5 @@ export const __onepasswordTest = {
     seedCachedCredentialForTests: (key: string, generation: string) => { credentialCache.set(key, { token: "inert-test-token", expiresAt: Number.MAX_SAFE_INTEGER, generation }); },
     cachedGenerationsForTests: () => [...credentialCache.values()].map((entry) => entry.generation),
     setLifecycleDependenciesForTests: (input?: { now?: () => number; resolve?: (request: Request) => Promise<{ token: string; providerId: "onepassword" }> }) => { testNow = input?.now; testResolver = input?.resolve; },
-    resetLifecycleDependenciesForTests: () => { testNow = undefined; testResolver = undefined; }, 
+    resetLifecycleDependenciesForTests: () => { testNow = undefined; testResolver = undefined; },
 };
