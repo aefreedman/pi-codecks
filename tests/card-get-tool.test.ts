@@ -323,6 +323,16 @@ const testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes = async (tools: T
   });
 };
 
+const testBatchGetRejectsOversizedResponseAsIncomplete = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => new Response("x".repeat(2 * 1024 * 1024 + 1), { headers: { "Content-Length": "1" } }), async () => {
+    const result = await tools.card_get_batch.execute({ cardIds: [CARD_REF] });
+    const error = getError(String(result));
+    assert.match(String(error.message), /response exceeded/);
+    assert.equal(error.complete, false);
+    assert.deepEqual(error.unqueried, [CARD_REF]);
+  });
+};
+
 const testBatchGetRejectsUnsupportedIdentifiersWithoutFetch = async (tools: ToolModule): Promise<void> => {
   await withMockedFetch(() => {
     throw new Error("card_get_batch should not call the API for unsupported identifiers");
@@ -353,6 +363,7 @@ await testCardMapFallbackDoesNotBecomeCard(tools);
 await testZeroAccountSeqIsPreserved(tools);
 await testBareNumericNotFoundSuggestsExplicitSequence(tools);
 await testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes(tools);
+await testBatchGetRejectsOversizedResponseAsIncomplete(tools);
 await testBatchGetRejectsUnsupportedIdentifiersWithoutFetch(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 

@@ -3443,6 +3443,32 @@ const formatRootSemanticError = (errors: unknown[]): string =>
 };
 
 type CodecksRequestRetryPolicy = "read-only" | "exact-read" | "non-idempotent-mutation";
+const MAX_BATCH_CARD_RESPONSE_BYTES = 2 * 1024 * 1024;
+
+const readResponseTextBounded = async (response: Response, maxBytes?: number): Promise<string> =>
+{
+    if (!maxBytes || !response.body) return response.text();
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try
+    {
+        while (true)
+        {
+            const next = await reader.read();
+            if (next.done) break;
+            bytes += next.value.byteLength;
+            if (bytes > maxBytes)
+            {
+                await reader.cancel();
+                throw new Error(`Codecks batch response exceeded the ${maxBytes}-byte limit.`);
+            }
+            chunks.push(next.value);
+        }
+        return new TextDecoder().decode(Buffer.concat(chunks));
+    }
+    finally { reader.releaseLock(); }
+};
 
 const requestJson = async (
     path: string,
@@ -3450,6 +3476,7 @@ const requestJson = async (
     config: CodecksConfig,
     retryPolicy: CodecksRequestRetryPolicy,
     fetchImplementation: CodecksFetch = fetch,
+    maxResponseBytes?: number,
 ): Promise<unknown> =>
 {
     const externalSignal = getActiveAbortSignal();
@@ -3550,7 +3577,7 @@ const requestJson = async (
             evictOnePasswordCredentialGeneration(config.credentialGeneration);
         }
 
-        const text = await response.text();
+        const text = await readResponseTextBounded(response, maxResponseBytes);
         let payload: unknown = text;
 
         if (text)
@@ -3605,13 +3632,13 @@ const requestJson = async (
     }
 };
 
-const runQuery = async (query: Record<string, unknown>): Promise<unknown> =>
+const runQuery = async (query: Record<string, unknown>, maxResponseBytes?: number): Promise<unknown> =>
 {
     const config = await getAuthenticatedConfig();
     return requestJson("/", {
         method: "POST",
         body: JSON.stringify({ query }),
-    }, config, "read-only");
+    }, config, "read-only", fetch, maxResponseBytes);
 };
 
 // Identity verification is diagnostic, so it must make one physical request rather
@@ -6469,7 +6496,7 @@ const fetchCardDetailsByAccountSeqs = async (accountSeqs: number[]): Promise<Car
             },
         ],
     };
-    const payload = await runQuery(query);
+    const payload = await runQuery(query, MAX_BATCH_CARD_RESPONSE_BYTES);
     const data = unwrapData(payload) as Record<string, unknown> | undefined;
     const cardMap = getEntityMap(data, "card");
     const userMap = getEntityMap(data, "user");
