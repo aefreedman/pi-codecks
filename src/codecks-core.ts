@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
 import { evictOnePasswordCredentialGeneration, resolveOnePasswordCredential } from "./codecks-onepassword";
+import { BoundedResponseError, readBoundedResponse } from "./codecks-bounded-response";
 import { tool } from "./pi-tool-compat";
 import { promises as fs } from "fs";
 import { basename, extname, isAbsolute, join, relative, resolve } from "path";
@@ -106,7 +107,7 @@ const accountScanWaiters: Array<{ resolve: (queueWaitMs: number) => void; reject
 class CodecksOperationError extends Error
 {
     constructor(
-        readonly category: "caller_aborted" | "rate_limit_queue_aborted" | "request_timeout" | "rate_limited" | "scan_queue_full",
+        readonly category: "caller_aborted" | "rate_limit_queue_aborted" | "request_timeout" | "rate_limited" | "scan_queue_full" | "response_too_large" | "invalid_response_stream" | "api_error",
         message: string,
         readonly details: Record<string, unknown> = {},
     )
@@ -270,6 +271,7 @@ type BulkMutationProgress = {
 type OperationContext = {
     onBulkMutationProgress?: (progress: BulkMutationProgress) => void;
     requestsAttempted: number;
+    requestsDispatched: number;
     queueWaitMs: number;
     localGateWaitMs: number;
     serverCooldownWaitMs: number;
@@ -285,7 +287,7 @@ const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.g
 const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 const getOperationContext = (): OperationContext | undefined => operationContextStorage.getStore();
 
-const createOperationContext = (onBulkMutationProgress?: (progress: BulkMutationProgress) => void): OperationContext => ({ onBulkMutationProgress, requestsAttempted: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
+const createOperationContext = (onBulkMutationProgress?: (progress: BulkMutationProgress) => void): OperationContext => ({ onBulkMutationProgress, requestsAttempted: 0, requestsDispatched: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
 
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
@@ -974,6 +976,8 @@ type ErrorCategory =
     | "rate_limited"
     | "scan_queue_full"
     | "credential_rate_limited"
+    | "response_too_large"
+    | "invalid_response_stream"
     | "file_error"
     | "api_error";
 
@@ -1075,6 +1079,11 @@ const sanitizeErrorPayload = (payload: unknown): string =>
 const isCredentialRateLimitedError = (error: unknown): boolean =>
     typeof error === "object" && error !== null
     && (error as { credentialCategory?: unknown }).credentialCategory === "credential_rate_limited";
+
+const credentialRateLimitData = (): Record<string, unknown> => ({
+    provider: "onepassword", stage: "credential_retrieval", retryable: true,
+    ...(getOperationContext() ? { requestSent: getOperationContext()!.requestsDispatched > 0 } : {}),
+});
 
 const classifyApiErrorCategory = (message: string): ErrorCategory =>
 {
@@ -3449,27 +3458,19 @@ const MAX_BATCH_CARD_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 const readResponseTextBounded = async (response: Response, maxBytes?: number): Promise<string> =>
 {
-    if (!maxBytes || !response.body) return response.text();
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let bytes = 0;
+    if (!maxBytes) return response.text();
     try
     {
-        while (true)
-        {
-            const next = await reader.read();
-            if (next.done) break;
-            bytes += next.value.byteLength;
-            if (bytes > maxBytes)
-            {
-                await reader.cancel();
-                throw new Error(`Codecks batch response exceeded the ${maxBytes}-byte limit.`);
-            }
-            chunks.push(next.value);
-        }
-        return new TextDecoder().decode(Buffer.concat(chunks));
+        return await readBoundedResponse(response, maxBytes, { signal: getActiveAbortSignal(), timeoutMs: REQUEST_TIMEOUT_MS });
     }
-    finally { reader.releaseLock(); }
+    catch (error)
+    {
+        if (error instanceof BoundedResponseError)
+        {
+            throw new CodecksOperationError(error.category, error.message, { recoveryHint: "Do not automatically retry. Narrow the batch or diagnose the response failure." });
+        }
+        throw error;
+    }
 };
 
 const requestJson = async (
@@ -3518,6 +3519,8 @@ const requestJson = async (
         let response: Response;
         try
         {
+            const context = getOperationContext();
+            if (context) context.requestsDispatched++;
             response = await fetchImplementation(`${config.baseUrl}${path}`, {
                 ...init,
                 headers: {
@@ -6485,7 +6488,7 @@ const hasCardTarget = (value: unknown): boolean =>
 
 const MAX_BATCH_CARD_GET_REFS = 25;
 
-const fetchCardDetailsByAccountSeqs = async (accountSeqs: number[]): Promise<CardGetDetail> =>
+const fetchCardDetailsByAccountSeqs = async (accountSeqs: number[]): Promise<CardGetDetail & { cards: CodecksEntity[] }> =>
 {
     const query = {
         _root: [
@@ -6499,6 +6502,8 @@ const fetchCardDetailsByAccountSeqs = async (accountSeqs: number[]): Promise<Car
         ],
     };
     const payload = await runQuery(query, MAX_BATCH_CARD_RESPONSE_BYTES);
+    const relation = getRelation(getAccount(payload), "cards");
+    if (!Array.isArray(relation)) throw new CodecksOperationError("api_error", "Codecks batch response lacks an explicit cards collection.");
     const data = unwrapData(payload) as Record<string, unknown> | undefined;
     const cardMap = getEntityMap(data, "card");
     const userMap = getEntityMap(data, "user");
@@ -6508,11 +6513,16 @@ const fetchCardDetailsByAccountSeqs = async (accountSeqs: number[]): Promise<Car
         ...hydrateCard(rawCard, { user: userMap, deck: deckMap, milestone: milestoneMap }),
         creator: resolveFromMap(rawCard.creator, userMap) ?? rawCard.creator,
     } as CodecksEntity));
+    if (cards.length !== relation.length || cards.some(card => !Number.isSafeInteger(card.accountSeq))
+        || new Set(cards.map(card => card.accountSeq)).size !== cards.length)
+    {
+        throw new CodecksOperationError("api_error", "Codecks batch response contains unresolved or ambiguous card references.");
+    }
     for (const card of cards)
     {
         if (card.cardId !== undefined) cardMap[String(card.cardId)] = card;
     }
-    return { cardMap, card: undefined };
+    return { cardMap, card: undefined, cards };
 };
 
 const fetchCardDetailForGet = async (args: {
@@ -6827,7 +6837,7 @@ export const card_get = tool({
                 : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
             return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
-                ...(isCredentialRateLimitedError(error) ? { provider: "onepassword", stage: "credential_retrieval", retryable: true, requestSent: false } : {}),
+                ...(isCredentialRateLimitedError(error) ? credentialRateLimitData() : {}),
             });
         }
     },
@@ -6841,7 +6851,14 @@ export const card_get_batch = tool({
     },
     async execute(args)
     {
+        if (!getOperationContext()) return runWithAbortSignal(getActiveAbortSignal(), () => card_get_batch.execute(args));
         const format = args.format ?? "json";
+        if (!Array.isArray(args.cardIds) || args.cardIds.length < 1 || args.cardIds.length > MAX_BATCH_CARD_GET_REFS
+            || args.cardIds.some(value => !["string", "number"].includes(typeof value)))
+        {
+            return toStructuredErrorResult(format, "card-get-batch", "validation_error", "cardIds must contain 1 through 25 exact references.");
+        }
+        const requestsBefore = getOperationContext()!.requestsDispatched;
         const requested = args.cardIds.map((value) => String(value).trim());
         const parsed = requested.map((value) => ({ value, identifier: parseCardIdentifier(value) }));
         const invalid = parsed.find(({ value, identifier }) => !value || identifier.accountSeq === undefined);
@@ -6855,7 +6872,7 @@ export const card_get_batch = tool({
         {
             const detail = await fetchCardDetailsByAccountSeqs(accountSeqs);
             const byAccountSeq = new Map<number, CodecksEntity>();
-            for (const card of Object.values(detail.cardMap))
+            for (const card of detail.cards)
             {
                 const accountSeq = card.accountSeq;
                 if (typeof accountSeq === "number") byAccountSeq.set(accountSeq, card);
@@ -6899,10 +6916,13 @@ export const card_get_batch = tool({
                 : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
             return toStructuredErrorResult(format, "card-get-batch", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
-                ...(isCredentialRateLimitedError(error) ? { provider: "onepassword", stage: "credential_retrieval", retryable: true, requestSent: false } : {}),
+                ...(isCredentialRateLimitedError(error) ? credentialRateLimitData() : {}),
                 requested: requested.length,
                 complete: false,
-                unqueried: requested,
+                failed: getOperationContext()!.requestsDispatched > requestsBefore ? requested : [],
+                unqueried: getOperationContext()!.requestsDispatched > requestsBefore ? [] : requested,
+                items: requested.map(requestedRef => ({ requestedRef, status: getOperationContext()!.requestsDispatched > requestsBefore ? "failed" : "unqueried" })),
+
             });
         }
     },

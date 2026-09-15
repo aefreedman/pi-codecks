@@ -329,7 +329,9 @@ const testBatchGetRejectsOversizedResponseAsIncomplete = async (tools: ToolModul
     const error = getError(String(result));
     assert.match(String(error.message), /response exceeded/);
     assert.equal(error.complete, false);
-    assert.deepEqual(error.unqueried, [CARD_REF]);
+    assert.deepEqual(error.failed, [CARD_REF]);
+    assert.deepEqual(error.unqueried, []);
+    assert.equal(error.category, "response_too_large");
   });
 };
 
@@ -337,9 +339,24 @@ const testBatchGetRejectsUnsupportedIdentifiersWithoutFetch = async (tools: Tool
   await withMockedFetch(() => {
     throw new Error("card_get_batch should not call the API for unsupported identifiers");
   }, async () => {
-    const result = await tools.card_get_batch.execute({ cardIds: [CARD_ID] });
-    const error = getError(String(result));
-    assert.equal(error.category, "validation_error");
+    for (const cardIds of [[CARD_ID], [], Array.from({ length: 26 }, () => CARD_REF)]) {
+      const result = await tools.card_get_batch.execute({ cardIds });
+      const error = getError(String(result));
+      assert.equal(error.category, "validation_error");
+    }
+  });
+};
+
+const testBatchRequiresExplicitCompleteCollection = async (tools: ToolModule): Promise<void> => {
+  await withMockedFetch(() => jsonResponse({ data: { card: { stray: buildCard() } } }), async () => {
+    const error = getError(String(await tools.card_get_batch.execute({ cardIds: [CARD_REF] })));
+    assert.equal(error.complete, false);
+    assert.deepEqual(error.failed, [CARD_REF]);
+  });
+  await withMockedFetch(query => jsonResponse({ data: buildSearchPayload([], getAccountRelation(query, "cards")!.key) }), async () => {
+    const data = getData(String(await tools.card_get_batch.execute({ cardIds: [CARD_REF] })));
+    assert.equal(data.complete, true);
+    assert.equal(data.missing, 1, "only an explicit empty relation confirms missing");
   });
 };
 
@@ -365,6 +382,7 @@ await testBareNumericNotFoundSuggestsExplicitSequence(tools);
 await testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes(tools);
 await testBatchGetRejectsOversizedResponseAsIncomplete(tools);
 await testBatchGetRejectsUnsupportedIdentifiersWithoutFetch(tools);
+await testBatchRequiresExplicitCompleteCollection(tools);
 await testValidationRequiresCardIdOrTitle(tools);
 
 console.log("card_get tool test passed");
