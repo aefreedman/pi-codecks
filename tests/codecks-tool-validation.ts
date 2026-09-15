@@ -1219,6 +1219,30 @@ const run = async (): Promise<number> => {
           hardFailures += 1;
           fail(`hero parent create missing cardId: ${heroParentCreate}`);
         } else {
+          // Reuse existing disposable fixtures to validate the new multi-sequence API shape.
+          try {
+            const parent = await queryCardById(heroParentId);
+            if (accountSeq === undefined || parent?.accountSeq === undefined || parent.accountSeq === accountSeq) {
+              throw new Error("batch validation requires two distinct fixture account sequences");
+            }
+            const references = [toolCardRef, `seq:${parent.accountSeq}`, `seq:${accountSeq}`];
+            const batch = await invokeTool("card_get_batch", { cardIds: references, format: "json" });
+            const data = structuredData(batch);
+            const items = Array.isArray(data?.items) ? data.items : [];
+            const expectedIds = [cardId, heroParentId, cardId];
+            if (!structuredOk(batch) || data?.complete !== true || data.uniqueReferences !== 2
+              || data.found !== 3 || data.missing !== 0 || items.length !== 3
+              || items.some((item, index) => !isObject(item) || item.status !== "found"
+                || item.requestedRef !== references[index] || !isObject(item.card)
+                || item.card.cardId !== expectedIds[index] || typeof item.card.content !== "string"
+                || !item.card.content.includes(runTag))) {
+              throw new Error("batch full-content, multi-sequence, or duplicate-order contract failed");
+            }
+            pass("card_get_batch resolves two live fixture sequences with full content and duplicate order");
+          } catch {
+            hardFailures += 1;
+            fail("card_get_batch live fixture validation failed; no response data logged");
+          }
           const heroChildCreate = await invokeTool("card_create", {
             title: `${TEST_PREFIX} hero child ${runTag}`,
             content: `hero child validation marker ${runTag}`,
