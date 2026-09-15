@@ -44,7 +44,7 @@ try {
 
   const cleanEnv = { ...process.env, npm_config_offline: "true" };
   for (const key of Object.keys(cleanEnv)) {
-    if (key.startsWith("CODECKS_") || key.startsWith("PI_CODECKS_")) {
+    if (key.startsWith("CODECKS_") || key.startsWith("PI_CODECKS_") || key.startsWith("OP_")) {
       delete cleanEnv[key];
     }
   }
@@ -68,6 +68,9 @@ try {
     "src/codecks-core.ts",
     "src/codecks-external-helper.ts",
     "src/codecks-onepassword.ts",
+    "src/codecks-onepassword-state.ts",
+    "src/codecks-credential-error.ts",
+    "src/codecks-bounded-response.ts",
     "src/integrations/codecks-onepassword-credential-helper.mjs",
     "docs/external-credential-helper-protocol.md",
     "skills/using-codecks/SKILL.md",
@@ -169,16 +172,18 @@ console.log("installed external helper succeeds and fails closed");
   assert.equal(helperResult.status, 0, `installed external-helper smoke failed:\n${helperResult.stdout}\n${helperResult.stderr}`);
   assert.match(helperResult.stdout, /installed external helper succeeds and fails closed/);
 
-  const packedOpPath = path.join(consumerDir, "inert-packed-op");
-  writeFileSync(packedOpPath, `#!/usr/bin/env node
+  // Node runs the cwd-local inert 'run' script on all platforms, avoiding Windows shebang assumptions.
+  const packedOpPath = process.execPath;
+  const packedOpScript = path.join(consumerDir, "run");
+  writeFileSync(packedOpScript, `#!/usr/bin/env node
 import { spawn } from "node:child_process";
-const [command, flag, delimiter, child, ...childArgs] = process.argv.slice(2);
+const [command, flag, delimiter, child, ...childArgs] = ["run", ...process.argv.slice(2)];
 if (command !== "run" || flag !== "--no-masking" || delimiter !== "--" || !child || process.env.OP_SERVICE_ACCOUNT_TOKEN !== "packed-inert-service-token") process.exit(64);
 if (process.env.PACKED_OP_MODE === "malformed") { process.stdout.write("not-json"); process.exit(0); }
 const nested = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "packed-inert-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
 nested.stdout.pipe(process.stdout); nested.stderr.pipe(process.stderr); nested.once("close", (status) => process.exit(status ?? 1));
 `);
-  chmodSync(packedOpPath, 0o755);
+  chmodSync(packedOpScript, 0o755);
   const onepasswordSmokePath = path.join(consumerDir, "onepassword-smoke.mjs");
   writeFileSync(onepasswordSmokePath, `
 import assert from "node:assert/strict";
@@ -190,13 +195,28 @@ process.env.CODECKS_CREDENTIAL_PROVIDER = "onepassword";
 process.env.PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE = ${JSON.stringify(packedOpPath)};
 process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "op://inert/vault/item";
 process.env.OP_SERVICE_ACCOUNT_TOKEN = "packed-inert-service-token";
+let fetches = 0;
 globalThis.fetch = async (_input, init) => {
+  fetches++;
   assert.equal(init.headers["X-Auth-Token"], "packed-inert-onepassword-token");
   return new Response(JSON.stringify({ data: {} }), { status: 200 });
 };
-await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+const queryResult = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
+assert.equal(fetches, 1, 'the installed helper must actually resolve, not merely return an error string');
+assert.doesNotMatch(String(queryResult), /Error:/);
 process.env.PACKED_OP_MODE = "malformed";
-await assert.rejects(core.__test.resolveAuthenticatedConfig(), /External Codecks credential helper is unavailable/);
+await assert.rejects(core.__test.resolveAuthenticatedConfig(), { credentialCategory: 'credential_helper_unavailable', provider: 'onepassword' });
+delete process.env.PACKED_OP_MODE;
+process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = '60000';
+const reused1 = await core.__test.resolveAuthenticatedConfig();
+const reused2 = await core.__test.resolveAuthenticatedConfig();
+assert.equal(reused1.credentialGeneration, reused2.credentialGeneration);
+globalThis.fetch = async () => new Response(JSON.stringify({ data: { _root: { account: { cards: [
+  { cardId: 'inert-card', accountSeq: 42, title: 'Inert', content: 'Inert body', status: 'started' }
+] } } } }), { status: 200 });
+const batch = String(await core.card_get_batch.execute({ cardIds: ['seq:42', 'seq:42'] }));
+assert.match(batch, /\"complete\": true/);
+assert.match(batch, /Inert body/);
 console.log("installed built-in onepassword provider succeeds with --no-masking and fails closed");
 `);
   const onepasswordResult = spawnSync(process.execPath, ["--import", tsxLoader, onepasswordSmokePath], {
