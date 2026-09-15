@@ -317,6 +317,9 @@ const testBatchGetDeduplicatesQueriesAndPreservesInputOutcomes = async (tools: T
     assert.equal(callCount, 1, "batch retrieval should use one Codecks query and one operation credential");
     assert.ok(Array.isArray(data.items));
     assert.equal((data.items as AnyRecord[])[2].requestedRef, CARD_REF, "duplicate inputs retain their output position");
+    const textResult = await tools.card_get_batch.execute({ cardIds: [CARD_REF], format: "text" });
+    assert.match(String(textResult), /Structured retrieval card/);
+    assert.match(String(textResult), /Structured JSON contains full card details/);
   });
 };
 
