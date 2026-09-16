@@ -7871,6 +7871,10 @@ type BulkUpdateRecord = {
     milestone?: string | number;
     assigneeId?: string | number;
     effort?: number | null;
+    clearDeck?: boolean;
+    clearMilestone?: boolean;
+    clearAssignee?: boolean;
+    clearEffort?: boolean;
     priority?: string;
     tags?: string[];
     runId?: string | number;
@@ -7910,7 +7914,8 @@ type NormalizedBulkUpdateRecord = {
 };
 
 const BULK_CREATE_FIELDS = new Set(["correlationKey", "title", "content", "cardType", "deck", "milestone", "effort", "priority", "assigneeId", "putOnHand", "parentCardId", "tags"]);
-const BULK_UPDATE_FIELDS = new Set(["correlationKey", "cardId", "title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent", "mode"]);
+const BULK_UPDATE_CLEAR_FIELDS = { clearDeck: "deck", clearMilestone: "milestone", clearAssignee: "assigneeId", clearEffort: "effort", clearRun: "runId", clearParent: "parentCardId" } as const;
+const BULK_UPDATE_FIELDS = new Set([...Object.keys(BULK_UPDATE_CLEAR_FIELDS), "correlationKey", "cardId", "title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent", "mode"]);
 const BULK_UPDATE_VALUE_FIELDS = ["title", "content", "cardType", "deck", "milestone", "assigneeId", "effort", "priority", "tags", "runId", "clearRun", "parentCardId", "clearParent"];
 
 const validateStrictBulkRecords = (records: unknown[], kind: "create" | "update"): string[] =>
@@ -7951,9 +7956,13 @@ const validateStrictBulkRecords = (records: unknown[], kind: "create" | "update"
         if (kind === "update")
         {
             if (record.cardId === undefined || String(record.cardId).trim() === "") errors.push(`updates[${index}].cardId is required.`);
-            if (!BULK_UPDATE_VALUE_FIELDS.some((field) => record[field] !== undefined)) errors.push(`updates[${index}] is a no-op; provide at least one supported update field.`);
-            if (record.clearRun === true && record.runId !== undefined) errors.push(`updates[${index}] cannot combine clearRun=true with runId.`);
-            if (record.clearParent === true && record.parentCardId !== undefined) errors.push(`updates[${index}] cannot combine clearParent=true with parentCardId.`);
+            if (record.clearDeck === true) errors.push(`updates[${index}].clearDeck is unavailable: Codecks returned HTTP 500 for deck removal via cards/update with deckId:null. The supported removal contract is unverified; use the Codecks UI. No updates were sent.`);
+            if (!BULK_UPDATE_VALUE_FIELDS.some((field) => !Object.hasOwn(BULK_UPDATE_CLEAR_FIELDS, field) && record[field] !== undefined) && !Object.keys(BULK_UPDATE_CLEAR_FIELDS).some((field) => record[field] === true)) errors.push(`updates[${index}] is a no-op; provide at least one supported update field.`);
+            for (const [clearField, valueField] of Object.entries(BULK_UPDATE_CLEAR_FIELDS))
+            {
+                if (record[clearField] !== undefined && typeof record[clearField] !== "boolean") errors.push(`updates[${index}].${clearField} must be a boolean.`);
+                if (record[clearField] === true && record[valueField] !== undefined) errors.push(`updates[${index}] cannot combine ${clearField}=true with ${valueField}.`);
+            }
         }
     });
     return errors;
@@ -8416,20 +8425,35 @@ const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number
         payload.deckId = value.id;
         proposed.deck = { id: value.id, name: value.label };
     }
-    if (record.milestone !== undefined)
+    if (record.clearMilestone === true)
+    {
+        payload.milestoneId = null;
+        proposed.milestone = null;
+    }
+    else if (record.milestone !== undefined)
     {
         const value = await resolveMilestone(record.milestone);
         if (value.kind !== "resolved") throw new Error(`updates[${index}].milestone: ${renderLookupMessage(value, String(record.milestone))}`);
         payload.milestoneId = value.id;
         proposed.milestone = { id: value.id, name: value.label };
     }
-    if (record.assigneeId !== undefined)
+    if (record.clearAssignee === true)
+    {
+        payload.assigneeId = null;
+        proposed.assignee = null;
+    }
+    else if (record.assigneeId !== undefined)
     {
         const value = await resolveBulkAssignee(record.assigneeId);
         payload.assigneeId = value.id;
         proposed.assignee = value;
     }
-    if (record.effort !== undefined)
+    if (record.clearEffort === true)
+    {
+        payload.effort = null;
+        proposed.effort = null;
+    }
+    else if (record.effort !== undefined)
     {
         payload.effort = record.effort;
         proposed.effort = record.effort;
@@ -8495,13 +8519,17 @@ const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number
 };
 
 export const card_bulk_update = tool({
-    description: "Preview or apply strict bounded updates including effort, priority, tags, Run, and parent changes.",
+    description: "Preview or apply strict bounded updates including milestone, deck, assignee, effort, priority, tags, Run, and parent changes. Use clearMilestone, clearAssignee, clearEffort, clearRun, or clearParent to remove values. Deck removal (clearDeck) is unavailable and rejected before requests.",
     args: {
         updates: tool.schema.array(tool.schema.object({
             correlationKey: tool.schema.string().min(1).max(200).optional(), cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]),
             title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(),
             deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(),
             assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(),
+            clearDeck: tool.schema.boolean().optional().describe("Unavailable: true rejects the entire batch before requests. Codecks returned HTTP 500 for deck removal; use the Codecks UI until the API contract is verified."),
+            clearMilestone: tool.schema.boolean().optional().describe("Remove the milestone assignment."),
+            clearAssignee: tool.schema.boolean().optional().describe("Remove the assignee. With no deck, the card becomes a note visible only to its creator."),
+            clearEffort: tool.schema.boolean().optional().describe("Clear the effort estimate."),
             tags: tool.schema.array(tool.schema.string()).optional(), runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearRun: tool.schema.boolean().optional(),
             parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearParent: tool.schema.boolean().optional(), mode: tool.schema.enum(["replace", "append", "prepend"]).optional(),
         })).min(1).max(100),

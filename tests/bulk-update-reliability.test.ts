@@ -48,5 +48,65 @@ try {
   assert.equal(exhausted.data.metrics.retryEvents.length, 2);
   assert.equal(exhausted.data.metrics.consecutive429, 3);
 
+  core.__test.resetRateGate();
+  const payloads: Record<string, unknown>[] = [];
+  let reads = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).includes("/dispatch/cards/update")) {
+      payloads.push(JSON.parse(String(init?.body)));
+      return response({ data: { accepted: true } });
+    }
+    reads += 1;
+    return card();
+  }) as typeof fetch;
+  const clearCases = [
+    ["clearMilestone", "milestone", "milestoneId"],
+    ["clearAssignee", "assigneeId", "assigneeId"],
+    ["clearEffort", "effort", "effort"],
+    ["clearRun", "runId", "sprintId"],
+    ["clearParent", "parentCardId", "parentCardId"],
+  ];
+  for (const [flag, field, wireField] of clearCases) {
+    const beforeReads = reads;
+    for (const fields of [{ [flag]: true, [field]: 1 }, { [flag]: false }, { [flag]: "true" }]) {
+      const invalid = parse(await invoke({ updates: [{ cardId: CARD_ID, ...fields }], format: "json" }));
+      assert.equal(invalid.ok, false, JSON.stringify(fields));
+    }
+    assert.equal(reads, beforeReads, "invalid clear requests fail before network access");
+    const removal = [{ cardId: CARD_ID, [flag]: true }];
+    const dry = parse(await invoke({ updates: removal, format: "json" }));
+    assert.equal(dry.ok, true);
+    const count = payloads.length;
+    const appliedClear = parse(await invoke({ updates: removal, dryRun: false, expectedPreviewFingerprint: dry.data.previewFingerprint, format: "json" }));
+    assert.equal(appliedClear.data.updated, 1);
+    assert.equal(payloads.length, count + 1);
+    assert.equal(payloads.at(-1)![wireField], null);
+    assert.deepEqual(Object.keys(payloads.at(-1)!).sort(), ["sessionId", "id", wireField].sort(), "clear must not update unrelated fields");
+  }
+  const readsBeforeBlocked = reads;
+  const writesBeforeBlocked = payloads.length;
+  for (const dryRun of [true, false]) {
+    for (const fields of [{ clearDeck: true }, { clearDeck: true, clearAssignee: true }, { clearDeck: true, deck: "Other" }]) {
+      const blocked = parse(await invoke({
+        updates: [{ cardId: CARD_ID, title: "Must also remain unsent" }, { cardId: CARD_ID, ...fields }],
+        dryRun, expectedPreviewFingerprint: "a".repeat(64), format: "json",
+      }));
+      assert.equal(blocked.ok, false);
+      assert.match(blocked.error.message, /clearDeck is unavailable.*HTTP 500.*Codecks UI/);
+      assert.equal(blocked.error.requestsAttempted, 0);
+    }
+  }
+  assert.equal(reads, readsBeforeBlocked, "blocked deck removal must not make even read requests");
+  assert.equal(payloads.length, writesBeforeBlocked, "the whole batch must remain unsent");
+  const falseOnly = parse(await invoke({ updates: [{ cardId: CARD_ID, clearDeck: false }], format: "json" }));
+  assert.equal(falseOnly.ok, false);
+  assert.match(falseOnly.error.message, /no-op/);
+  const emptyValues = [{ cardId: CARD_ID, clearDeck: false, effort: 0, priority: "none", tags: [] }];
+  const emptyPreview = parse(await invoke({ updates: emptyValues, format: "json" }));
+  await invoke({ updates: emptyValues, dryRun: false, expectedPreviewFingerprint: emptyPreview.data.previewFingerprint, format: "json" });
+  assert.equal(payloads.at(-1)!.effort, 0);
+  assert.equal(payloads.at(-1)!.priority, null);
+  assert.deepEqual(payloads.at(-1)!.masterTags, []);
+
   console.log("bulk update reliability tests passed");
 } finally { core.__test.resetRateGate(); globalThis.fetch = originalFetch; }

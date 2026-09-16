@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.12.2] - 2026-09-16
+
+### Fixed
+
+- Add explicit bulk-update clearing for milestone, assignee, and effort, with preview-bound null payloads and set/clear conflict validation. Clearing an assignee from an already deckless card creates a creator-only note; document this consequence before approval.
+- Stub out `clearDeck`: reject the entire batch before requests with an explanation after live deck-removal validation returned HTTP 500. Normal deck assignment remains supported.
+- Add opt-in local live coverage for supported bulk clear operations with fixture readback and cleanup. Make the cooldown deadline test independent of sub-millisecond execution speed.
+- Reject false-only clear flags as no-op bulk updates and validate clear flag types before requests.
+
 ## [0.12.1] - 2026-09-16
 
 ### Fixed
