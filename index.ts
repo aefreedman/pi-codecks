@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
+import { renderCodecksCall, renderCodecksResult } from "./src/codecks-renderers";
 import {
   BALANCED_ACTIVE_CODECKS_TOOL_NAMES,
   CODECKS_TOOL_BROWSE_TEXT,
@@ -1114,113 +1115,12 @@ function toToolName(exportName: string): string {
   return `codecks_${exportName}`;
 }
 
-type TextLikeComponent = {
-  invalidate: () => void;
-  render: (width: number) => string[];
-};
-
-type RenderTheme = {
-  fg?: (color: string, text: string) => string;
-  bold?: (text: string) => string;
-};
-
-type CodecksToolDetails = {
-  exportName?: string;
-  rawResult?: unknown;
-  cardPresentation?: Record<string, unknown>;
-  transient?: boolean;
-  progress?: {
-    stage?: string;
-    elapsedMs?: number;
-    recordsProcessed?: number;
-    requestsAttempted?: number;
-    queueWaitMs?: number;
-    created?: number;
-    failed?: number;
-    definitelyUnsent?: number;
-  };
-};
-
 function toText(result: unknown): string {
   if (typeof result === "string") {
     return result;
   }
 
   return JSON.stringify(result, null, 2);
-}
-
-const ANSI_PATTERN = /\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g;
-const ANSI_AT_START_PATTERN = /^(?:\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~])/;
-
-function visibleLength(value: string): number {
-  return Array.from(value.replace(ANSI_PATTERN, "")).length;
-}
-
-function truncateAnsiLine(value: string, width: number): string {
-  if (width <= 0 || !value) {
-    return "";
-  }
-
-  if (visibleLength(value) <= width) {
-    return value;
-  }
-
-  const target = Math.max(0, width - 1);
-  let visible = 0;
-  let output = "";
-  for (let index = 0; index < value.length;) {
-    const remaining = value.slice(index);
-    const ansi = remaining.match(ANSI_AT_START_PATTERN);
-    if (ansi) {
-      output += ansi[0];
-      index += ansi[0].length;
-      continue;
-    }
-
-    if (visible >= target) {
-      break;
-    }
-
-    const codePoint = value.codePointAt(index);
-    if (codePoint === undefined) {
-      break;
-    }
-
-    const char = String.fromCodePoint(codePoint);
-    output += char;
-    visible += 1;
-    index += char.length;
-  }
-
-  const reset = value.includes("\x1b") ? "\x1b[0m" : "";
-  return `${output}…${reset}`;
-}
-
-function textComponent(text: string): TextLikeComponent {
-  return {
-    invalidate() {},
-    render(width: number) {
-      if (!text) {
-        return [];
-      }
-      return text.split(/\r?\n/).map((line) => truncateAnsiLine(line, width));
-    },
-  };
-}
-
-function themed(theme: RenderTheme, color: string, text: string): string {
-  return typeof theme.fg === "function" ? theme.fg(color, text) : text;
-}
-
-function bold(theme: RenderTheme, text: string): string {
-  return typeof theme.bold === "function" ? theme.bold(text) : text;
-}
-
-function extractTextContent(result: { content?: Array<{ type?: string; text?: string }> } | undefined): string {
-  return result?.content
-    ?.filter((entry) => entry?.type === "text")
-    .map((entry) => String(entry.text ?? ""))
-    .join("\n") ?? "";
 }
 
 function parseStructuredPayload(text: string): Record<string, any> | undefined {
@@ -1248,58 +1148,6 @@ function asText(value: unknown): string | undefined {
   return text || undefined;
 }
 
-function displayValue(value: unknown): string | undefined {
-  const text = asText(value);
-  return text?.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function nestedText(value: unknown, keys: string[]): string | undefined {
-  const record = asRecord(value);
-  if (!record) return undefined;
-  for (const key of keys) {
-    const text = asText(record[key]);
-    if (text) return text;
-  }
-  return undefined;
-}
-
-function formatCardDate(value: unknown): string | undefined {
-  const text = asText(value);
-  if (!text) return undefined;
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) return text;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "UTC",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(date);
-}
-
-function renderCardRelation(row: Record<string, unknown>, includeStatus: boolean): { code: string; title: string; status: string } | undefined {
-  const code = asText(row.shortCode) ?? "";
-  const title = asText(row.title) ?? "(untitled)";
-  const status = includeStatus ? displayValue(row.derivedStatus) ?? displayValue(row.status) ?? "" : "";
-  return code || title !== "(untitled)" ? { code, title, status } : undefined;
-}
-
-function renderCardRelations(heading: string, values: unknown, theme: RenderTheme): string[] {
-  const relations = (Array.isArray(values) ? values : [values])
-    .map(asRecord)
-    .filter((value): value is Record<string, unknown> => value !== undefined)
-    .map((value) => renderCardRelation(value, Array.isArray(values)))
-    .filter((value): value is { code: string; title: string; status: string } => value !== undefined);
-  if (relations.length === 0) return [];
-
-  const codeWidth = Math.max(...relations.map((relation) => relation.code.length));
-  const titleWidth = Math.max(...relations.map((relation) => relation.title.length));
-  return [heading, ...relations.map((relation) => {
-    const code = relation.code ? relation.code.padEnd(codeWidth) : " ".repeat(codeWidth);
-    const status = relation.status ? `   ${themed(theme, "muted", relation.status)}` : "";
-    return `  ${themed(theme, "accent", code)}${code ? "   " : ""}${relation.title.padEnd(titleWidth)}${status}`.trimEnd();
-  })];
-}
-
 function formatCardGetText(payload: Record<string, unknown>): string | undefined {
   const card = asRecord(asRecord(payload.data)?.card);
   if (card) {
@@ -1322,135 +1170,6 @@ function formatCardGetText(payload: Record<string, unknown>): string | undefined
   }
 
   return undefined;
-}
-
-function renderCardGetExpanded(payload: Record<string, any>, theme: RenderTheme): TextLikeComponent | undefined {
-  if (payload.ok === false) {
-    const error = asRecord(payload.error);
-    const message = asText(error?.message);
-    if (!message) return undefined;
-    const recoveryHint = asText(error.recoveryHint) ?? asText(asRecord(payload.data)?.recoveryHint);
-    return textComponent([
-      themed(theme, "error", bold(theme, "Couldn’t retrieve card")),
-      "",
-      message,
-      ...(recoveryHint ? ["", recoveryHint] : []),
-    ].join("\n"));
-  }
-
-  const card = asRecord(asRecord(payload.data)?.card);
-  if (!card) return undefined;
-
-  const shortCode = asText(card.shortCode);
-  const title = asText(card.title);
-  const heading = shortCode && title ? `${shortCode}  ${title}` : shortCode ?? title ?? "(untitled)";
-  const rows: Array<[string, string | undefined]> = [
-    ["Status", displayValue(card.derivedStatus) ?? displayValue(card.status)],
-    ["Type", card.cardType === "regular" ? "Regular card" : card.cardType === "documentation" ? "Documentation" : displayValue(card.cardType)],
-    ["Priority", displayValue(card.priority)],
-    ["Effort", typeof card.effort === "number" || typeof card.effort === "string" ? String(card.effort) : undefined],
-    ["Deck", nestedText(card.deck, ["title", "name"])],
-    ["Milestone", nestedText(card.milestone, ["name", "title"])],
-    ["Assignee", nestedText(card.assignee, ["name", "fullName"])],
-    ["Tags", Array.isArray(card.tags) ? card.tags.map(asText).filter((tag): tag is string => Boolean(tag)).join(", ") || undefined : undefined],
-    ["Due", formatCardDate(card.dueDate)],
-    ["Updated", formatCardDate(card.lastUpdatedAt)],
-  ].filter((row): row is [string, string] => Boolean(row[1]));
-  const labelWidth = rows.length > 0 ? Math.max(...rows.map(([label]) => label.length)) : 0;
-  const metadata = rows.map(([label, value]) => `${themed(theme, "muted", label.padEnd(labelWidth))}   ${value}`);
-  const content = typeof card.content === "string" && /\S/.test(card.content) ? card.content : undefined;
-  const parent = renderCardRelations("Parent", card.parentCard, theme);
-  const children = renderCardRelations("Children", card.childCards, theme);
-  const sections = [
-    themed(theme, "toolTitle", bold(theme, heading)),
-    metadata.join("\n"),
-    content ?? "",
-    parent.join("\n"),
-    children.join("\n"),
-  ].filter(Boolean);
-  return textComponent(sections.join("\n\n"));
-}
-
-function summarizeCodecksResult(exportName: string, resultText: string, structuredPayload?: Record<string, unknown>): { ok: boolean; summary: string } {
-  const payload = structuredPayload ?? parseStructuredPayload(resultText);
-  if (payload) {
-    if (payload.ok === false) {
-      const message = typeof payload.error?.message === "string" ? payload.error.message : "failed";
-      return { ok: false, summary: `${exportName}: ${message}` };
-    }
-
-    const data = payload.data;
-    const card = data?.card;
-    if (card && typeof card === "object") {
-      const code = typeof card.shortCode === "string" ? card.shortCode : "";
-      const title = typeof card.title === "string" ? card.title : "card";
-      return { ok: true, summary: `${exportName}: ${[code, title].filter(Boolean).join(" ")}` };
-    }
-
-    if (typeof data?.matches === "number") {
-      return { ok: true, summary: `${exportName}: ${data.matches} match(es)` };
-    }
-
-    if (typeof payload.action === "string") {
-      return { ok: true, summary: `${exportName}: ${payload.action} complete` };
-    }
-  }
-
-  const firstLine = resultText.split(/\r?\n/).find((line) => line.trim().length > 0)?.trim();
-  const lineCount = resultText ? resultText.split(/\r?\n/).length : 0;
-  return {
-    ok: !/^error\b/i.test(firstLine ?? ""),
-    summary: firstLine ? `${exportName}: ${firstLine}` : `${exportName}: ${lineCount} line(s)`,
-  };
-}
-
-function renderCodecksCall(exportName: string, args: Record<string, unknown>, theme: RenderTheme): TextLikeComponent {
-  if (exportName === "card_bulk_create" || exportName === "card_bulk_update") {
-    const records = exportName === "card_bulk_create" ? args.cards : args.updates;
-    const count = Array.isArray(records) ? records.length : 0;
-    const mode = args.dryRun === false ? "apply" : "dry-run";
-    return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))} ${themed(theme, "accent", mode)} · ${count} card${count === 1 ? "" : "s"}`);
-  }
-  const target = args.cardId ?? args.card ?? args.title ?? args.path ?? args.context ?? "";
-  const suffix = target ? ` ${themed(theme, "accent", String(target))}` : "";
-  return textComponent(`${themed(theme, "toolTitle", bold(theme, toToolName(exportName)))}${suffix}`);
-}
-
-function renderCodecksResult(
-  exportName: string,
-  result: { content?: Array<{ type?: string; text?: string }>; details?: CodecksToolDetails } | undefined,
-  options: { expanded?: boolean; isPartial?: boolean } | undefined,
-  theme: RenderTheme,
-): TextLikeComponent {
-  if (options?.isPartial) {
-    const progress = result?.details?.progress;
-    if ((exportName === "card_bulk_create" || exportName === "card_bulk_update") && progress && typeof progress === "object") {
-      const value = progress as Record<string, unknown>;
-      const number = (key: string) => typeof value[key] === "number" ? value[key] : 0;
-      const stage = typeof value.stage === "string" ? value.stage : "running";
-      const pacing = typeof value.pacingReason === "string" ? ` · pacing ${value.pacingReason}: ${number("pacingElapsedMs")}ms elapsed, ~${number("pacingRemainingMs")}ms remaining` : "";
-      const retry = typeof value.retryAttempt === "number" ? ` · rate limited record ${number("recordIndex")}/${number("recordCount")}, retry ${number("retryAttempt")}/${number("retryMax")} after ${number("retryAfterMs")}ms (${String(value.retryAfterFormat ?? "unknown")}; ${String(value.retryAfterParseStatus ?? "unknown")}${typeof value.retryAfterReason === "string" ? `: ${value.retryAfterReason}` : ""})` : "";
-      const operation = exportName === "card_bulk_create" ? "create" : "update";
-      const success = exportName === "card_bulk_create" ? `${number("created")} created` : `${number("updated")} updated`;
-      return textComponent(themed(theme, "warning", `Bulk ${operation} ${stage}: ${number("elapsedMs")}ms elapsed · ${number("recordsProcessed")} record(s) · ${number("requestsAttempted")} request(s) · ${number("queueWaitMs")}ms queued (${number("localGateWaitMs")}ms local / ${number("serverCooldownWaitMs")}ms server)${pacing}${retry} · ${success} / ${number("failed")} failed / ${number("definitelyUnsent")} definitely unsent`));
-    }
-    return textComponent(themed(theme, "warning", "Running Codecks request..."));
-  }
-
-  const text = extractTextContent(result);
-  const presentationPayload = asRecord(result?.details?.cardPresentation);
-  const summary = summarizeCodecksResult(String(result?.details?.exportName ?? exportName), text, presentationPayload);
-  if (!options?.expanded) {
-    const color = summary.ok ? "success" : "error";
-    return textComponent(`${themed(theme, color, summary.ok ? "✓" : "✗")} ${summary.summary}\n${themed(theme, "muted", "(ctrl+o to expand)")}`);
-  }
-
-  if (exportName === "card_get") {
-    const cardView = renderCardGetExpanded(presentationPayload ?? parseStructuredPayload(text) ?? {}, theme);
-    if (cardView) return cardView;
-  }
-
-  return textComponent(text);
 }
 
 function getCoreTool(exportName: string): CoreTool {
@@ -1486,11 +1205,11 @@ export default function codecksTools(pi: ExtensionAPI) {
       promptGuidelines: legacyPromptMetadata ? config.promptGuidelines : undefined,
       parameters: config.parameters ?? ANY_PARAMETERS,
       prepareArguments: config.prepareArguments,
-      renderCall(args, theme) {
-        return renderCodecksCall(exportName, (args ?? {}) as Record<string, unknown>, theme as RenderTheme);
+      renderCall(args, theme, context) {
+        return renderCodecksCall(exportName, args, theme, context);
       },
-      renderResult(result, options, theme) {
-        return renderCodecksResult(exportName, result, options, theme as RenderTheme);
+      renderResult(result, options, theme, context) {
+        return renderCodecksResult(exportName, result, options, theme, context);
       },
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
         const normalizedParams = { ...((params ?? {}) as Record<string, unknown>) };
@@ -1552,6 +1271,12 @@ export default function codecksTools(pi: ExtensionAPI) {
       toolNames: Type.Optional(Type.Array(Type.String({ description: "Exact public Codecks tool name." }), { maxItems: 4, description: "Optional exact tool names to enable." })),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4, description: "Maximum exact toolNames to enable, up to four. Natural-language search always selects one smallest-sufficient capability except for a reviewed two-tool prerequisite pair." })),
     }),
+    renderCall(args, theme, context) {
+      return renderCodecksCall("tool_search", args, theme, context);
+    },
+    renderResult(result, options, theme, context) {
+      return renderCodecksResult("tool_search", result, options, theme, context);
+    },
     async execute(_toolCallId, params) {
       if (isCodecksToolBrowseRequest(params)) {
         return {

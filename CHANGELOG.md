@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+## [0.13.0] - 2026-09-16
+
+### Added
+
+- Centralized display-only tool renderers in Pi's standard shell: compact action/target headers, card metadata, search and batch counts, conversation/Run/Milestone lists, bulk preview and uncertainty summaries, and visible progress.
+- Expanded card bodies wrap without line clipping, with parent/child links and original result text retained. JSON evidence preserves numeric lexemes, duplicate keys and unknown fields. Terminal control sequences cannot affect the display.
+- Immutable-result regression coverage through all registered execute/render callbacks, plus offline renderer previews and a packed-consumer renderer smoke check. Agent-facing content, details, formats, API behavior and existing credential sanitization are unchanged.
+
+### Changed
+
+- Compact single-card results into a Codecks/reference/title header and metadata line, including milestone and any supplied Run residency without additional lookups. Remove duplicate call headers once the card result arrives.
+- Separate card lifecycle state from the Hero role in compact results, search rows and expanded details.
+- Declare the Pi TUI peer and pin its development version. Align the Node minimum with that peer at 22.19.0 and test supported Node 22/24 versions in CI.
+- Require typechecking in CI and the publication workflow.
+
 ## [0.12.2] - 2026-09-16
 
 ### Fixed
