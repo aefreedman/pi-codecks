@@ -34,6 +34,8 @@ Read this reference for card lookup, creation, ordinary updates, lifecycle chang
 - Cards created without a Deck are Private. They are allowed but require an owner/assignee; inform the user when a create has no Deck.
 - Treat a card as one Markdown document whose first stored line is its title. `title` sets that line; `content` should normally contain body content only.
 - Use Markdown for card bodies and comments.
+- Creation adds `tags` as body hashtags, merging a trailing tag-only footer case-insensitively. Pass tags once; do not also generate a footer. Content edits deduplicate trailing tag-only lines while preserving hashtags in prose and code.
+- Updates send `tags` as replacement `masterTags` metadata. Codecks displays these in a separate bottom tag area; this is distinct from hashtags in stored text (see the [Codecks tag manual](https://manual.codecks.io/tags/)). A tag-only update leaves body content unchanged.
 - Mutation titles, bodies, tags, and Deck descriptions reject U+FFFD replacement characters and unpaired UTF-16 surrogates at the tool boundary; this does not diagnose upstream encoding.
 - In user-visible text, write references as plain `$123` tokens. Do not wrap the token itself in emphasis, strikeout, backticks, or code fences. Markdown structures such as `# $123` and `* $123` are valid.
 - Use `cardType: regular|documentation` for card type metadata.

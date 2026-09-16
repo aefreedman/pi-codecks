@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.12.1] - 2026-09-16
+
+### Fixed
+
+- Merge creation tags into existing tag-only footers without duplicates, including case variants. Single and bulk content updates also deduplicate trailing tag-only lines while preserving prose and code examples; tag-only updates continue to leave content untouched.
+
 ## [0.12.0] - 2026-09-15
 
 ### Added
