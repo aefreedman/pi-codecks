@@ -46,6 +46,10 @@ for (const field of [
   assertInvalid("codecks_card_bulk_create", { cards: [{ title: "strict" }], [field]: true });
 }
 
+for (const flag of ["clearMilestone", "clearDeck", "clearAssignee", "clearEffort", "clearRun", "clearParent"]) {
+  prepareAndValidate(getTool("codecks_card_bulk_update"), { updates: [{ cardId: "$1", [flag]: true }] });
+}
+
 const dispatch = getTool("codecks_dispatch");
 const validated = prepareAndValidate(dispatch, {
   path: "journey/apply",

@@ -31,8 +31,11 @@ try {
   core.__test.resetRateGate();
   core.__test.observeServerCooldown(response({}, 200, { "Retry-After": "1" }));
   assert.equal(core.__test.getRateGateState().cooldownUntil, 0);
+  const beforeCooldown = Date.now();
   core.__test.observeServerCooldown(response({}, 429, { "Retry-After": "1" }));
-  assert.ok(core.__test.getRateGateState().cooldownUntil > Date.now());
+  const cooldownUntil = core.__test.getRateGateState().cooldownUntil;
+  assert.ok(cooldownUntil >= beforeCooldown + 1);
+  assert.ok(cooldownUntil <= Date.now() + 1);
   core.__test.resetRateGate();
 
   let directDispatches = 0;

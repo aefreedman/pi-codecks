@@ -76,6 +76,12 @@ The integration script applies conservative request-rate and timeout bounds. A q
 
 `npm run test:all` runs unit checks and then invokes the integration command. Because absent credentials produce a local skip, `test:all` alone does not prove that live validation ran; inspect its reported outcome.
 
+## Focused local bulk-clear validation
+
+`npm run test:integration:bulk-clear` exercises the local package's bulk-update preview/apply path and reads back milestone, effort, priority, tags, and assignee removal. Deck and combined deck/assignee removal are unavailable and are not dispatched; credential-free tests verify their whole-batch rejection before network access. It requires explicit `CODECKS_TEST_DECK=Test` and `CODECKS_TEST_MILESTONE` selecting an existing milestone for temporary fixture membership, and uses the package's configured credential provider. It is never part of credential-free `npm test`.
+
+The test creates one uniquely named fixture assigned to the authenticated creator and keeps it in Test. Cleanup restores its creator assignment, clears its milestone, and marks it Done; it does not delete the card. The script reports the fixture reference and cleanup outcome. It stops on failed readback or an uncertain write rather than replaying it; inspect the reported fixture and artifact before another run. Credential failures stop subsequent requests, including cleanup. Other-user note visibility is not tested.
+
 ## Protected GitHub workflow
 
 The separate integration workflow runs automatically after pushes to `main` and remains available through manual dispatch from `main`. It checks out `main` explicitly and uses a protected `codecks-integration` environment containing credentials for a dedicated limited CI user and disposable fixture deck. Configure the environment without a reviewer gate and retain its deployment-branch policy limited to `main`; repository YAML is not a substitute for that external protection. Missing configuration fails before the test starts. Concurrency prevents two mutation runs from using the shared fixture at once.
