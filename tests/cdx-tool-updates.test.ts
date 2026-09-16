@@ -23,7 +23,7 @@ const jsonResponse = (payload: unknown, status = 200): Response =>
   });
 
 const parseToolResult = (result: string): AnyRecord => {
-  const match = result.match(/```json\s*([\s\S]*?)\s*```/i);
+  const match = result.match(/```json\s*([\s\S]*)\s*```/i);
   assert.ok(match, `expected JSON code fence in result:\n${result}`);
   return JSON.parse(match[1]) as AnyRecord;
 };
@@ -740,14 +740,14 @@ const testSingleAndBulkCreateUseIdenticalPayloads = async (tools: ToolModule): P
   }, async () => {
     const input = {
       title: "Shared payload",
-      content: "Body",
+      content: "Body\n\n#alpha #ALPHA",
       cardType: "documentation",
       deck: 12,
       milestone: 84,
       effort: 3,
       priority: "high",
       putOnHand: true,
-      tags: ["alpha"],
+      tags: ["alpha", "beta"],
     };
     const singleCreate = getData(String(await tools.card_create.execute({ ...input, format: "json" })));
     assert.equal(singleCreate.cardType, "documentation", "single create should preserve the explicitly requested card type when dispatch returns only identity");
@@ -759,6 +759,7 @@ const testSingleAndBulkCreateUseIdenticalPayloads = async (tools: ToolModule): P
   assert.equal(payloads[0].deckId, "12");
   assert.equal(payloads[0].milestoneId, "84");
   assert.equal(payloads[0].isDoc, true);
+  assert.equal(payloads[0].content, "Shared payload\n\nBody\n\n#alpha #beta");
 };
 
 const testCardUpdateAllowsTagOnlyUpdate = async (tools: ToolModule): Promise<void> => {
@@ -825,7 +826,38 @@ const testConcreteMutationRejectsRootErrors = async (tools: ToolModule): Promise
   });
 };
 
+const testTagFootersAreIdempotent = async (tools: ToolModule): Promise<void> => {
+  for (const [body, expected] of [
+    ["Body\n\n#alpha #Beta\n\n#ALPHA #beta", "Body\n\n#alpha #Beta"],
+    ["Body\n\n#alpha #alphabet #alpha", "Body\n\n#alpha #alphabet"],
+    ["Discuss #alpha twice: #alpha\n\n#alpha #alpha", "Discuss #alpha twice: #alpha\n\n#alpha"],
+    ["```\n#alpha #alpha\n```", "```\n#alpha #alpha\n```"],
+    ["```\n#alpha #alpha", "```\n#alpha #alpha"],
+    ["# Heading\n\n    #alpha #alpha", "# Heading\n\n    #alpha #alpha"],
+  ]) {
+    const payloads: AnyRecord[] = [];
+    await withMockedCodecks(({ path, payload }) => {
+      if (path === "cards/update") {
+        payloads.push(payload!);
+        return jsonResponse({ payload: {} });
+      }
+      assert.equal(path, "query");
+      return jsonResponse(buildCardPayload(buildCard({ content: `Card under test\n\n${body}` })));
+    }, async () => {
+      for (const mode of ["replace", "append", "prepend"]) {
+        getData(String(await tools.card_update.execute({ cardId: CARD_ID, content: mode === "replace" ? body : "", mode, tags: ["alpha"], format: "json" })));
+        assert.equal(payloads.at(-1)!.content, `Card under test\n\n${expected}`);
+        assert.deepEqual(payloads.at(-1)!.masterTags, ["alpha"]);
+      }
+      const preview = getData(String(await tools.card_bulk_update.execute({ updates: [{ cardId: CARD_ID, content: body, tags: ["alpha"] }], dryRun: true, format: "json" })));
+      const artifact = getArtifact(preview);
+      assert.equal(artifact.results[0].proposed.content, `Card under test\n\n${expected}`);
+    });
+  }
+};
+
 const tools = await loadTools();
+await testTagFootersAreIdempotent(tools);
 await testStatusUpdateBlocksOpenReview(tools);
 await testPrivateCardCreationDefaultsOwner(tools);
 await testCardCreateCoercesNumericLocationIdsForDispatch(tools);

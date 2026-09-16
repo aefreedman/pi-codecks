@@ -1408,18 +1408,38 @@ const buildBodyHashtagTokens = (tags: string[]): string[] =>
 
 const appendBodyHashtagsToCardContent = (content: string, tags: string[]): string =>
 {
-    if (tags.length === 0)
-    {
-        return content;
-    }
-
     const { titleLine, body } = splitCardContent(content);
-    const hashtagLine = tags.map((tag) => `#${tag}`).join(" ");
-    const nextBody = body.trim().length > 0
-        ? `${body.trimEnd()}\n\n${hashtagLine}`
-        : hashtagLine;
+    // Only canonical tag-only footer lines are metadata. Leave prose and code alone.
+    const lines = body.split(/\r?\n/);
+    let footerStart = lines.length;
+    while (footerStart > 0 && (/^\s*$/.test(lines[footerStart - 1])
+        || /^#[^\s#`]+(?:[ \t]+#[^\s#`]+)*[ \t]*$/.test(lines[footerStart - 1])))
+    {
+        footerStart--;
+    }
+    let fence: string | undefined;
+    for (const line of lines.slice(0, footerStart))
+    {
+        const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+        if (!match) continue;
+        if (!fence) fence = match[1];
+        else if (match[1][0] === fence[0] && match[1].length >= fence.length
+            && line.slice(match[0].length).trim() === "") fence = undefined;
+    }
+    if (fence) footerStart = lines.length;
 
-    return buildCardContent(titleLine, nextBody);
+    const existing = lines.slice(footerStart).join(" ").trim().split(/\s+/).filter(Boolean);
+    const seen = new Set<string>();
+    const footer = [...existing, ...tags.map((tag) => `#${tag}`)].filter((token) =>
+    {
+        const key = token.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+    if (footer.length === 0) return content;
+    const prefix = lines.slice(0, footerStart).join("\n").trimEnd();
+    return buildCardContent(titleLine, [prefix, footer.join(" ")].filter(Boolean).join("\n\n"));
 };
 
 const normalizeCardStatusValue = (value: unknown): string => String(value ?? "").trim().toLowerCase();
@@ -8378,7 +8398,7 @@ const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number
     if (record.title !== undefined || record.content !== undefined)
     {
         payload.title = title;
-        payload.content = buildCardContent(title, removeDuplicateBodyTitle(title, body));
+        payload.content = appendBodyHashtagsToCardContent(buildCardContent(title, removeDuplicateBodyTitle(title, body)), []);
         proposed.title = title;
         proposed.content = payload.content;
     }
@@ -10061,7 +10081,7 @@ export const card_update = tool({
 
         updatedBody = removeDuplicateBodyTitle(resolvedTitle, updatedBody);
         const updatedContent = (args.content !== undefined || args.title !== undefined)
-            ? normalizeCardReferencesForUserText(buildCardContent(resolvedTitle, updatedBody))
+            ? normalizeCardReferencesForUserText(appendBodyHashtagsToCardContent(buildCardContent(resolvedTitle, updatedBody), []))
             : undefined;
         const payload: Record<string, unknown> = {
             sessionId: generateSessionId(),
