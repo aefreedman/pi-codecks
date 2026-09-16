@@ -17,6 +17,7 @@ const requiredFiles = [
   "skills/codecks-velocity-reporting/SKILL.md",
   "skills/using-codecks/SKILL.md",
   "src/codecks-core.ts",
+  "src/codecks-renderers.ts",
   "src/codecks-external-helper.ts",
   "src/codecks-onepassword.ts",
   "src/integrations/codecks-onepassword-credential-helper.mjs",

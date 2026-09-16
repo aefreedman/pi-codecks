@@ -281,6 +281,14 @@ Agents should not open new Comment threads for follow-up work, progress updates,
 
 Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolvables` with `includeClosed: true` if needed, then `codecks_card_reopen_resolvable` before replying.
 
+## Tool presentation
+
+Tool calls use Pi's standard tool boxes with compact action headers, card references and search scopes. Completed single-card reads combine Codecks, the short code and title on one line, with status, deck, assignee, milestone and effort beneath. Run residency is shown only when supplied by the result; ordinary card retrieval currently omits it. Rendering performs no additional lookups. Collapsed results show card metadata, returned rows, incomplete scans, bulk previews, uncertain writes and progress. Expand a result for full card bodies, parent/child links, artifact paths and the original tool output. Long lines wrap instead of being clipped.
+
+Rendering is display-only. It does not change tool arguments, API calls, `content`, `details`, JSON/text formats, card trust markers or the data available to the agent. Card Markdown stays literal, including fences, indentation and references; the display removes terminal escape sequences and escapes other control characters. Original JSON text is shown without parsing and reserializing its numbers or duplicate keys. Existing core credential sanitization remains unchanged. Expansion cannot recover data already omitted by a tool's scan or output limits.
+
+The renderer uses the Pi-provided `@earendil-works/pi-tui` peer; development pins that peer for deterministic tests. Node 22.19.0 or newer is required, matching the TUI peer. For offline examples from a repository checkout, run `npm run preview:tools`. These exercise the actual renderers; Pi supplies the surrounding shell in a live session.
+
 ## Development and testing
 
 From a clean checkout:

@@ -27,20 +27,17 @@ try {
   const archivePath = path.join(archiveDir, packed.filename);
   assert.ok(existsSync(archivePath), "expected npm pack to create a tarball in the temporary directory");
 
-  // Supply the exact locked runtime dependency as a local tarball so this
-  // consumer test remains network-free even on a cold CI npm cache. The
-  // candidate package must still declare TypeBox in dependencies for npm to
-  // place and resolve it in the neutral installation.
-  const typeboxPacked = parsePackResult(runNpm([
-    "pack",
-    "--json",
-    "--ignore-scripts",
-    "--pack-destination",
-    archiveDir,
-    path.join(packageRoot, "node_modules", "typebox"),
-  ]).stdout);
-  const typeboxArchivePath = path.join(archiveDir, typeboxPacked.filename);
-  assert.ok(existsSync(typeboxArchivePath), "expected npm pack to create the locked TypeBox tarball");
+  // Supply locked TypeBox and Pi's TUI peer (plus its two dependencies) as
+  // local tarballs so the consumer test stays offline even on a cold npm cache.
+  const dependencyArchives = ["typebox", "@earendil-works/pi-tui", "get-east-asian-width", "marked"].map(name => {
+    const packed = parsePackResult(runNpm([
+      "pack", "--json", "--ignore-scripts", "--pack-destination", archiveDir,
+      path.join(packageRoot, "node_modules", name),
+    ]).stdout);
+    const archive = path.join(archiveDir, packed.filename);
+    assert.ok(existsSync(archive), `expected locked dependency tarball: ${name}`);
+    return archive;
+  });
 
   const cleanEnv = { ...process.env, npm_config_offline: "true" };
   for (const key of Object.keys(cleanEnv)) {
@@ -50,7 +47,7 @@ try {
   }
 
   runNpm(
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", typeboxArchivePath, archivePath],
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", ...dependencyArchives, archivePath],
     { cwd: consumerDir, env: cleanEnv },
   );
 
@@ -66,6 +63,7 @@ try {
   for (const relativePath of [
     "index.ts",
     "src/codecks-core.ts",
+    "src/codecks-renderers.ts",
     "src/codecks-external-helper.ts",
     "src/codecks-onepassword.ts",
     "src/codecks-onepassword-state.ts",
@@ -115,6 +113,11 @@ codecksTools({
 });
 assert.ok(tools.has("codecks_card_get"), "core Codecks tools must load without workflow");
 assert.ok(tools.has("codecks_tool_search"), "dynamic Codecks tool loading must remain available without workflow");
+const cardTool = tools.get("codecks_card_get");
+const result = Object.freeze({ content: Object.freeze([{ type: "text", text: "exact published evidence" }]) });
+const theme = { fg: (_color, text) => text, bold: text => text };
+assert.match(cardTool.renderResult(result, { expanded: true }, theme).render(80).join("\\n"), /exact published evidence/);
+assert.equal(result.content[0].text, "exact published evidence");
 const sessionManager = { getBranch: () => [] };
 for (const handler of sessionStartHandlers) await handler({ reason: "packed-standalone" }, { sessionManager });
 console.log("isolated packed extension loaded");
