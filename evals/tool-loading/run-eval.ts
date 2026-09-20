@@ -276,7 +276,7 @@ async function main(): Promise<void> {
   if (!existsSync(piCli)) fail(`Pi CLI is missing from this worktree: ${piCli}`);
   const piVersionPath = join(PACKAGE_ROOT, "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
   const piVersion = existsSync(piVersionPath) ? (readJson<{ version?: string }>(piVersionPath).version ?? "unknown") : "missing";
-  if (!piVersion.startsWith(config.piVersionPrefix)) fail(`this eval requires Pi ${config.piVersionPrefix}x; found ${piVersion}`);
+  if (piVersion !== config.piVersionPrefix) fail(`this eval requires Pi ${config.piVersionPrefix} exactly; found ${piVersion}`);
   mkdirSync(RESULTS_DIR, { recursive: true });
   const trials: JsonObject[] = [];
   for (const condition of options.conditions) for (const testCase of selected) for (let trial = 1; trial <= options.trials; trial += 1) {
