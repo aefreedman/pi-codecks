@@ -7,6 +7,10 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+### Changed
+
+- Update Pi development dependencies, compatibility floor, and dynamic tool-loading eval contract to the 0.86.1 baseline. All registered tools retain explicit TypeBox parameter schemas for current Pi registration.
+
 ## [0.13.0] - 2026-09-16
 
 ### Added

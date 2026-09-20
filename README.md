@@ -4,7 +4,7 @@ Pi tools, skills, and prompts for Codecks workflows.
 
 This package provides a Pi-native registration layer around Codecks card, comment, review, blocker, resolvable, priority, effort, attachment, and inbox-style workflows. It is intended for users who already have a Codecks account and want Pi agents to interact with Codecks through explicit tools rather than ad hoc shell scripts.
 
-Dynamic tool loading requires Pi 0.82.0 or newer so package ownership and active-session restoration can be verified from canonical tool provenance.
+Dynamic tool loading requires Pi 0.86.1 or newer so package ownership and active-session restoration can be verified from canonical tool provenance.
 
 ## Features
 
