@@ -315,7 +315,7 @@ const usingCodecksReferences = [
   "decks-milestones-and-runs.md",
   "fallback-security-and-profiles.md",
 ].map((name) => readFileSync(new URL(`../skills/using-codecks/references/${name}`, import.meta.url), "utf8")).join("\n");
-assert.match(skill, /^allowed-tools: .*codecks_tool_search .*codecks_velocity_report/m, "Pi 0.82 allowed-tools should be one space-delimited scalar containing the loader and velocity report");
+assert.match(skill, /^allowed-tools: .*codecks_tool_search .*codecks_velocity_report/m, "Pi allowed-tools should be one space-delimited scalar containing the loader and velocity report");
 assert.match(velocitySkill, /name: codecks-velocity-reporting/);
 assert.match(velocitySkill, /codecks_velocity_report/);
 const docs = `${readme}\n${skill}\n${usingCodecksReferences}\n${velocitySkill}`;
