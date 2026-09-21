@@ -1,6 +1,6 @@
 {
   "name": "@aefree/pi-codecks",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Pi tools, skills, and prompts for safe Codecks project-management workflows.",
   "type": "module",
   "license": "MIT",
@@ -82,8 +82,8 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.86.1",
-    "@earendil-works/pi-tui": "0.86.1",
+    "@earendil-works/pi-coding-agent": "0.87.0",
+    "@earendil-works/pi-tui": "0.87.0",
     "@types/node": "24.10.1",
     "tsx": "4.23.1",
     "typescript": "5.9.3"
