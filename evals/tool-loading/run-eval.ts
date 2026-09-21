@@ -97,7 +97,7 @@ function parseOptions(argv: string[]): Options {
 }
 
 function validate(config: EvalConfig, cases: EvalCase[], baseline: JsonObject, options: Options): void {
-  if (config.piVersionPrefix !== "0.82.") fail("config must pin the validated Pi 0.82 patch line");
+  if (config.piVersionPrefix !== "0.86.1") fail("config must pin Pi 0.86.1 exactly");
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs <= 0 || !Number.isInteger(config.maxOutputChars) || config.maxOutputChars <= 0) fail("invalid numeric config bounds");
   if (!sameSet(config.conditions, ["all-active", "balanced", "loader-only"])) fail("config must declare all three loading conditions");
   if (!sameSet(config.mutationTools, EXPECTED_MUTATION_TOOLS)) fail("config mutationTools must list every package-exposed Codecks mutation exactly once");
@@ -276,7 +276,7 @@ async function main(): Promise<void> {
   if (!existsSync(piCli)) fail(`Pi CLI is missing from this worktree: ${piCli}`);
   const piVersionPath = join(PACKAGE_ROOT, "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
   const piVersion = existsSync(piVersionPath) ? (readJson<{ version?: string }>(piVersionPath).version ?? "unknown") : "missing";
-  if (!piVersion.startsWith(config.piVersionPrefix)) fail(`this eval requires Pi ${config.piVersionPrefix}x; found ${piVersion}`);
+  if (piVersion !== config.piVersionPrefix) fail(`this eval requires Pi ${config.piVersionPrefix} exactly; found ${piVersion}`);
   mkdirSync(RESULTS_DIR, { recursive: true });
   const trials: JsonObject[] = [];
   for (const condition of options.conditions) for (const testCase of selected) for (let trial = 1; trial <= options.trials; trial += 1) {

@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.13.2] - 2026-09-21
+
+### Changed
+
+- Update Pi development dependencies and validation baseline to 0.87.0.
+
+## [0.13.1] - 2026-09-20
+
+### Changed
+
+- Update Pi development dependencies, compatibility floor, and dynamic tool-loading eval contract to the 0.86.1 baseline. All registered tools retain explicit TypeBox parameter schemas for current Pi registration.
 
 ## [0.13.0] - 2026-09-16
 

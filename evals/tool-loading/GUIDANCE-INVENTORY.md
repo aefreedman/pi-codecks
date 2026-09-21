@@ -48,7 +48,7 @@ The skill retains progressive-disclosure material that is useful for multi-step 
 - Card markdown document model, private-card ownership, targeting/disambiguation, aliases, archived search, glob/body search, output formats, and query error interpretation.
 - Detailed resolvable follow-up and corrective-evidence prose, including exact known-card versus ambiguous-thread sequences.
 - Milestone dispatch mapping, Run calculation/output details, vision-board/debug documentation references, and security/privacy/profile switching procedures.
-- The Pi 0.82 space-delimited `allowed-tools` field is convenience metadata only; it includes the loader and velocity report but does not replace operation validation.
+- The Pi space-delimited `allowed-tools` field is convenience metadata only; it includes the loader and velocity report but does not replace operation validation.
 
 ## Execution-time inventory
 
