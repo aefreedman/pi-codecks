@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { classifyDeckDescriptionReadback, isExactTestDeck } from "./integration-deck-safety.ts";
 
 const baseline = Object.freeze({ id: "synthetic-deck", accountSeq: 2, title: "Test" as const, description: "original description" });
@@ -19,4 +21,20 @@ for (const observed of [
   assert.equal(classifyDeckDescriptionReadback(baseline, observed, "unique temporary"), "unsafe");
 }
 assert.equal(baseline.description, "original description", "baseline is immutable throughout readback classification");
-console.log("Integration Test-deck baseline and readback safety tests passed");
+
+// Boot the real integration script with a configured PERSONAL profile but no credentials.
+// It must reach the intentional local skip without evaluating undefined profile helpers or making requests.
+const isolated = spawnSync(process.execPath, ["--import", "tsx", fileURLToPath(new URL("./codecks-tool-validation.ts", import.meta.url))], {
+  cwd: fileURLToPath(new URL("../", import.meta.url)),
+  encoding: "utf8",
+  timeout: 20000,
+  env: {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    CODECKS_PROFILE: "PERSONAL",
+    CODECKS_TEST_DECK: "Test",
+  },
+});
+assert.equal(isolated.status, 0, `PERSONAL integration harness startup must skip safely without credentials: ${isolated.stderr}`);
+assert.match(isolated.stdout, /Codecks credentials missing/);
+console.log("Integration PERSONAL startup and Test-deck safety tests passed");
