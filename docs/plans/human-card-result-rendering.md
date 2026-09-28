@@ -38,7 +38,7 @@ Priority    B
 Effort      3
 Deck        Development
 Milestone   Next Release
-Assignee    Aaron
+Assignee    Example User
 Tags        tooling, codecks
 Due         May 15, 2026
 Updated     Apr 29, 2026

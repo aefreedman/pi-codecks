@@ -2,7 +2,7 @@
 
 `pi-codecks` can use a trusted local helper instead of its ambient environment provider. This is an adapter-author contract, not a Pi tool API: neither the provider selector nor a helper path is model-facing input. It is manager-neutral: adapters for 1Password, Bitwarden, an OS keychain, or an enterprise vault implement this contract without adding manager-specific behavior to `pi-codecks`.
 
-For the user-facing choice, migration, and security limits, see [Configuration in the README](../README.md#configuration) and [Security](../SECURITY.md#credential-and-data-handling).
+For the user-facing choice, migration, and security limits, see [Configuration in the README](../README.md#configuration) and [Security](https://github.com/aefreedman/pi-codecks/blob/main/SECURITY.md#credential-and-data-handling).
 
 ## Migration and launcher configuration
 

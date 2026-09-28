@@ -5,20 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.14.0] - 2026-09-28
+
+### Added
+
+- Support Codecks organization and personal API tokens, with ORG selected by default and task- or session-scoped PERSONAL selection on explicit user request. Profile-specific 1Password references, environment credentials, and external helpers remain supported; credentials and bulk previews stay isolated across profiles.
+- Enable verified ORG actor attribution for shared card attachments and Comment/Review/Blocker threads, replies, own-entry edits, and close/reopen actions. Add focused single-card tools to read and edit a named human Hand, requiring a complete ordered baseline, drift check, and exact write readback.
+- Add credential-free registered-tool and real Pi-host lifecycle coverage for profile restoration and session resets.
 
 ### Changed
 
-- Migrate Codecks credentials to current organization/personal API tokens and Bearer authorization across query, dispatch, identity and upload signing; reject legacy token formats without fallback. Keep account subdomain assertion required pending live token-derived URL verification and preserve Retry-After units.
-- Add profile-specific 1Password references with ORG default and agent-selectable task/session PERSONAL profile on explicit user intent. Isolate credentials and previews across profiles, reset session selection on new/resume/fork, and keep in-flight operations on their original credential.
-- Authenticate organization credentials through account identity without inventing a user; guard unverified ORG actor-dependent writes and personal-only workflows before dispatch. Expose sanitized permission/account errors, token-visible scan coverage and conservative observation-cache refresh.
-- Align Pi development dependencies and tool-loading eval pin with current stable 0.87.1; expand credential-free auth/profile tests and update public configuration, security and live-test guidance.
-- Reject cross-account or cross-API-base observation caches before update or offline velocity report output, and cover registered Pi profile lifecycle resets, task restoration, session selection and in-flight snapshots with mocked events.
-- Parse documented top-level API error codes and fixed authentication message codes without exposing arbitrary vendor text; keep bounded query error paths distinct from request endpoints. Resolve account identity from documented normalized relation-ID and account-map responses as well as inline account objects.
-- A distinct, safely diagnosed Test-only `resolvables/create` request identified the required `userId` field. The authenticated ORG `api_token` principal (distinct from the human assignee) now supplies actor fields for the verified shared Comment/Review/Blocker, reply, own-entry edit, close/reopen and attachment tools. Exact Test readbacks verified thread content/author/state and attachment relation/filename or URL. Direct ORG actor dispatch, personal desk/bookmarks and implicit own-hand guards remain. The earlier inconclusive fixture was reconciled read-only and marked Done without replaying its comment.
-- Preserve bounded HTTP status, safe documented API validation diagnostics, and mutation dispatch-attempt/outcome certainty in structured errors; allow-list live harness rejection evidence without raw responses or transport exceptions. A diagnostic correction now exposes bounded sanitized dispatch validation text and structural error metadata even without a recognized query code; HTTP 400 explained `body must have property 'userId'`. This does not retroactively resolve the earlier inconclusive probe.
-- Correct ORG single/bulk create to permit decked unassigned or assigned deckless cards, reject unassigned plus deckless, and retain PERSONAL self-assignment defaults. ORG hand reads require an explicit verified human `userId`; ORG has no own hand/bookmarks. Do not infer a hand target from `putOnHand` or a human assignee. Existing producer-like deck/milestone/run actions stay enabled with structured permission diagnostics.
-- Add focused named-human Hand append/remove tools using user-observed `handQueue/setCardOrders` and `handQueue/removeCards` contracts. Require a complete, uniquely ordered active queue, human target and pre-dispatch drift recheck; append exactly one card, remove only that exact card, and confirm readback. Direct raw Hand dispatch stays guarded. One bounded Test-only ORG/Aaron fixture passed exact append, cleanup and Done readbacks. Creation's `putOnHand` boolean remains separately guarded for ORG; concurrent edits after the recheck cannot be excluded.
+- **Breaking:** Require current `cdxat_`/`cdxut_` tokens and Bearer authorization for Codecks requests; legacy tokens and header transport have no fallback. Continue to require explicit account/subdomain configuration.
+- Allow ORG card creation when either a deck or assignee is specified; reject unassigned deckless cards. PERSONAL self-assignment defaults remain unchanged. Reject bulk assignee removal that would leave a card unassigned and deckless.
+- Keep ORG personal desk, own Hand/bookmarks, and create-time `putOnHand` guarded; named Hand tools for existing cards use an explicit human target. Hand-order writes cannot exclude concurrent edits after their final pre-dispatch check.
+- Align Pi development, validation and peer minimums with stable 0.87.1; earlier Pi releases are not a supported baseline.
+
+### Fixed
+
+- Preserve bounded permission and mutation-certainty diagnostics without forwarding credentials or raw vendor responses. Reject observation caches from another account, API base, or profile; resolve normalized account-identity responses.
 
 ## [0.13.2] - 2026-09-21
 

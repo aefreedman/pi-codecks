@@ -178,7 +178,7 @@ export CODECKS_CREDENTIAL_PROVIDER=external-helper
 export PI_CODECKS_ALLOW_LIVE_VALIDATION=1
 ```
 
-Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher emits only fixed `status`, `category`, and `durationMs` JSON fields; `durationMs` is clamped to `0..60000`. HTTP `401` maps to `authentication_rejected`; HTTP `403` is reported as launcher `unavailable` (not expiry or absent identity); regular tools retain structured permission/scope errors. The fixed `_root.account.id` identity query supports both token kinds; missing or incompatible account identity maps to `malformed_response`. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](docs/testing.md#optional-external-provider-live-validation).
+Missing, misspelled, or different values fail with a fixed invalid-configuration result before any helper or fetch call. The launcher emits only fixed `status`, `category`, and `durationMs` JSON fields; `durationMs` is clamped to `0..60000`. HTTP `401` maps to `authentication_rejected`; HTTP `403` is reported as launcher `unavailable` (not expiry or absent identity); regular tools retain structured permission/scope errors. The fixed `_root.account.id` identity query supports both token kinds; missing or incompatible account identity maps to `malformed_response`. The launcher never accepts the `environment` provider and never falls back to ambient Codecks tokens, even when they are present. Use only separately authorized non-production credentials; see [testing guidance](https://github.com/aefreedman/pi-codecks/blob/main/docs/testing.md#optional-external-provider-live-validation).
 
 ## Card Retrieval Tools
 
@@ -326,7 +326,7 @@ Optional integration settings:
 - `CODECKS_TEST_PROFILE` - selects a test profile
 - `CODECKS_PROFILE_<PROFILE>_TOKEN` - direct token value for the selected test profile
 
-The validation script enforces a conservative shared request budget so combined direct API calls and tool calls stay below Codecks API rate limits. See [Testing](docs/testing.md) for the complete safety model and [Contributing](CONTRIBUTING.md) for pull-request guidance.
+The validation script enforces a conservative shared request budget so combined direct API calls and tool calls stay below Codecks API rate limits. See the repository's [Testing guide](https://github.com/aefreedman/pi-codecks/blob/main/docs/testing.md) for the complete safety model and [Contributing guide](https://github.com/aefreedman/pi-codecks/blob/main/CONTRIBUTING.md) for pull-request guidance.
 
 ## Implementation notes
 

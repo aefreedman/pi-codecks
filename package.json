@@ -1,6 +1,6 @@
 {
   "name": "@aefree/pi-codecks",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "description": "Pi tools, skills, and prompts for safe Codecks project-management workflows.",
   "type": "module",
   "license": "MIT",
@@ -35,7 +35,6 @@
     "prompts/",
     "docs/external-credential-helper-protocol.md",
     "docs/resolvable-inbox-heuristics.md",
-    "docs/testing.md",
     "references/",
     "README.md",
     "CHANGELOG.md",
@@ -71,8 +70,8 @@
     "typebox": "1.3.8"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.86.1",
-    "@earendil-works/pi-tui": ">=0.86.1"
+    "@earendil-works/pi-coding-agent": ">=0.87.1",
+    "@earendil-works/pi-tui": ">=0.87.1"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
