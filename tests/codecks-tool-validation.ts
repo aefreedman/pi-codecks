@@ -2,6 +2,9 @@ import { classifyDeckDescriptionReadback, isExactTestDeck } from "./integration-
 
 const TEST_PREFIX = "[tool-test]";
 const DEFAULT_API_BASE = "https://api.codecks.io";
+const toProfileSegment = (profile: string): string => profile.replace(/[^a-z0-9]/gi, "_").toUpperCase();
+const getProfileEnv = (profile: string, suffix: string): string | undefined =>
+  process.env[`CODECKS_PROFILE_${toProfileSegment(profile)}_${suffix}`];
 const TEST_PROFILE = (process.env.CODECKS_TEST_PROFILE ?? process.env.CODECKS_PROFILE ?? "").trim();
 const REQUEST_TIMEOUT_MS = (() => {
   const raw = Number.parseInt(process.env.CODECKS_TEST_REQUEST_TIMEOUT_MS ?? "10000", 10);
