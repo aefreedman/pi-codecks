@@ -482,7 +482,7 @@ const cards: MockCard[] = [
       await core.card_search.execute({ format: "json" }),
       await core.card_list_missing_effort.execute({ format: "json" }),
       await core.query.execute({ query: { _root: ["account"], password: "query-secret" } }),
-      await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: {}, format: "json" }), process.cwd()),
+      await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: { deckId: "synthetic-deck", assigneeId: null, content: "synthetic" }, format: "json" }), process.cwd()),
     ]) {
       const text = String(result);
       const payload = parseStructuredJson(text);

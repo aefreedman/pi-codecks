@@ -2543,7 +2543,6 @@ const apiFailure = (response: Response, payload: unknown, path: string, retryPol
 const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
     const config = await getAuthenticatedConfig();
-    if (config.kind === "ORG") throw new CodecksOperationError("org_actor_unverified", "Organization-token attachment authorship is unverified; no signing or upload request was sent.");
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
     const queueWaitMs = await enforceRateLimit();
@@ -2640,9 +2639,9 @@ const uploadFileToSignedUrl = async (
 
     if (!response.ok)
     {
-        const text = await response.text();
-        const details = sanitizeErrorPayload(text);
-        throw new Error(`File upload failed ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`);
+        throw new CodecksOperationError("api_error", "Signed storage upload was rejected; do not replay without inspecting the exact card.", {
+            httpStatus: response.status, uploadStage: "storage", mutationCertainty: "indeterminate",
+        });
     }
 
     return {
@@ -3815,18 +3814,56 @@ const runExactReadQuery = async (
 const runDispatch = async (
     path: string,
     payload: Record<string, unknown>,
-    verifiedOrgCommentActorId?: string,
+    verifiedOrgActorId?: string,
+    verifiedNamedHandTargetId?: string,
 ): Promise<unknown> =>
 {
     const config = await getAuthenticatedConfig();
-    const verifiedOrgComment = config.kind === "ORG" && path === "resolvables/create"
-        && typeof verifiedOrgCommentActorId === "string" && verifiedOrgCommentActorId.length > 0
-        && payload.userId === verifiedOrgCommentActorId && payload.context === "comment"
+    const verifiedOrgThread = config.kind === "ORG" && path === "resolvables/create"
+        && typeof verifiedOrgActorId === "string" && verifiedOrgActorId.length > 0
+        && payload.userId === verifiedOrgActorId && ["comment", "review", "block"].includes(String(payload.context ?? ""))
         && typeof payload.cardId === "string" && typeof payload.content === "string" && payload.content.length > 0
         && typeof payload.sessionId === "string" && /^[a-f0-9-]{36}$/i.test(payload.sessionId)
         && Object.keys(payload).length === 5;
-    if (config.kind === "ORG" && !verifiedOrgComment && (payload.userId !== undefined || /^(?:resolvables|comments|reviews|blocks|attachments)(?:\/|$)|^cards\/addFile$/i.test(path))) throw new CodecksOperationError("org_actor_unverified", "Organization-token actor behavior is unverified for this write; no mutation was sent.", { path });
-    if (config.kind === "ORG" && path === "cards/create" && (payload.userId !== undefined || !payload.deckId || !payload.assigneeId || payload.putOnHand === true)) throw new CodecksOperationError("org_actor_unverified", "Organization-token actor behavior is unverified for deckless, hand, or implicit-author card creation; no mutation was sent.", { path });
+    const fileData = isRecord(payload.fileData) ? payload.fileData : undefined;
+    const verifiedOrgAttachment = config.kind === "ORG" && path === "cards/addFile"
+        && typeof verifiedOrgActorId === "string" && verifiedOrgActorId.length > 0
+        && payload.userId === verifiedOrgActorId && typeof payload.cardId === "string"
+        && fileData && typeof fileData.fileName === "string" && typeof fileData.url === "string"
+        && typeof fileData.size === "number" && typeof fileData.type === "string"
+        && Object.keys(payload).length === 3;
+    const verifiedOrgReply = config.kind === "ORG" && path === "resolvables/comment"
+        && typeof verifiedOrgActorId === "string" && payload.authorId === verifiedOrgActorId
+        && typeof payload.resolvableId === "string" && typeof payload.content === "string" && payload.content.length > 0
+        && Object.keys(payload).length === 3;
+    const verifiedOrgEdit = config.kind === "ORG" && path === "resolvables/updateComment"
+        && typeof verifiedOrgActorId === "string" && payload.authorId === verifiedOrgActorId
+        && typeof payload.entryId === "string" && typeof payload.content === "string" && payload.content.length > 0
+        && Object.keys(payload).length === 3;
+    const verifiedOrgClose = config.kind === "ORG" && path === "resolvables/close"
+        && typeof verifiedOrgActorId === "string" && payload.closedBy === verifiedOrgActorId
+        && typeof payload.id === "string" && Object.keys(payload).length === 2;
+    const verifiedOrgReopen = config.kind === "ORG" && path === "resolvables/reopen"
+        && typeof verifiedOrgActorId === "string" && verifiedOrgActorId.length > 0
+        && typeof payload.id === "string" && Object.keys(payload).length === 1;
+    const handCardIds = payload.cardIds;
+    const verifiedNamedHand = typeof verifiedNamedHandTargetId === "string" && verifiedNamedHandTargetId.length > 0
+        && payload.userId === verifiedNamedHandTargetId
+        && (config.kind !== "ORG" || typeof verifiedOrgActorId === "string" && verifiedOrgActorId.length > 0)
+        && typeof payload.sessionId === "string" && /^[a-f0-9-]{36}$/i.test(payload.sessionId)
+        && Array.isArray(handCardIds) && handCardIds.length > 0 && handCardIds.length <= 500
+        && handCardIds.every((id) => typeof id === "string" && id.length > 0)
+        && new Set(handCardIds).size === handCardIds.length
+        && (path === "handQueue/setCardOrders"
+            ? Array.isArray(payload.draggedCardIds) && payload.draggedCardIds.length === 1
+                && payload.draggedCardIds[0] === handCardIds.at(-1) && Object.keys(payload).length === 4
+            : path === "handQueue/removeCards" && handCardIds.length === 1 && Object.keys(payload).length === 3);
+    if (path.startsWith("handQueue/") && !verifiedNamedHand)
+        throw new CodecksOperationError("org_actor_unverified", "Named-hand writes require a validated target and complete, fresh hand order; no mutation was sent.", { path });
+    if (config.kind === "ORG" && !verifiedOrgThread && !verifiedOrgAttachment && !verifiedOrgReply && !verifiedOrgEdit && !verifiedOrgClose && !verifiedOrgReopen && !verifiedNamedHand
+        && (payload.userId !== undefined || /^(?:resolvables|comments|reviews|blocks|attachments)(?:\/|$)|^cards\/addFile$/i.test(path))) throw new CodecksOperationError("org_actor_unverified", "Organization-token actor behavior is unverified for this write; no mutation was sent.", { path });
+    if (config.kind === "ORG" && path === "cards/create" && (payload.userId !== undefined || payload.putOnHand === true)) throw new CodecksOperationError("org_actor_unverified", "Organization-token creation cannot infer its author or own hand; no mutation was sent.", { path });
+    if (path === "cards/create" && !payload.deckId && !payload.assigneeId) throw new CodecksOperationError("api_error", "A card cannot be both unassigned and deckless; no mutation was sent.", { path, requestsAttempted: 0 });
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -4000,15 +4037,15 @@ const classifyExternalProviderIdentityPayload = (payload: unknown): CodecksExter
     return typeof reference !== "string" || account.id.trim().toLowerCase() === normalizedRef ? "authenticated" : "malformed_response";
 };
 
-const ORG_COMMENT_ACTOR_QUERY = Object.freeze({ _root: [{ loggedInUser: ["id", "kind", "isIntegration"] }] });
+const ORG_SHARED_ACTOR_QUERY = Object.freeze({ _root: [{ loggedInUser: ["id", "kind", "isIntegration"] }] });
 
-const fetchCommentActor = async (): Promise<{ id: string | number; verifiedOrg: boolean }> =>
+const fetchSharedActor = async (): Promise<{ id: string | number; verifiedOrg: boolean }> =>
 {
     if ((await getAuthenticatedConfig()).kind !== "ORG") return { id: (await fetchLoggedInUser()).id!, verifiedOrg: false };
-    const payload = await runQuery(ORG_COMMENT_ACTOR_QUERY);
+    const payload = await runQuery(ORG_SHARED_ACTOR_QUERY);
     const actor = getLoggedInUserFromPayload(payload) as (CodecksUser & { kind?: unknown; isIntegration?: unknown }) | undefined;
     if (typeof actor?.id !== "string" || !actor.id.trim() || actor.kind !== "api_token" || actor.isIntegration !== true)
-        throw new CodecksOperationError("org_actor_unverified", "Authenticated organization-token comment actor could not be verified; no mutation was sent.");
+        throw new CodecksOperationError("org_actor_unverified", "Authenticated organization-token actor could not be verified; no mutation was sent.");
     return { id: actor.id, verifiedOrg: true };
 };
 
@@ -5245,6 +5282,7 @@ type CardSearchParams = {
     location?: CardLocationScope;
     deck?: string | number;
     milestone?: string | number;
+    userId?: string | number;
     limit?: number;
     scanLimit?: number;
     pageSize?: number;
@@ -5723,6 +5761,22 @@ const fetchPagedCards = async (args: {
     });
 };
 
+const resolveExplicitHumanHandTarget = async (value: string | number): Promise<string | number> =>
+{
+    const raw = String(value).trim();
+    if (!/^\d+$/.test(raw) && !UUID_PATTERN.test(raw))
+        throw new CodecksOperationError("api_error", "Provide an exact human userId from codecks_user_lookup for the named hand.");
+    const key = `user(${formatIdForQuery(raw)})`;
+    const payload = await runQuery({ [key]: ["id", "name", "fullName", "kind", "isIntegration"] });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const userMap = getEntityMap(data, "user");
+    const user = userMap[raw] ?? resolveFromMap(data?.[key], userMap);
+    if (!user?.id || normalizeUserId(String(user.id)) !== normalizeUserId(raw)
+        || !String(user.name ?? user.fullName ?? "").trim() || user.kind === "api_token" || user.isIntegration === true)
+        throw new CodecksOperationError("api_error", "The named hand target was not verified as a human user; no hand query was sent.");
+    return user.id as string | number;
+};
+
 const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResult> =>
 {
     const includeArchived = args.includeArchived ?? (args.cardCode !== undefined);
@@ -5753,6 +5807,15 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResul
         return { error: inferredLocation.error };
     }
     const location = inferredLocation;
+    const profile = getBaseConfig().profileKey;
+    if (location === "bookmarks" && profile === "ORG") return { error: "ORG has no own bookmarks; select PERSONAL to view personal bookmarks." };
+    if (location === "hand" && profile === "ORG" && args.userId === undefined)
+        return { error: "ORG has no own hand; provide an explicit human userId to read a named hand." };
+    if (args.userId !== undefined && location !== "hand") return { error: "userId is only supported for location=hand." };
+    if (args.userId !== undefined && profile !== "ORG") return { error: "Explicit userId hand targeting is available only with ORG; PERSONAL reads its own hand." };
+
+    if (args.cardCode && (location === "hand" || location === "bookmarks"))
+        return { error: "cardCode cannot be combined with hand or bookmarks scope; use a scoped title search or fetch the known card directly." };
 
     if (args.cardCode)
     {
@@ -5824,10 +5887,10 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResul
 
     if (location === "hand")
     {
-        const user = await fetchLoggedInUser();
+        const userId = profile === "ORG" ? await resolveExplicitHumanHandTarget(args.userId!) : (await fetchLoggedInUser()).id!;
         const limit = args.limit ?? 7;
         const queueFilters = {
-            userId: user.id,
+            userId,
             cardDoneAt: null,
             $order: "sortIndex",
             $limit: limit,
@@ -6067,6 +6130,7 @@ export const card_search = tool({
         location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID when location=deck."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Explicit human user ID for ORG location=hand; PERSONAL reads its own hand."),
         limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum number of matching cards to return."),
         scanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum globally ordered cards to scan before reporting incomplete results."),
         pageSize: tool.schema.number().min(1).max(500).optional().describe("Cards requested per page during the bounded scan."),
@@ -6090,6 +6154,7 @@ export const card_search = tool({
                 location: args.location,
                 deck: args.deck,
                 milestone: args.milestone,
+                userId: args.userId,
                 limit: args.limit,
                 scanLimit: args.scanLimit,
                 pageSize: args.pageSize,
@@ -6349,6 +6414,7 @@ export const card_list_missing_effort = tool({
         location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope. Inferred from deck or milestone when omitted."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID. Implies location=deck when location is omitted."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID. Implies location=milestone when location is omitted."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Explicit human user ID for ORG location=hand."),
         skipCodes: tool.schema.array(tool.schema.string()).optional().describe("Short codes to exclude from the eligible list."),
         includeDone: tool.schema.boolean().optional().describe("Include done cards in eligible results (default: false)."),
         includeExcluded: tool.schema.boolean().optional().describe("Include excluded cards with reason codes in the result (default: true)."),
@@ -6371,6 +6437,7 @@ export const card_list_missing_effort = tool({
                 location: args.location,
                 deck: args.deck,
                 milestone: args.milestone,
+                userId: args.userId,
                 limit: scanLimit,
                 scanLimit,
                 pageSize: args.pageSize,
@@ -6909,6 +6976,7 @@ export const card_get = tool({
         location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope when searching by title."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID when location=deck."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Explicit human user ID for ORG hand title search."),
         includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards when searching by title."),
         format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
     },
@@ -6942,6 +7010,7 @@ export const card_get = tool({
                     location: args.location,
                     deck: args.deck,
                     milestone: args.milestone,
+                    userId: args.userId,
                     limit: 5,
                     includeArchived: args.includeArchived,
                 });
@@ -7109,6 +7178,7 @@ export const card_get_formatted = tool({
         location: tool.schema.enum(["any", "deck", "milestone", "hand", "bookmarks"]).optional().describe("Location scope when searching by title."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Deck name or ID when location=deck."),
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Explicit human user ID for ORG hand title search."),
         includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards when searching by title."),
         format: outputFormatArg,
     },
@@ -7136,6 +7206,7 @@ export const card_get_formatted = tool({
                 location: args.location,
                 deck: args.deck,
                 milestone: args.milestone,
+                userId: args.userId,
                 limit: 5,
                 includeArchived: args.includeArchived,
             });
@@ -7757,7 +7828,7 @@ export const card_get_vision_board = tool({
 });
 
 type CardCreatePayloadOptions = {
-    assigneeId: string | number;
+    assigneeId: string | number | null;
     content: string;
     putOnHand: boolean;
     deckId: string | number | null;
@@ -7803,7 +7874,7 @@ export const card_create = tool({
         effort: tool.schema.number().optional().describe("Effort value."),
         priority: tool.schema.string().optional().describe("Priority label."),
         assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Assignee ID."),
-        putOnHand: tool.schema.boolean().optional().describe("Place card on hand."),
+        putOnHand: tool.schema.boolean().optional().describe("PERSONAL own-hand creation; ORG target is unverified and remains guarded."),
         parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Optional parent Hero card ID, short code, or URL."),
         tags: tool.schema.array(tool.schema.string()).optional().describe("Optional list of tags. Added to card body as #hashtags."),
         format: outputFormatArg,
@@ -7836,8 +7907,10 @@ export const card_create = tool({
         const milestoneArg = blankToUndefined(args.milestone);
         const assigneeArg = blankToUndefined(args.assigneeId);
         const parentCardArg = blankToUndefined(args.parentCardId);
-        if (getBaseConfig().profileKey === "ORG" && (assigneeArg === undefined || deckArg === undefined || args.putOnHand === true))
-            return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "Organization-token card creation requires an explicit assigneeId and deck, and cannot put a card on hand until actor behavior is verified; no mutation was sent.");
+        if (getBaseConfig().profileKey === "ORG" && args.putOnHand === true)
+            return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "ORG has no own hand. The target for putOnHand is unverified; no mutation was sent.");
+        if (getBaseConfig().profileKey === "ORG" && deckArg === undefined && assigneeArg === undefined)
+            return toStructuredErrorResult(format, "card-create", "validation_error", "A card cannot be both unassigned and deckless; provide deck or assigneeId. No mutation was sent.");
 
         let normalizedCardType: { value: CardTypeValue; label: string; isDoc: boolean } | null = null;
         if (args.cardType !== undefined)
@@ -7886,10 +7959,11 @@ export const card_create = tool({
             milestoneId = String(milestoneResult.id);
         }
 
-        let assigneeId: string | number;
+        let assigneeId: string | number | null;
         try
         {
-            assigneeId = await resolveAssigneeId(assigneeArg ?? null);
+            assigneeId = getBaseConfig().profileKey === "ORG" && assigneeArg === undefined
+                ? null : await resolveAssigneeId(assigneeArg ?? null);
         }
         catch (error)
         {
@@ -7924,7 +7998,6 @@ export const card_create = tool({
         }
 
         const createsPrivateCard = !deckId && !parentCardId;
-        if (getBaseConfig().profileKey === "ORG" && (!deckId || args.putOnHand === true)) return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "Organization-token actor behavior is unverified for deckless or hand card creation; no mutation was sent.");
 
         const payload = buildCardCreatePayload({
             assigneeId,
@@ -8046,7 +8119,7 @@ type NormalizedBulkCreateRecord = {
     cardType: CardTypeValue;
     deck: { id: string | number; name: string } | null;
     milestone: { id: string | number; name: string } | null;
-    assignee: { id: string | number; name: string };
+    assignee: { id: string | number; name: string } | null;
     effort: number | null;
     priority: { code: string | null; label: string };
     tags: string[];
@@ -8173,14 +8246,15 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     }
 
     const explicitAssignee = blankToUndefined(record.assigneeId);
-    const defaultAssigneeId = loggedInUser.id ?? (getBaseConfig().profileKey === "PERSONAL" ? getFallbackAssigneeId() : undefined);
-    if (explicitAssignee === undefined && defaultAssigneeId === undefined)
-    {
+    const isOrg = getBaseConfig().profileKey === "ORG";
+    const defaultAssigneeId = isOrg ? undefined : loggedInUser.id ?? getFallbackAssigneeId();
+    if (explicitAssignee === undefined && defaultAssigneeId === undefined && !isOrg)
         throw new Error(`cards[${index}] could not resolve a default assignee; provide assigneeId from codecks_user_lookup.`);
-    }
-    const assignee: { id: string | number; name: string } = explicitAssignee !== undefined
+    const assignee: NormalizedBulkCreateRecord["assignee"] = explicitAssignee !== undefined
         ? await cachedResolution(context.assignees, explicitAssignee, () => resolveBulkAssignee(explicitAssignee))
-        : { id: defaultAssigneeId!, name: String(loggedInUser.fullName ?? loggedInUser.name ?? defaultAssigneeId) };
+        : defaultAssigneeId !== undefined
+            ? { id: defaultAssigneeId, name: String(loggedInUser.fullName ?? loggedInUser.name ?? defaultAssigneeId) }
+            : null;
     const priority = record.priority === undefined ? { code: null, label: "None" } : normalizePriorityInput(record.priority);
     if (!priority) throw new Error(`cards[${index}].priority must be none, low, medium, high, a, b, or c.`);
 
@@ -8194,7 +8268,8 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     }
 
     const putOnHand = record.putOnHand ?? false;
-    if (getBaseConfig().profileKey === "ORG" && (!deck || putOnHand)) throw new CodecksOperationError("org_actor_unverified", `cards[${index}] requires a deck and cannot use putOnHand with an organization token; no mutation was sent.`);
+    if (!deck && !assignee) throw new Error(`cards[${index}] cannot be both unassigned and deckless; provide deck or assigneeId.`);
+    if (isOrg && putOnHand) throw new CodecksOperationError("org_actor_unverified", `cards[${index}] cannot infer an ORG hand target from putOnHand; no mutation was sent.`);
     return {
         index,
         correlationKey: record.correlationKey ?? null,
@@ -8211,7 +8286,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
         putOnHand,
         parent,
         payload: buildCardCreatePayload({
-            assigneeId: assignee.id,
+            assigneeId: assignee?.id ?? null,
             content,
             putOnHand,
             deckId: deck?.id ?? null,
@@ -8371,7 +8446,7 @@ const writeBulkArtifact = async (operation: "create" | "update", details: Record
 export const card_bulk_create = tool({
     description: "Preview or create multiple Codecks cards. Compact results keep only exceptional records inline; complete sanitized per-record details are written to a temporary JSON artifact.",
     args: {
-        cards: tool.schema.array(tool.schema.object({ correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(), deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), putOnHand: tool.schema.boolean().optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional() })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
+        cards: tool.schema.array(tool.schema.object({ correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(), deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), putOnHand: tool.schema.boolean().optional().describe("PERSONAL own hand only; ORG target unverified."), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional() })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."), expectedPreviewFingerprint: tool.schema.string().optional().describe("Required for apply: the previewFingerprint returned by the matching dry run."), format: outputFormatArg,
     },
     async execute(args) {
@@ -8598,6 +8673,8 @@ const normalizeBulkUpdateRecord = async (record: BulkUpdateRecord, index: number
     }
     if (record.clearAssignee === true)
     {
+        if (!payload.deckId && !current.deckId)
+            throw new Error(`updates[${index}] cannot clear the assignee of a deckless card; unassigned and deckless is not allowed.`);
         payload.assigneeId = null;
         proposed.assignee = null;
     }
@@ -8687,7 +8764,7 @@ export const card_bulk_update = tool({
             assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(),
             clearDeck: tool.schema.boolean().optional().describe("Unavailable: true rejects the entire batch before requests. Codecks returned HTTP 500 for deck removal; use the Codecks UI until the API contract is verified."),
             clearMilestone: tool.schema.boolean().optional().describe("Remove the milestone assignment."),
-            clearAssignee: tool.schema.boolean().optional().describe("Remove the assignee. With no deck, the card becomes a note visible only to its creator."),
+            clearAssignee: tool.schema.boolean().optional().describe("Remove the assignee only when the card has or is given a deck; unassigned and deckless is not allowed."),
             clearEffort: tool.schema.boolean().optional().describe("Clear the effort estimate."),
             tags: tool.schema.array(tool.schema.string()).optional(), runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearRun: tool.schema.boolean().optional(),
             parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), clearParent: tool.schema.boolean().optional(), mode: tool.schema.enum(["replace", "append", "prepend"]).optional(),
@@ -9098,7 +9175,7 @@ export const deck_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "deck-update", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "deck-update", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const lines = [
@@ -9331,7 +9408,7 @@ export const milestone_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "milestone-update", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "milestone-update", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const accountSeq = milestone.accountSeq;
@@ -9951,7 +10028,7 @@ export const run_update = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-update", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "run-update", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const updatedFields = Object.keys(payload).filter((key) => !["sessionId", "id"].includes(key));
@@ -10096,31 +10173,37 @@ export const card_add_attachment = tool({
 
         const workspaceRoot = getActiveWorkspaceRoot();
         const source = await snapshotAttachmentSource(args.filePath, workspaceRoot);
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchSharedActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         const contentType = detectContentType(source.canonicalPath, args.contentType);
-        const signed = await requestSignedUpload(source);
+        let signed: SignedUploadInfo;
+        try { signed = await requestSignedUpload(source); }
+        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", error instanceof CodecksOperationError ? toErrorMessage(error) : "Codecks upload signing failed; no storage upload or card registration was attempted.", { uploadStage: "sign", ...getOperationErrorData(error) }); }
         // Re-resolve and re-hash immediately before the upload attempt. The bytes
         // uploaded are exactly the bytes from this second, validated snapshot.
         const uploadSource = await snapshotAttachmentSource(args.filePath, workspaceRoot);
         assertUnchangedAttachmentSource(source, uploadSource);
-        const uploaded = await uploadFileToSignedUrl(signed, uploadSource, contentType);
-        const user = await fetchLoggedInUser();
+        let uploaded: { fileName: string; size: number; type: string; url: string };
+        try { uploaded = await uploadFileToSignedUrl(signed, uploadSource, contentType); }
+        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", "Signed storage upload outcome is uncertain; inspect the exact card before any further write.", { uploadStage: "storage", mutationCertainty: "indeterminate", ...getOperationErrorData(error) }); }
 
         try
         {
             await runDispatch("cards/addFile", {
                 cardId,
-                userId: user.id,
+                userId: actor.id,
                 fileData: {
                     fileName: uploaded.fileName,
                     url: uploaded.url,
                     size: uploaded.size,
                     type: uploaded.type,
                 },
-            } as Record<string, unknown>);
+            } as Record<string, unknown>, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-add-attachment", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const url = shortCode ? formatCardUrl(shortCode) : "";
@@ -10590,6 +10673,128 @@ export const card_update_status = tool({
     },
 });
 
+// Hand writes must start from the complete target queue, not a search preview:
+// setCardOrders replaces an ordered list, and a truncated page could drop existing cards.
+const NAMED_HAND_READ_LIMIT = 500;
+type NamedHandEntry = { cardId: string; sortIndex: number };
+const fetchCompleteNamedHand = async (userId: string | number): Promise<NamedHandEntry[]> =>
+{
+    const payload = await runQuery({
+        _root: [{ account: [{
+            [relationQuery("queueEntries", { userId, cardDoneAt: null, $order: "sortIndex", $limit: NAMED_HAND_READ_LIMIT })]: [
+                "cardId", "sortIndex", { user: ["id"] },
+            ],
+        }] }],
+    });
+    const data = unwrapData(payload) as Record<string, unknown> | undefined;
+    const entries = Object.values(getEntityMap(data, "queueEntry"))
+        .sort((left, right) => Number(left.sortIndex ?? NaN) - Number(right.sortIndex ?? NaN));
+    const users = getEntityMap(data, "user");
+    if (entries.length >= NAMED_HAND_READ_LIMIT)
+        throw new CodecksOperationError("api_error", "The target hand page is incomplete; no hand write was sent.");
+    const seen = new Set<string>();
+    let previousSort = -Infinity;
+    return entries.map((entry) =>
+    {
+        const rawCardId = entry.cardId ?? entry.card_id;
+        const cardId = typeof rawCardId === "string" ? rawCardId : "";
+        const sortIndex = entry.sortIndex;
+        const user = resolveFromMap(entry.user, users)
+            ?? (isRecord(entry.user) ? entry.user : undefined);
+        if (!cardId || seen.has(cardId) || typeof sortIndex !== "number" || !Number.isFinite(sortIndex)
+            || sortIndex <= previousSort || String(user?.id ?? "") !== String(userId))
+            throw new CodecksOperationError("api_error", "Target hand ordering or ownership cannot be verified; no hand write was sent.");
+        seen.add(cardId);
+        previousSort = sortIndex;
+        return { cardId, sortIndex };
+    });
+};
+
+const equalNamedHand = (left: NamedHandEntry[], right: NamedHandEntry[]): boolean =>
+    left.length === right.length && left.every((entry, i) => entry.cardId === right[i]?.cardId && entry.sortIndex === right[i]?.sortIndex);
+
+const mutateNamedHand = async (
+    action: "card-add-to-hand" | "card-remove-from-hand",
+    args: { cardId: string | number; userId?: string | number; format?: "text" | "json" },
+): Promise<string> =>
+{
+    const format = args.format ?? "json";
+    const adding = action === "card-add-to-hand";
+    let card: Awaited<ReturnType<typeof resolveCardForUpdate>>;
+    let targetId: string | number;
+    let actor: { id: string | number; verifiedOrg: boolean };
+    let baseline: NamedHandEntry[];
+    try
+    {
+        if (getBaseConfig().profileKey === "ORG" && args.userId === undefined)
+            return toStructuredErrorResult(format, action, "validation_error", "ORG has no own hand; provide an explicit human userId. No mutation was sent.");
+        targetId = args.userId === undefined ? (await fetchLoggedInUser()).id! : await resolveExplicitHumanHandTarget(args.userId);
+        card = await resolveCardForUpdate(args.cardId);
+        if (!card) return toStructuredErrorResult(format, action, "not_found", "Card not found; no hand write was sent.");
+        actor = await fetchSharedActor();
+        baseline = await fetchCompleteNamedHand(targetId);
+        const matches = baseline.filter((entry) => entry.cardId === card!.cardId).length;
+        if (adding && matches !== 0) return toStructuredErrorResult(format, action, "validation_error", "The card is already on the target hand; no write was sent.");
+        if (!adding && matches !== 1) return toStructuredErrorResult(format, action, "validation_error", "The card is not uniquely on the target hand; no write was sent.");
+        // There is no atomic conditional dispatch. Refuse a baseline that drifted even once.
+        const immediate = await fetchCompleteNamedHand(targetId);
+        if (!equalNamedHand(baseline, immediate))
+            return toStructuredErrorResult(format, action, "validation_error", "The target hand changed between reads; no write was sent. Refresh before retrying.");
+    }
+    catch (error)
+    {
+        return toStructuredErrorResult(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+    }
+
+    try
+    {
+        await runDispatch(adding ? "handQueue/setCardOrders" : "handQueue/removeCards", {
+            sessionId: generateSessionId(),
+            cardIds: adding ? [...baseline.map((entry) => entry.cardId), card!.cardId] : [card!.cardId],
+            ...(adding ? { draggedCardIds: [card!.cardId] } : {}),
+            userId: targetId,
+        }, actor.verifiedOrg ? String(actor.id) : undefined, String(targetId));
+    }
+    catch (error)
+    {
+        return toStructuredErrorResult(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+    }
+    try
+    {
+        const after = await fetchCompleteNamedHand(targetId);
+        const expected = adding ? [...baseline.map((entry) => entry.cardId), card!.cardId] : baseline.filter((entry) => entry.cardId !== card!.cardId).map((entry) => entry.cardId);
+        if (after.length !== expected.length || after.some((entry, i) => entry.cardId !== expected[i]))
+            throw new CodecksOperationError("api_error", "Hand write response did not match exact target readback; stop and reconcile before any new write.", { mutationCertainty: "indeterminate", requestsAttempted: 1 });
+        return toStructuredResult(format, action,
+            `${adding ? "Added" : "Removed"} ${card!.shortCode || "card"} ${adding ? "to" : "from"} the verified human hand; exact membership and existing relative order confirmed.`,
+            { cardCode: card!.shortCode || null, handAction: adding ? "add" : "remove", readbackConfirmed: true, previousEntryCount: baseline.length, resultingEntryCount: after.length });
+    }
+    catch (error)
+    {
+        return toStructuredErrorResult(format, action, "api_error", "Hand write response requires exact target reconciliation; do not retry automatically.", { mutationCertainty: "indeterminate", requestsAttempted: 1 });
+    }
+};
+
+export const card_add_to_hand = tool({
+    description: "Append exactly one existing card to a named human's complete current Hand order. ORG needs an explicit human userId; PERSONAL defaults to own Hand. Refuses incomplete/changed order and verifies readback.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID or short code."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Named human user ID; required for ORG."),
+        format: outputFormatArg,
+    },
+    execute: (args) => mutateNamedHand("card-add-to-hand", args),
+});
+
+export const card_remove_from_hand = tool({
+    description: "Remove exactly one verified card entry from a named human Hand without changing other entries or card assignment. ORG needs an explicit human userId; PERSONAL defaults to own Hand.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID or short code."),
+        userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Named human user ID; required for ORG."),
+        format: outputFormatArg,
+    },
+    execute: (args) => mutateNamedHand("card-remove-from-hand", args),
+});
+
 export const card_add_comment = tool({
     description: "Open a general comment thread on a Codecks card when explicitly requested.",
     args: {
@@ -10626,7 +10831,7 @@ export const card_add_comment = tool({
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchCommentActor(); }
+        try { actor = await fetchSharedActor(); }
         catch (error) { return toStructuredErrorResult(format, "card-add-comment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
         try
@@ -10741,7 +10946,9 @@ export const card_add_review = tool({
         }
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
-        const user = await fetchLoggedInUser();
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchSharedActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-add-review", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
         try
         {
@@ -10750,12 +10957,12 @@ export const card_add_review = tool({
                 cardId,
                 context: "review",
                 content: normalizedContent,
-                userId: user.id,
-            });
+                userId: actor.id,
+            }, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-add-review", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-add-review", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const url = shortCode ? formatCardUrl(shortCode) : "";
@@ -10854,7 +11061,9 @@ const addBlockerResolvable = async (args: {
     }
 
     const normalizedContent = normalizeCardReferencesForUserText(args.content);
-    const user = await fetchLoggedInUser();
+    let actor: { id: string | number; verifiedOrg: boolean };
+    try { actor = await fetchSharedActor(); }
+    catch (error) { return toStructuredErrorResult(format, args.action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
     try
     {
@@ -10863,12 +11072,12 @@ const addBlockerResolvable = async (args: {
             cardId,
             context: "block",
             content: normalizedContent,
-            userId: user.id,
-        });
+            userId: actor.id,
+        }, actor.verifiedOrg ? String(actor.id) : undefined);
     }
     catch (error)
     {
-        return toStructuredErrorResult(format, args.action, "api_error", toErrorMessage(error));
+        return toStructuredErrorResult(format, args.action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
     }
 
     const url = shortCode ? formatCardUrl(shortCode) : "";
@@ -11000,19 +11209,21 @@ export const card_reply_resolvable = tool({
         }
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
-        const user = await fetchLoggedInUser();
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchSharedActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-reply-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         try
         {
             await runDispatch("resolvables/comment", {
                 resolvableId,
-                authorId: user.id,
+                authorId: actor.id,
                 content: normalizedContent,
-            });
+            }, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-reply-resolvable", "api_error", toErrorMessage(error), {
-                resolvableId,
+            return toStructuredErrorResult(format, "card-reply-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), {
+                resolvableId, ...getOperationErrorData(error),
             });
         }
 
@@ -11093,8 +11304,10 @@ export const card_edit_resolvable_entry = tool({
             });
         }
 
-        const loggedInUser = await fetchLoggedInUser();
-        const currentUserId = String(loggedInUser.id ?? "").trim();
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchSharedActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-edit-resolvable-entry", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        const currentUserId = String(actor.id ?? "").trim();
         const authorValue = before.author;
         const authorId = typeof authorValue === "object" && authorValue
             ? String((authorValue as CodecksEntity).id ?? "").trim()
@@ -11192,13 +11405,13 @@ export const card_edit_resolvable_entry = tool({
             await runDispatch("resolvables/updateComment", {
                 entryId,
                 content: normalizedContent,
-                authorId: loggedInUser.id,
-            });
+                authorId: actor.id,
+            }, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-edit-resolvable-entry", "api_error", toErrorMessage(error), {
-                entryId,
+            return toStructuredErrorResult(format, "card-edit-resolvable-entry", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), {
+                entryId, ...getOperationErrorData(error),
             });
         }
 
@@ -11288,18 +11501,20 @@ export const card_close_resolvable = tool({
             );
         }
 
-        const user = await fetchLoggedInUser();
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchSharedActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-close-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         try
         {
             await runDispatch("resolvables/close", {
                 id: resolvableId,
-                closedBy: user.id,
-            });
+                closedBy: actor.id,
+            }, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-close-resolvable", "api_error", toErrorMessage(error), {
-                resolvableId,
+            return toStructuredErrorResult(format, "card-close-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), {
+                resolvableId, ...getOperationErrorData(error),
             });
         }
 
@@ -11379,14 +11594,20 @@ export const card_reopen_resolvable = tool({
             );
         }
 
+        let orgActorId: string | undefined;
+        if (getBaseConfig().profileKey === "ORG")
+        {
+            try { orgActorId = String((await fetchSharedActor()).id); }
+            catch (error) { return toStructuredErrorResult(format, "card-reopen-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        }
         try
         {
-            await runDispatch("resolvables/reopen", { id: resolvableId });
+            await runDispatch("resolvables/reopen", { id: resolvableId }, orgActorId);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-reopen-resolvable", "api_error", toErrorMessage(error), {
-                resolvableId,
+            return toStructuredErrorResult(format, "card-reopen-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), {
+                resolvableId, ...getOperationErrorData(error),
             });
         }
 

@@ -50,15 +50,22 @@ try {
   const guarded = parse(await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "resolvables/create", payload: { cardId: "synthetic", content: "test" }, format: "json" }), undefined, undefined, "ORG"));
   assert.equal(guarded.error.category, "org_actor_unverified");
   assert.equal(calls, 0);
-  const deckless = parse(await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: { assigneeId: "synthetic" }, format: "json" }), undefined, undefined, "ORG"));
-  assert.equal(deckless.error.category, "org_actor_unverified");
+  const invalid = parse(await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: { assigneeId: null, deckId: null, content: "synthetic" }, format: "json" }), undefined, undefined, "ORG"));
+  assert.match(invalid.error.message, /unassigned and deckless/);
   assert.equal(calls, 0);
-  const approvedOrgCreate = parse(await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: { deckId: "synthetic-deck", assigneeId: "synthetic-user", content: "synthetic" }, format: "json" }), undefined, undefined, "ORG"));
-  assert.equal(approvedOrgCreate.ok, true);
-  assert.equal(calls, 1, "documented org create omitting userId can dispatch once");
+  for (const payload of [
+    { assigneeId: "synthetic-user", deckId: null, content: "assigned deckless" },
+    { assigneeId: null, deckId: "synthetic-deck", content: "decked unassigned" },
+    { assigneeId: "synthetic-user", deckId: "synthetic-deck", content: "decked assigned" },
+  ]) {
+    const accepted = parse(await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload, format: "json" }), undefined, undefined, "ORG"));
+    assert.equal(accepted.ok, true);
+  }
+  assert.equal(calls, 3, "each valid ORG assignment/deck combination dispatches once");
   calls = 0;
-  const create = parse(await core.runWithAbortSignal(undefined, () => core.card_create.execute({ title: "synthetic", deck: "synthetic", format: "json" }), undefined, undefined, "ORG"));
-  assert.equal(create.error.category, "org_actor_unverified");
+  const create = parse(await core.runWithAbortSignal(undefined, () => core.card_create.execute({ title: "synthetic", format: "json" }), undefined, undefined, "ORG"));
+  assert.equal(create.error.category, "validation_error");
+  assert.match(create.error.message, /unassigned and deckless/);
   assert.equal(calls, 0);
   globalThis.fetch = (async () => new Response(JSON.stringify({ error: { code: "missing_scope", requiredScope: "cards:read", token: "cdxat_synthetic" } }), { status: 403 })) as typeof fetch;
   const denied = parse(await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }), undefined, undefined, "ORG"));

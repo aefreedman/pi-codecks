@@ -59,11 +59,11 @@ function serializedActiveMetadataCharacters(harness: PiToolHarness): number {
 }
 
 async function main(): Promise<void> {
-  assert.equal(publicToolNames.length, 44, "the default surface must include 44 tools");
+  assert.equal(publicToolNames.length, 46, "the default surface must include 46 tools");
 
   await withMode(undefined, async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.equal(harness.registry.size, 45, "44 default Codecks tools plus the loader should be registered");
+    assert.equal(harness.registry.size, 47, "46 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
   });
@@ -210,7 +210,7 @@ async function main(): Promise<void> {
     }
     assert(harness.registry.get(CODECKS_TOOL_SEARCH_NAME)?.promptGuidelines?.length, "loader retains universal safety policy");
     const balancedCharacters = serializedActiveMetadataCharacters(harness);
-    assert.equal(balancedCharacters, 7097, "balanced metadata measurement should remain reproducible");
+    assert.equal(balancedCharacters, 7400, "balanced metadata measurement should remain reproducible");
     assert(balancedCharacters <= 38478 * 0.25, "balanced initial metadata must be at least 75% smaller than the untouched baseline");
   });
 
