@@ -108,6 +108,7 @@ try {
 const orgTokenBefore = process.env.CODECKS_PROFILE_ORG_TOKEN;
 const personalTokenBefore = process.env.CODECKS_PROFILE_PERSONAL_TOKEN;
 const startupProfileBefore = process.env.CODECKS_PROFILE;
+const providerBefore = process.env.CODECKS_CREDENTIAL_PROVIDER;
 const accountBefore = process.env.CODECKS_ACCOUNT;
 const fetchBefore = globalThis.fetch;
 try {
@@ -163,11 +164,28 @@ try {
   await harness.startSession(selectedHistory, "resume");
   await runQuery();
   assert.equal(seen.at(-1), "PERSONAL", "explicit startup override applies when session starts");
+  // Mirror the protected integration job: only a PERSONAL token and explicit startup profile.
+  // Registered calls must capture PERSONAL, not silently use the product's ORG default.
+  core.__test.setCredentialProviderForTests();
+  delete process.env.CODECKS_PROFILE_ORG_TOKEN;
+  process.env.CODECKS_PROFILE = "PERSONAL";
+  process.env.CODECKS_CREDENTIAL_PROVIDER = "environment";
+  await harness.startSession([], "new");
+  let personalCalls = 0;
+  globalThis.fetch = (async (_input, init) => {
+    const headers = init?.headers as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer cdxut_synthetic-personal-session");
+    personalCalls++;
+    return new Response(JSON.stringify({ data: {} }), { status: 200 });
+  }) as typeof fetch;
+  const personalResult = await runQuery();
+  assert.match(String(personalResult.content[0].text), /query/i);
+  assert.equal(personalCalls, 1, "registered integration calls use the configured PERSONAL token and profile");
   await harness.shutdownSession();
 } finally {
   core.__test.setCredentialProviderForTests();
   globalThis.fetch = fetchBefore;
-  for (const [key, value] of [["CODECKS_PROFILE_ORG_TOKEN", orgTokenBefore], ["CODECKS_PROFILE_PERSONAL_TOKEN", personalTokenBefore], ["CODECKS_PROFILE", startupProfileBefore], ["CODECKS_ACCOUNT", accountBefore]] as const) {
+  for (const [key, value] of [["CODECKS_PROFILE_ORG_TOKEN", orgTokenBefore], ["CODECKS_PROFILE_PERSONAL_TOKEN", personalTokenBefore], ["CODECKS_PROFILE", startupProfileBefore], ["CODECKS_CREDENTIAL_PROVIDER", providerBefore], ["CODECKS_ACCOUNT", accountBefore]] as const) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
 }

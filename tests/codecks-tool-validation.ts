@@ -1,3 +1,5 @@
+import { classifyDeckDescriptionReadback, isExactTestDeck } from "./integration-deck-safety.ts";
+
 const TEST_PREFIX = "[tool-test]";
 const DEFAULT_API_BASE = "https://api.codecks.io";
 const TEST_PROFILE = (process.env.CODECKS_TEST_PROFILE ?? process.env.CODECKS_PROFILE ?? "").trim();
@@ -96,7 +98,7 @@ type DeckRef = {
   id?: string | number;
   accountSeq?: number;
   title?: string;
-  description: string;
+  description?: string;
 };
 
 type CardRef = {
@@ -694,7 +696,7 @@ const queryDeckByReference = async (value: string): Promise<DeckRef | undefined>
       id: deck.id as string | number | undefined,
       accountSeq: typeof deck.accountSeq === "number" ? deck.accountSeq : undefined,
       title: typeof deck.title === "string" ? deck.title : undefined,
-      description: typeof deck.description === "string" ? deck.description : "",
+      description: typeof deck.description === "string" ? deck.description : deck.description === null ? "" : undefined,
     }));
 
   if (/^\d+$/.test(trimmed)) {
@@ -940,56 +942,70 @@ const run = async (): Promise<number> => {
   info(`using deck '${CREATE_DECK_ENV}' -> id '${String(deckId)}'`);
 
   const originalDeck = await queryDeckByReference(CREATE_DECK_ENV);
-  if (!originalDeck) {
-    hardFailures += 1;
-    fail(`unable to read disposable deck description for CODECKS_TEST_DECK='${CREATE_DECK_ENV}'`);
-  } else {
-    const temporaryDescription = `pi-codecks integration validation ${runTag}`;
-    let updateAttempted = false;
-    try {
-      updateAttempted = true;
-      const updateResult = await invokeTool("deck_update", {
-        deckId: CREATE_DECK_ENV,
-        description: temporaryDescription,
-        format: "json",
-      });
-      if (!structuredOk(updateResult)) {
-        hardFailures += 1;
-        fail(`deck_update failed: ${updateResult}`);
-      } else {
-        const updatedDeck = await queryDeckByReference(String(originalDeck.id ?? CREATE_DECK_ENV));
-        if (updatedDeck?.description === temporaryDescription) {
-          pass("deck_update edits the disposable deck description");
-        } else {
-          hardFailures += 1;
-          fail("deck_update returned success but the disposable deck description did not match");
-        }
-      }
-    } catch (error) {
-      hardFailures += 1;
-      fail(`deck_update live validation failed: ${(error as Error).message}`);
-    } finally {
-      if (updateAttempted) {
-        try {
-          const restoreResult = await invokeTool("deck_update", {
-            deckId: originalDeck.id ?? CREATE_DECK_ENV,
-            description: originalDeck.description,
-            format: "json",
-          });
-          const restoredDeck = await queryDeckByReference(String(originalDeck.id ?? CREATE_DECK_ENV));
-          if (structuredOk(restoreResult) && restoredDeck?.description === originalDeck.description) {
-            pass("deck_update restored the disposable deck's original description");
-          } else {
-            hardFailures += 1;
-            fail(`deck_update could not verify restoration of the original deck description: ${restoreResult}`);
-          }
-        } catch (error) {
-          hardFailures += 1;
-          fail(`deck_update restoration failed: ${(error as Error).message}`);
-        }
-      }
-    }
+  if (!isExactTestDeck(originalDeck, deckId)) {
+    fail("Configured mutation deck must uniquely resolve to the exact Test deck with readable description; no writes attempted.");
+    return 1;
   }
+  const baselineDeck = Object.freeze({ ...originalDeck });
+  const temporaryDescription = `pi-codecks integration validation ${runTag}`;
+  let updateResult: string | undefined;
+  try {
+    updateResult = await invokeTool("deck_update", {
+      deckId: baselineDeck.id,
+      description: temporaryDescription,
+      format: "json",
+    });
+  } catch (error) {
+    fail(`deck_update returned an uncertain error; checking exact Test deck readback: ${(error as Error).message}`);
+  }
+  let updateReadback: DeckRef | undefined;
+  try {
+    updateReadback = await queryDeckByReference(String(baselineDeck.id));
+  } catch {
+    fail("Could not read back exact Test deck after update attempt; stopping without restoration or further writes.");
+    return 1;
+  }
+  const updateState = classifyDeckDescriptionReadback(baselineDeck, updateReadback, temporaryDescription);
+  if (updateState === "unsafe") {
+    fail("Exact Test deck description differs from both captured baseline and this run's unique temporary value, or metadata is incomplete; stopping without restoration or further writes.");
+    return 1;
+  }
+  if (updateState === "baseline") {
+    if (structuredOk(updateResult ?? "")) {
+      fail("deck_update claimed success but exact Test deck description did not change; no restoration needed; stopping.");
+    } else {
+      fail(`deck_update did not change exact Test deck description (${structuredErrorCategory(updateResult ?? "") ?? "uncertain outcome"}); no restoration needed; stopping.`);
+    }
+    return 1;
+  }
+  // Readback proves this run's unique temporary value; the immutable original is safe to restore once.
+  info("Exact Test deck has this run's temporary description; restoring captured baseline once.");
+  let restoreResult: string | undefined;
+  try {
+    restoreResult = await invokeTool("deck_update", {
+      deckId: baselineDeck.id,
+      description: baselineDeck.description,
+      format: "json",
+    });
+  } catch {
+    fail("deck_update restoration returned an uncertain error; checking exact Test deck readback.");
+  }
+  let restoreReadback: DeckRef | undefined;
+  try {
+    restoreReadback = await queryDeckByReference(String(baselineDeck.id));
+  } catch {
+    fail("Could not verify exact Test deck restoration; stopping without further writes.");
+    return 1;
+  }
+  if (classifyDeckDescriptionReadback(baselineDeck, restoreReadback, temporaryDescription) !== "baseline") {
+    fail("Exact Test deck original description was not read back; stopping without further writes.");
+    return 1;
+  }
+  if (!structuredOk(updateResult ?? "") || !structuredOk(restoreResult ?? "")) {
+    fail("Exact Test deck description was restored, but update or restoration had a non-success response; stopping without further writes.");
+    return 1;
+  }
+  pass("deck_update changed the disposable Test deck description and restored its captured original with exact readback");
 
   try {
     const createResponse = await runDispatch("cards/create", {
