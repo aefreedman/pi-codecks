@@ -2,7 +2,7 @@
 description: Show my Codecks inbox as sectioned cards with owners and latest-message participants.
 ---
 
-List my attention-worthy Codecks resolvables using `codecks_list_logged_in_user_actionable_resolvables`.
+This is a personal-identity workflow. If the user explicitly asks for their own inbox, use `codecks_tool_search` to discover `codecks_profile_select`, select PERSONAL for task scope, then list their attention-worthy Codecks resolvables using `codecks_list_logged_in_user_actionable_resolvables`. The selection restores after this task settles. If PERSONAL is not configured, stop with that requirement; do not switch profiles after an authentication failure or use ORG as a substitute.
 
 Format the response in this order:
 1. New activity

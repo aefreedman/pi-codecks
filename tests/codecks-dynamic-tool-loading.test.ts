@@ -59,11 +59,11 @@ function serializedActiveMetadataCharacters(harness: PiToolHarness): number {
 }
 
 async function main(): Promise<void> {
-  assert.equal(publicToolNames.length, 43, "the default surface must include 43 tools");
+  assert.equal(publicToolNames.length, 44, "the default surface must include 44 tools");
 
   await withMode(undefined, async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.equal(harness.registry.size, 44, "43 default Codecks tools plus the loader should be registered");
+    assert.equal(harness.registry.size, 45, "44 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
   });
@@ -93,6 +93,8 @@ async function main(): Promise<void> {
     assert.deepEqual(result.details.added, ["codecks_milestone_get"]);
   });
 
+  assert.deepEqual(searchCodecksTools({ query: "select personal Codecks profile" }).map((match) => match.name), ["codecks_profile_select"]);
+  assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_profile_select"] }).map((match) => match.name), ["codecks_profile_select"]);
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_card_update_status"] }).map((match) => match.name), ["codecks_card_update_status"]);
   assert.deepEqual(searchCodecksTools({ toolNames: ["codecks_card_get"], query: "update milestone description" }).map((match) => match.name), ["codecks_card_get"], "exact toolNames are an allow-list even when a conflicting query is supplied");
   assert.deepEqual(searchCodecksTools({ query: "formatted card presentation" }).map((match) => match.name), ["codecks_card_get_formatted"]);
@@ -208,7 +210,7 @@ async function main(): Promise<void> {
     }
     assert(harness.registry.get(CODECKS_TOOL_SEARCH_NAME)?.promptGuidelines?.length, "loader retains universal safety policy");
     const balancedCharacters = serializedActiveMetadataCharacters(harness);
-    assert.equal(balancedCharacters, 6743, "balanced metadata measurement should remain reproducible");
+    assert.equal(balancedCharacters, 7097, "balanced metadata measurement should remain reproducible");
     assert(balancedCharacters <= 38478 * 0.25, "balanced initial metadata must be at least 75% smaller than the untouched baseline");
   });
 

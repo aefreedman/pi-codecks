@@ -10,11 +10,11 @@ const fixture = path.resolve("tests/fixtures/codecks-external-helper.mjs");
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-external-helper-"));
 const capturePath = path.join(tempRoot, "capture.json");
 const counterPath = path.join(tempRoot, "counter.txt");
-const sentinel = "inert-helper-token";
+const sentinel = "cdxat_synthetic-helper-token";
 const ENV_KEYS = [
-  "CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_PROFILE", "CODECKS_PROFILE_ALPHA_PROD_ACCOUNT",
-  "CODECKS_PROFILE_ALPHA_PROD_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_API_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF",
-  "CODECKS_TOKEN_REF", "CODECKS_TOKEN_OP_REF", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE", "PI_CODECKS_HELPER_MODE",
+  "CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_PROFILE", "CODECKS_PROFILE_ORG_ACCOUNT",
+  "CODECKS_PROFILE_ORG_TOKEN", "CODECKS_PROFILE_ORG_API_TOKEN", "CODECKS_PROFILE_ORG_TOKEN_REF", "CODECKS_PROFILE_ORG_TOKEN_OP_REF",
+  "CODECKS_TOKEN_REF", "CODECKS_TOKEN_OP_REF", "CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE", "CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE", "PI_CODECKS_HELPER_MODE",
   "PI_CODECKS_HELPER_CAPTURE_PATH", "PI_CODECKS_HELPER_COUNTER_PATH", "PI_CODECKS_HELPER_MANAGER_SETTING",
 ] as const;
 const saved = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -31,14 +31,17 @@ try {
   clearEnvironment();
   process.env.CODECKS_ACCOUNT = "helper-account";
   process.env.CODECKS_TOKEN = "ambient-token-must-not-reach-helper";
-  process.env.CODECKS_PROFILE = "alpha-prod";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_ACCOUNT = "profile-helper-account";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN = "profile-token-must-not-reach-helper";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF = "reference-must-not-reach-helper";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_API_TOKEN = "profile-api-token-must-not-reach-helper";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF = "profile-operation-reference-must-not-reach-helper";
+  process.env.CODECKS_PROFILE = "ORG";
+  process.env.CODECKS_PROFILE_ORG_ACCOUNT = "profile-helper-account";
+  process.env.CODECKS_PROFILE_ORG_TOKEN = "profile-token-must-not-reach-helper";
+  process.env.CODECKS_PROFILE_ORG_TOKEN_REF = "reference-must-not-reach-helper";
+  process.env.CODECKS_PROFILE_ORG_API_TOKEN = "profile-api-token-must-not-reach-helper";
+  process.env.CODECKS_PROFILE_ORG_TOKEN_OP_REF = "profile-operation-reference-must-not-reach-helper";
   process.env.CODECKS_TOKEN_REF = "global-reference-must-not-reach-helper";
   process.env.CODECKS_TOKEN_OP_REF = "global-operation-reference-must-not-reach-helper";
+  process.env.CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE = "synthetic-org-reference-not-for-helper";
+  process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE = "synthetic-personal-reference-not-for-helper";
+  process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "synthetic-global-reference-not-for-helper";
   process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
   process.env.CODECKS_CREDENTIAL_HELPER_MODULE = fixture;
   process.env.PI_CODECKS_HELPER_CAPTURE_PATH = capturePath;
@@ -49,13 +52,13 @@ try {
   globalThis.fetch = (async (_input, init) => {
     fetchCalls += 1;
     assert.equal((init?.headers as Record<string, string>)["X-Account"], "profile-helper-account");
-    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], sentinel);
+    assert.equal((init?.headers as Record<string, string>)["Authorization"], `Bearer ${sentinel}`);
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
   assert.equal(fetchCalls, 1, "normal Codecks requests accept a helper credential");
   const capture = JSON.parse(readFileSync(capturePath, "utf8"));
-  assert.equal(capture.requestText, JSON.stringify({ version: 1, service: "codecks", account: "profile-helper-account", profile: "alpha-prod" }));
+  assert.equal(capture.requestText, JSON.stringify({ version: 1, service: "codecks", account: "profile-helper-account", profile: "ORG" }));
   assert.equal(capture.extraArgCount, 0, "helper receives only its module argv");
   assert.deepEqual(capture.codecksCredentialKeys, [], "direct/global/profile credentials and selectors do not reach the helper");
   assert.equal(__externalHelperTest.parseTrustedBuiltInErrorEnvelope(Buffer.from('{"version":1,"kind":"credential_error","category":"rate_limited"}')), "credential_rate_limited");
@@ -66,6 +69,8 @@ try {
     CoDeCkS_ApI_ToKeN: "mixed-api",
     CODECKS_token_ref: "mixed-reference",
     codecks_TOKEN_OP_REF: "mixed-operation-reference",
+    CoDeCkS_PrOfIlE_Personal_OnePassword_Reference: "mixed-personal-reference",
+    Pi_CoDeCkS_OnePassword_Reference: "mixed-global-reference",
     cOdEcKs_PrOfIlE_AlPhA_ToKeN: "mixed-profile",
     CODECKS_profile_alpha_API_TOKEN: "mixed-profile-api",
     codecks_PROFILE_ALPHA_token_ref: "mixed-profile-reference",
@@ -97,7 +102,7 @@ try {
   }
   process.env.PI_CODECKS_HELPER_MODE = "stderr";
   assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), {
-    account: "profile-helper-account", baseUrl: "https://api.codecks.io", token: sentinel,
+    account: "profile-helper-account", baseUrl: "https://api.codecks.io", token: sentinel, kind: "ORG", profileKey: "ORG",
   }, "helper stderr is ignored on success");
   process.env.PI_CODECKS_HELPER_MODE = "stderr-oversized";
   await expectFailure(core.__test.resolveAuthenticatedConfig(), "External Codecks credential helper is unavailable.");

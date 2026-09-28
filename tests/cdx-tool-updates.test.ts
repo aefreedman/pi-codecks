@@ -822,7 +822,7 @@ const testConcreteMutationRejectsRootErrors = async (tools: ToolModule): Promise
     assert.equal(error.category, "api_error");
     assert.match(String(error.message), /semantic error/i);
     assert.doesNotMatch(result, /mutation-secret/);
-    assert.match(result, /\[REDACTED\]/);
+    assert.match(result, /outcome|do not replay/i);
   });
 };
 

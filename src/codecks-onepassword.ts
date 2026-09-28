@@ -79,16 +79,25 @@ const reuseTtlMs = (): number =>
 const privateConfigurationKey = (request: Request, executable: string, secretReference: string): string =>
     createHash("sha256").update(JSON.stringify({
         account: request.account,
-        profileKey: request.profileKey ?? null,
+        profileKey: profileKey(request),
         baseUrl: request.baseUrl ?? process.env.CODECKS_API_BASE ?? null,
         executable,
         secretReference,
         serviceAccountToken: process.env.OP_SERVICE_ACCOUNT_TOKEN ?? null,
     })).digest("hex");
 
-const reference = (): string =>
+const profileKey = (request: Request): string =>
 {
-    const value = process.env.PI_CODECKS_ONEPASSWORD_REFERENCE?.trim();
+    const value = request.profileKey ?? "ORG";
+    if (!/^[a-z0-9_-]+$/i.test(value)) fail();
+    return value.replace(/-/g, "_").toUpperCase();
+};
+
+const reference = (request: Request): string =>
+{
+    const selected = process.env[`CODECKS_PROFILE_${profileKey(request)}_ONEPASSWORD_REFERENCE`];
+    // An explicitly configured but empty profile reference must not select the global secret.
+    const value = (selected === undefined ? process.env.PI_CODECKS_ONEPASSWORD_REFERENCE : selected)?.trim();
     if (!value) fail();
     return value;
 };
@@ -98,10 +107,10 @@ export const evictOnePasswordCredentialGeneration = (generation: unknown): void 
 export const resolveOnePasswordCredential = async (request: Request): Promise<{ token: string; providerId: "onepassword"; credentialGeneration?: string }> =>
 {
     const executable = resolveOnePasswordExecutable();
-    const secretReference = reference();
+    const secretReference = reference(request);
     const key = privateConfigurationKey(request, executable, secretReference);
     const ttlMs = reuseTtlMs();
-    const scope = createHash("sha256").update(JSON.stringify([request.account, request.profileKey ?? null])).digest("hex");
+    const scope = createHash("sha256").update(JSON.stringify([request.account, profileKey(request)])).digest("hex");
     // Capture effective environment now; asynchronous work must never adopt a later configuration.
     const environment: NodeJS.ProcessEnv = { ...process.env, PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE: executable, PI_CODECKS_ONEPASSWORD_REFERENCE: secretReference };
     const resolver = testResolver;

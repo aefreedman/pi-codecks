@@ -79,7 +79,8 @@ const isCodecksCredentialEnvironmentKey = (key: string): boolean =>
 {
     const normalized = key.toUpperCase();
     return /^CODECKS_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
-        || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
+        || normalized === "PI_CODECKS_ONEPASSWORD_REFERENCE"
+        || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF|ONEPASSWORD_REFERENCE)$/.test(normalized)
         || ["CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE"].includes(normalized);
 };
 
@@ -357,7 +358,9 @@ export const resolveExternalHelperCredential = async (
         {
             child = spawnProcess(process.execPath, [modulePath], {
                 cwd: process.cwd(),
-                env: sanitizeHelperEnvironment(options.environment ?? process.env),
+                env: options.providerId === "onepassword" && options.trustedBuiltInErrorEnvelope
+                    ? { ...sanitizeHelperEnvironment(options.environment ?? process.env), PI_CODECKS_ONEPASSWORD_REFERENCE: options.environment?.PI_CODECKS_ONEPASSWORD_REFERENCE }
+                    : sanitizeHelperEnvironment(options.environment ?? process.env),
                 shell: false,
                 detached: process.platform !== "win32",
                 windowsHide: true,

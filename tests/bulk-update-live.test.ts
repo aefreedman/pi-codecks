@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import * as core from "../src/codecks-core.ts";
+import { formatLiveErrorEvidence } from "./live-error-evidence.ts";
 
 type Row = Record<string, unknown>;
 const object = (value: unknown): Row => {
@@ -11,11 +12,11 @@ let credentialFailure = false;
 async function call(tool: { execute: (args: Row) => Promise<unknown> }, args: Row): Promise<Row> {
   let raw: unknown;
   try {
-    raw = await core.runWithAbortSignal(undefined, () => tool.execute({ ...args, format: "json" }), process.cwd());
+    raw = await core.runWithAbortSignal(undefined, () => tool.execute({ ...args, format: "json" }), process.cwd(), undefined, "PERSONAL");
   } catch (error) {
     const category = error && typeof error === "object" && "category" in error ? String(error.category) : "unknown";
     credentialFailure ||= /credential|auth/.test(category);
-    console.error(`Transport failure category: ${category}`);
+    console.error(`Transport failure: ${formatLiveErrorEvidence({ category })}; outcome may be uncertain.`);
     throw error;
   }
   const match = String(raw).match(/```json\s*([\s\S]*?)\s*```/);
@@ -25,6 +26,7 @@ async function call(tool: { execute: (args: Row) => Promise<unknown> }, args: Ro
     const error = object(result.error);
     const category = String(error.category ?? error.code ?? "unknown");
     credentialFailure = /credential|auth/.test(category);
+    console.error(`Tool rejection evidence: ${formatLiveErrorEvidence(error)}; no write is retried.`);
     throw new Error(`Tool failed (${category}); no write is retried.`);
   }
   const data = result.ok === true ? object(result.data) : result;
@@ -38,6 +40,7 @@ async function call(tool: { execute: (args: Row) => Promise<unknown> }, args: Ro
 }
 
 async function run(): Promise<void> {
+  assert.equal(process.env.CODECKS_TEST_PROFILE, "PERSONAL", "explicit CODECKS_TEST_PROFILE=PERSONAL is required before any live request");
   assert.equal(process.env.CODECKS_TEST_DECK, "Test", "explicit CODECKS_TEST_DECK=Test is required");
   assert.ok(process.env.CODECKS_TEST_MILESTONE, "select an existing milestone for temporary fixture membership");
   const deck = await call(core.deck_get, { deckId: "Test" });

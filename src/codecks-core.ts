@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { resolveExternalHelperCredential } from "./codecks-external-helper";
 import { evictOnePasswordCredentialGeneration, resolveOnePasswordCredential } from "./codecks-onepassword";
@@ -31,6 +31,8 @@ type CodecksConfig = {
     baseUrl: string;
     credentialProviderId?: string;
     credentialGeneration?: unknown;
+    kind: "ORG" | "PERSONAL";
+    profileKey: string;
 };
 
 type CodecksFetch = typeof fetch;
@@ -108,7 +110,7 @@ const accountScanWaiters: Array<{ resolve: (queueWaitMs: number) => void; reject
 class CodecksOperationError extends Error
 {
     constructor(
-        readonly category: "caller_aborted" | "rate_limit_queue_aborted" | "request_timeout" | "rate_limited" | "scan_queue_full" | "response_too_large" | "invalid_response_stream" | "api_error",
+        readonly category: "caller_aborted" | "rate_limit_queue_aborted" | "request_timeout" | "rate_limited" | "scan_queue_full" | "response_too_large" | "invalid_response_stream" | "api_error" | "unsupported_token" | "credential_profile_mismatch" | "personal_token_required" | "org_actor_unverified" | "authentication_rejected" | "account_mismatch" | "missing_scope" | "forbidden",
         message: string,
         readonly details: Record<string, unknown> = {},
     )
@@ -277,6 +279,7 @@ type OperationContext = {
     localGateWaitMs: number;
     serverCooldownWaitMs: number;
     credentialConfigPromise?: Promise<CodecksConfig>;
+    profileKey?: string;
     progressSnapshot?: { startedAt: number; stage: string; recordsProcessed: number; results: Record<string, unknown>[]; rateLimit?: Pick<BulkMutationProgress, "recordIndex" | "recordCount" | "retryAttempt" | "retryMax" | "retryAfterMs" | "retryAfterFormat" | "retryAfterParseStatus" | "retryAfterReason" | "rateLimitError" | "consecutive429"> };
 };
 
@@ -288,14 +291,15 @@ const getActiveAbortSignal = (): AbortSignal | undefined => abortSignalStorage.g
 const getActiveWorkspaceRoot = (): string => workspaceRootStorage.getStore() ?? process.cwd();
 const getOperationContext = (): OperationContext | undefined => operationContextStorage.getStore();
 
-const createOperationContext = (onBulkMutationProgress?: (progress: BulkMutationProgress) => void): OperationContext => ({ onBulkMutationProgress, requestsAttempted: 0, requestsDispatched: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
+const createOperationContext = (onBulkMutationProgress?: (progress: BulkMutationProgress) => void, profileKey?: string): OperationContext => ({ onBulkMutationProgress, profileKey, requestsAttempted: 0, requestsDispatched: 0, queueWaitMs: 0, localGateWaitMs: 0, serverCooldownWaitMs: 0 });
 
 export const runWithAbortSignal = async <T>(
     signal: AbortSignal | undefined,
     fn: () => Promise<T>,
     workspaceRoot?: string,
     onBulkMutationProgress?: (progress: BulkMutationProgress) => void,
-): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run(createOperationContext(onBulkMutationProgress), fn)));
+    profileKey?: string,
+): Promise<T> => abortSignalStorage.run(signal, () => workspaceRootStorage.run(workspaceRoot, () => operationContextStorage.run(createOperationContext(onBulkMutationProgress, profileKey), fn)));
 
 const withOperationContextIfMissing = <T>(fn: () => Promise<T>): Promise<T> =>
     getOperationContext() ? fn() : operationContextStorage.run(createOperationContext(), fn);
@@ -480,7 +484,8 @@ type CodecksBaseConfig = {
 
 const getBaseConfig = (): CodecksBaseConfig =>
 {
-    const profileKey = normalizeProfileKey(process.env.CODECKS_PROFILE);
+    const profileKey = normalizeProfileKey(getOperationContext()?.profileKey ?? process.env.CODECKS_PROFILE ?? "ORG")?.toUpperCase();
+    if (profileKey !== "ORG" && profileKey !== "PERSONAL") throw new Error("Codecks profile must be ORG or PERSONAL.");
     const profileAccount = profileKey
         ? firstNonEmpty(getProfileEnv(profileKey, "ACCOUNT"), getProfileEnv(profileKey, "SUBDOMAIN"))
         : undefined;
@@ -490,7 +495,7 @@ const getBaseConfig = (): CodecksBaseConfig =>
 
     if (!account)
     {
-        if (profileKey)
+        if (profileKey && profileKey !== "ORG")
         {
             throw new Error(`Missing Codecks account for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_ACCOUNT.`);
         }
@@ -512,10 +517,10 @@ const environmentCredentialProvider: CodecksCredentialProvider = {
             throwUnsupportedTokenRef(profileKey ?? "default");
         }
 
-        const token = firstNonEmpty(profileTokenDirect, globalToken);
+        const token = firstNonEmpty(profileTokenDirect, profileKey === "PERSONAL" ? undefined : globalToken);
         if (!token)
         {
-            if (profileKey)
+            if (profileKey && profileKey !== "ORG")
             {
                 throw new Error(`Missing Codecks token for profile '${profileKey}'. Set CODECKS_PROFILE_${toProfileSegment(profileKey)}_TOKEN.`);
             }
@@ -573,10 +578,16 @@ const resolveAuthenticatedConfig = async (): Promise<CodecksConfig> =>
         baseUrl: base.baseUrl,
         signal,
     });
+    const kind = credential.token.startsWith("cdxat_") ? "ORG" : credential.token.startsWith("cdxut_") ? "PERSONAL" : undefined;
+    if (!kind) throw new CodecksOperationError("unsupported_token", "Unsupported Codecks token format. Configure a cdxat_ organization or cdxut_ personal API token.");
+    if (kind !== base.profileKey) throw new CodecksOperationError("credential_profile_mismatch", "Codecks token kind does not match the selected profile.", { profile: base.profileKey, tokenKind: kind });
     return {
         account: base.account,
         baseUrl: base.baseUrl,
         token: credential.token,
+        kind,
+        profileKey: base.profileKey!,
+
         ...(credential.providerId === "onepassword" ? { credentialProviderId: credential.providerId } : {}),
         ...(credential.credentialGeneration !== undefined ? { credentialGeneration: credential.credentialGeneration } : {}),
     };
@@ -980,6 +991,13 @@ type ErrorCategory =
     | "response_too_large"
     | "invalid_response_stream"
     | "file_error"
+    | "unsupported_token"
+    | "credential_profile_mismatch"
+    | "personal_token_required"
+    | "org_actor_unverified"
+    | "authentication_rejected"
+    | "account_mismatch"
+    | "missing_scope"
     | "api_error";
 
 const toStructuredErrorResult = (
@@ -1017,10 +1035,10 @@ const toErrorMessage = (error: unknown): string =>
 {
     if (error instanceof Error)
     {
-        return error.message;
+        return sanitizeValue(error.message);
     }
 
-    return String(error ?? "Unknown error");
+    return sanitizeValue(String(error ?? "Unknown error"));
 };
 
 const sanitizeValue = (value: string): string =>
@@ -1028,6 +1046,7 @@ const sanitizeValue = (value: string): string =>
     return value
         .replace(/(OP_SERVICE_ACCOUNT_TOKEN\s*[=:]\s*)[^\s;]+/gi, "$1[REDACTED]")
         .replace(/(Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\r\n]+/gi, "$1: [REDACTED]")
+        .replace(/\bcdx(?:at|ut)_[a-z0-9_-]+\b/gi, "[REDACTED]")
         .replace(/(X-Auth-Token|X-Api-Key|Api-Key)\s*[:=]\s*[^\s;]+/gi, "$1: [REDACTED]")
         .replace(/\bat=([^;\s]+)/gi, "at=[REDACTED]")
         .replace(/\b(access_token|refresh_token|token|credential|password|secret)\b\s*[:=]\s*['\"]?[^'\"\s,;}]+/gi, "$1: [REDACTED]")
@@ -1112,6 +1131,13 @@ const classifyApiErrorCategory = (message: string): ErrorCategory =>
         return "rate_limited";
     }
 
+    if (/personal_token_required|Personal API token is required/i.test(message)) return "personal_token_required";
+    if (/org_actor_unverified|organization-token actor behavior is unverified/i.test(message)) return "org_actor_unverified";
+    if (/credential_profile_mismatch|token kind does not match/i.test(message)) return "credential_profile_mismatch";
+    if (/unsupported_token|Unsupported Codecks token format/i.test(message)) return "unsupported_token";
+    if (/missing_scope/i.test(message)) return "missing_scope";
+    if (/token_account_mismatch/i.test(message)) return "account_mismatch";
+    if (/invalid_token|token_expired|not_a_member|user_api_tokens_disabled|\b401\b/i.test(message)) return "authentication_rejected";
     if (/\b403\b|forbidden/i.test(message))
     {
         return "forbidden";
@@ -1133,7 +1159,7 @@ const classifyApiErrorCategory = (message: string): ErrorCategory =>
 const getOperationErrorData = (error: unknown): Record<string, unknown> => error instanceof CodecksCredentialError
     ? credentialErrorData(error)
     : error instanceof CodecksOperationError
-        ? { ...error.details, recoveryHint: error.details.recoveryHint ?? "Retry sequentially with a narrower scope." }
+        ? { ...error.details }
         : {};
 
 const truncateStructuredValue = (
@@ -2028,7 +2054,7 @@ const normalizeUserId = (value: string): string => value.trim().toLowerCase();
 
 const getFallbackAssigneeId = (): string | number | undefined =>
 {
-    const profileKey = normalizeProfileKey(process.env.CODECKS_PROFILE);
+    const profileKey = getBaseConfig().profileKey;
     const profileValue = profileKey ? firstNonEmpty(getProfileEnv(profileKey, "DEFAULT_ASSIGNEE_ID")) : undefined;
     const raw = firstNonEmpty(profileValue, process.env.CODECKS_DEFAULT_ASSIGNEE_ID);
     if (!raw || String(raw).trim().length === 0)
@@ -2423,9 +2449,101 @@ const detectContentType = (filePath: string, override?: string): string =>
     return map[ext] ?? "application/octet-stream";
 };
 
+const codecksAuthHeaders = (config: CodecksConfig): Record<string, string> => ({
+    Authorization: `Bearer ${config.token}`,
+    "X-Account": config.account,
+});
+
+const safeApiDiagnostic = (value: unknown, credential: string): string | undefined =>
+{
+    if (typeof value !== "string" || !value.trim()) return undefined;
+    if (/<\s*[a-z!/][^>]*>/i.test(value)) return "HTML error response (details withheld)";
+    if (/\b(?:authorization|cookie|set-cookie|x-auth-token|x-api-key)\s*[:=]/i.test(value)) return undefined;
+    const withoutCredential = credential ? value.split(credential).join("[REDACTED]") : value;
+    const clean = sanitizeValue(withoutCredential)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x1f\x7f-\x9f]/g, " ")
+        .replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[REDACTED]")
+        .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "[REDACTED]")
+        .replace(/https?:\/\/\S+/gi, "[REDACTED]")
+        .replace(/\b[a-z0-9_-]{32,}\b/gi, "[REDACTED]")
+        .replace(/\b\d{6,}\b/g, "[REDACTED]")
+        .replace(/\s+/g, " ").trim().slice(0, 240);
+    return clean || undefined;
+};
+
+const boundedApiErrorShape = (payload: unknown, credential: string): Array<{ path: string; type: string; count?: number }> =>
+{
+    const shape: Array<{ path: string; type: string; count?: number }> = [];
+    const visit = (value: unknown, path: string, depth: number): void =>
+    {
+        if (shape.length >= 20 || depth > 3) return;
+        const type = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
+        shape.push({ path, type, ...(Array.isArray(value) ? { count: Math.min(value.length, 100) } : {}) });
+        if (Array.isArray(value)) { for (const item of value.slice(0, 3)) visit(item, `${path}[]`, depth + 1); }
+        else if (isRecord(value)) for (const [key, item] of Object.entries(value).slice(0, 20))
+        {
+            if (!/^[a-z_$][a-z0-9_$-]{0,39}$/i.test(key) || (credential && key.includes(credential))
+                || /^cdx(?:at|ut)_/i.test(key) || /authorization|cookie|token|credential|password|secret|request|header|payload|body|raw|value|data/i.test(key)) continue;
+            visit(item, `${path}.${key}`, depth + 1);
+        }
+    };
+    visit(payload, "$", 0);
+    return shape;
+};
+
+const apiFailure = (response: Response, payload: unknown, path: string, retryPolicy: CodecksRequestRetryPolicy = "read-only", requestsAttempted = 1, credential = ""): CodecksOperationError =>
+{
+    const object = isRecord(payload) ? payload : {};
+    const nested = isRecord(object.error) ? object.error : Array.isArray(object.errors) && isRecord(object.errors[0]) ? object.errors[0] : object;
+    const knownCodes = ["missing_scope", "token_account_mismatch", "invalid_token", "token_expired", "not_a_member", "user_api_tokens_disabled"];
+    const explicitCode = typeof nested.code === "string" && /^[a-z_]{1,80}$/i.test(nested.code) && sanitizeValue(nested.code) === nested.code ? nested.code : undefined;
+    const errorString = typeof object.error === "string" && /^[a-z_]{1,80}$/i.test(object.error) && sanitizeValue(object.error) === object.error ? object.error : undefined;
+    const messageCode = typeof nested.message === "string" && knownCodes.includes(nested.message) ? nested.message
+        : typeof object.message === "string" && knownCodes.includes(object.message) ? object.message : undefined;
+    const code = explicitCode ?? errorString ?? messageCode;
+    const rawScope = nested.requiredScope ?? nested.required_scope ?? object.requiredScope ?? object.required_scope;
+    const scope = typeof rawScope === "string" && /^[a-z0-9:_-]{1,100}$/i.test(rawScope) && sanitizeValue(rawScope) === rawScope ? rawScope : undefined;
+    const rawApiPath = nested.path ?? object.path;
+    const apiPath = typeof rawApiPath === "string" && /^[a-z_][a-z0-9_.\[\]-]{0,159}$/i.test(rawApiPath) ? sanitizeValue(rawApiPath) : undefined;
+    const queryValidationCodes = ["invalid_query_shape", "unknown_model", "unknown_field", "unknown_relation", "unknown_operator", "invalid_value", "unknown_special_key", "invalid_order", "invalid_limit", "missing_ids", "relation_takes_no_query", "invalid_aggregate", "missing_scope"];
+    const validationDetails: string[] = [];
+    const collect = (value: unknown, depth = 0): void =>
+    {
+        if (depth > 4 || validationDetails.length >= 3) return;
+        if (typeof value === "string") { const safe = safeApiDiagnostic(value, credential); if (safe && !validationDetails.includes(safe)) validationDetails.push(safe); return; }
+        if (Array.isArray(value)) { for (const item of value.slice(0, 3)) collect(item, depth + 1); return; }
+        if (!isRecord(value)) return;
+        const field = [value.field, value.param, value.property].find(item => typeof item === "string" && /^[a-z][a-z0-9_.\[\]-]{0,79}$/i.test(item) && !/token|credential|password|secret/i.test(item));
+        for (const key of ["message", "detail", "description", "reason", "error", "errors", "validation", "details"])
+        {
+            if (key in value && validationDetails.length < 3) {
+                if (key === "error" && typeof value[key] === "string" && value[key] === code) continue;
+                const before = validationDetails.length;
+                collect(value[key], depth + 1);
+                if (field && validationDetails.length > before) validationDetails[before] = `${field}: ${validationDetails[before]}`.slice(0, 240);
+            }
+        }
+    };
+    if (response.status >= 400 && response.status < 500 && response.status !== 401
+        && (retryPolicy === "non-idempotent-mutation" || queryValidationCodes.includes(code ?? ""))) collect(payload);
+    const validationMessage = validationDetails[0];
+    const category = code === "missing_scope" ? "missing_scope" : code === "token_account_mismatch" ? "account_mismatch"
+        : ["invalid_token", "token_expired", "not_a_member", "user_api_tokens_disabled"].includes(code ?? "") || response.status === 401 ? "authentication_rejected" : response.status === 403 ? "forbidden" : "api_error";
+    return new CodecksOperationError(category, `Codecks API returned HTTP ${response.status}${code ? ` (${code})` : ""}.`, {
+        httpStatus: response.status, path, ...(code ? { apiCode: code } : {}), ...(scope ? { requiredScope: scope } : {}), ...(apiPath ? { apiPath } : {}),
+        ...(validationMessage ? { validationMessage, validationDetails } : {}),
+        ...(retryPolicy === "non-idempotent-mutation" ? { errorShape: boundedApiErrorShape(payload, credential) } : {}),
+        ...(retryPolicy === "non-idempotent-mutation" ? {
+            requestsAttempted, dispatchAttempt: "http_response",
+            mutationCertainty: [400, 401, 403].includes(response.status) ? "definitely_rejected" : "indeterminate",
+        } : {}),
+    });
+};
+
 const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<SignedUploadInfo> =>
 {
     const config = await getAuthenticatedConfig();
+    if (config.kind === "ORG") throw new CodecksOperationError("org_actor_unverified", "Organization-token attachment authorship is unverified; no signing or upload request was sent.");
     const signal = getActiveAbortSignal();
     const fileName = basename(source.canonicalPath);
     const queueWaitMs = await enforceRateLimit();
@@ -2435,14 +2553,12 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
     if (context) context.requestsDispatched++;
     const response = await fetch(`${config.baseUrl}/s3/sign?objectName=${encodeURIComponent(fileName)}`, {
         method: "GET",
-        headers: {
-            "X-Account": config.account,
-            "X-Auth-Token": config.token,
-        },
+        headers: codecksAuthHeaders(config),
         signal,
     });
 
     const retryAfter = observeServerCooldown(response);
+    if (response.status === 401 && config.credentialProviderId === "onepassword") evictOnePasswordCredentialGeneration(config.credentialGeneration);
     if (response.status === 429 && retryAfter.status !== "valid") throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
         httpStatus: 429, retryAfterParseStatus: retryAfter.status, retryAfterReason: retryAfter.reason,
         ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
@@ -2465,8 +2581,6 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
 
     if (!response.ok)
     {
-        const details = sanitizeErrorPayload(payload);
-        const message = `Codecks upload signing failed ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
         if (response.status === 429)
         {
             throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
@@ -2479,7 +2593,7 @@ const requestSignedUpload = async (source: AttachmentSourceSnapshot): Promise<Si
                 recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
             });
         }
-        throw new Error(message);
+        throw apiFailure(response, payload, "/s3/sign", "read-only", 1, config.token);
     }
 
     if (!payload || typeof payload !== "object")
@@ -3549,8 +3663,7 @@ const requestJson = async (
                 ...init,
                 headers: {
                     "Content-Type": "application/json",
-                    "X-Account": config.account,
-                    "X-Auth-Token": config.token,
+                    ...codecksAuthHeaders(config),
                     ...(init.headers ?? {}),
                 },
                 signal: controller.signal,
@@ -3564,7 +3677,8 @@ const requestJson = async (
             {
                 throw new CodecksOperationError("caller_aborted", "Codecks API request cancelled by caller.", {
                     requestsAttempted: attempt + 1,
-                    recoveryHint: "Retry the narrow operation sequentially if it is still needed.",
+                    ...(retryPolicy === "non-idempotent-mutation" ? { path, dispatchAttempt: "outcome_unknown", mutationCertainty: "indeterminate" } : {}),
+                    recoveryHint: retryPolicy === "non-idempotent-mutation" ? "Inspect the exact target before any further write; do not replay." : "Retry the narrow operation sequentially if it is still needed.",
                 });
             }
             const message = toErrorMessage(error);
@@ -3581,10 +3695,14 @@ const requestJson = async (
                 throw new CodecksOperationError("request_timeout", `Codecks API request timed out after ${REQUEST_TIMEOUT_MS}ms.`, {
                     timeoutMs: REQUEST_TIMEOUT_MS,
                     requestsAttempted: attempt + 1,
-                    recoveryHint: "Narrow the scope or lower scanLimit before retrying sequentially.",
+                    ...(retryPolicy === "non-idempotent-mutation" ? { path, dispatchAttempt: "outcome_unknown", mutationCertainty: "indeterminate" } : {}),
+                    recoveryHint: retryPolicy === "non-idempotent-mutation" ? "Inspect the exact target before any further write; do not replay." : "Narrow the scope or lower scanLimit before retrying sequentially.",
                 });
             }
 
+            if (retryPolicy === "non-idempotent-mutation") throw new CodecksOperationError("api_error", "Codecks mutation request outcome is uncertain; do not replay.", {
+                path, requestsAttempted: attempt + 1, dispatchAttempt: "outcome_unknown", mutationCertainty: "indeterminate",
+            });
             throw error;
         }
         finally
@@ -3594,11 +3712,12 @@ const requestJson = async (
         }
 
         const retryAfter = observeServerCooldown(response);
-    if (response.status === 429 && retryAfter.status !== "valid") throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
-        httpStatus: 429, retryAfterParseStatus: retryAfter.status, retryAfterReason: retryAfter.reason,
-        ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
-        recoveryHint: "Retry after the bounded fifteen-second recovery window.",
-    });
+        if (response.status === 429 && retryAfter.status !== "valid") throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
+            httpStatus: 429, retryAfterParseStatus: retryAfter.status, retryAfterReason: retryAfter.reason,
+            ...(retryPolicy === "non-idempotent-mutation" ? { path, requestsAttempted: attempt + 1, dispatchAttempt: "http_response", mutationCertainty: "definitely_rejected" } : {}),
+            ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
+            recoveryHint: "Retry after the bounded fifteen-second recovery window.",
+        });
         // Only a definite HTTP 401 rejects authentication. A 403 can be a
         // permission decision, so it must not evict a reusable credential.
         if (response.status === 401 && config.credentialProviderId === "onepassword")
@@ -3606,7 +3725,14 @@ const requestJson = async (
             evictOnePasswordCredentialGeneration(config.credentialGeneration);
         }
 
-        const text = await readResponseTextBounded(response, maxResponseBytes);
+        let text: string;
+        try { text = await readResponseTextBounded(response, maxResponseBytes); }
+        catch (error) {
+            if (retryPolicy !== "non-idempotent-mutation") throw error;
+            throw new CodecksOperationError(error instanceof CodecksOperationError ? error.category : "invalid_response_stream", "Codecks mutation response could not be read; do not replay.", {
+                path, httpStatus: response.status, requestsAttempted: attempt + 1, dispatchAttempt: "http_response", mutationCertainty: "indeterminate",
+            });
+        }
         let payload: unknown = text;
 
         if (text)
@@ -3626,6 +3752,9 @@ const requestJson = async (
             const rootErrors = getRootSemanticErrors(payload);
             if (rootErrors)
             {
+                if (retryPolicy === "non-idempotent-mutation") throw new CodecksOperationError("api_error", "Codecks mutation returned semantic errors; do not replay.", {
+                    path, httpStatus: response.status, requestsAttempted: attempt + 1, dispatchAttempt: "http_response", mutationCertainty: "indeterminate",
+                });
                 throw new Error(formatRootSemanticError(rootErrors));
             }
             return payload;
@@ -3643,13 +3772,12 @@ const requestJson = async (
             continue;
         }
 
-        const details = sanitizeErrorPayload(payload);
-        const message = `Codecks API error ${response.status} ${response.statusText}${details ? `: ${details}` : ""}`;
         if (response.status === 429)
         {
             throw new CodecksOperationError("rate_limited", "Codecks rejected the request with HTTP 429.", {
                 httpStatus: 429,
                 requestsAttempted: attempt + 1,
+                ...(retryPolicy === "non-idempotent-mutation" ? { path, dispatchAttempt: "http_response", mutationCertainty: "definitely_rejected" } : {}),
                 retryAfterParseStatus: retryAfter.status,
                 ...(retryAfter.requestedMs !== undefined ? { retryAfterMs: retryAfter.requestedMs, retryAfterFormat: retryAfter.format } : {}),
                 ...(retryAfter.reason ? { retryAfterReason: retryAfter.reason } : {}),
@@ -3657,7 +3785,7 @@ const requestJson = async (
                 recoveryHint: "Wait for the server rate-limit window, then retry sequentially.",
             });
         }
-        throw new Error(message);
+        throw apiFailure(response, payload, path, retryPolicy, attempt + 1, config.token);
     }
 };
 
@@ -3687,9 +3815,18 @@ const runExactReadQuery = async (
 const runDispatch = async (
     path: string,
     payload: Record<string, unknown>,
+    verifiedOrgCommentActorId?: string,
 ): Promise<unknown> =>
 {
     const config = await getAuthenticatedConfig();
+    const verifiedOrgComment = config.kind === "ORG" && path === "resolvables/create"
+        && typeof verifiedOrgCommentActorId === "string" && verifiedOrgCommentActorId.length > 0
+        && payload.userId === verifiedOrgCommentActorId && payload.context === "comment"
+        && typeof payload.cardId === "string" && typeof payload.content === "string" && payload.content.length > 0
+        && typeof payload.sessionId === "string" && /^[a-f0-9-]{36}$/i.test(payload.sessionId)
+        && Object.keys(payload).length === 5;
+    if (config.kind === "ORG" && !verifiedOrgComment && (payload.userId !== undefined || /^(?:resolvables|comments|reviews|blocks|attachments)(?:\/|$)|^cards\/addFile$/i.test(path))) throw new CodecksOperationError("org_actor_unverified", "Organization-token actor behavior is unverified for this write; no mutation was sent.", { path });
+    if (config.kind === "ORG" && path === "cards/create" && (payload.userId !== undefined || !payload.deckId || !payload.assigneeId || payload.putOnHand === true)) throw new CodecksOperationError("org_actor_unverified", "Organization-token actor behavior is unverified for deckless, hand, or implicit-author card creation; no mutation was sent.", { path });
     return requestJson(`/dispatch/${path}`, {
         method: "POST",
         body: JSON.stringify(payload),
@@ -3817,6 +3954,8 @@ const handCardFields = [
     { user: ["id", "name", "fullName"] },
 ];
 
+const ACCOUNT_IDENTITY_QUERY = Object.freeze({ _root: [{ account: ["id"] }] });
+
 const LOGGED_IN_USER_IDENTITY_QUERY = Object.freeze({
     _root: [
         {
@@ -3838,37 +3977,44 @@ const isExplicitlyEmptyIdentity = (value: unknown): boolean =>
     value === null || value === undefined || value === "";
 
 /**
- * The exact identity query convention makes an explicitly present `null`,
- * `undefined`, or literal empty-string `loggedInUser` relation an
- * authentication rejection. A missing relation is deliberately not treated the
- * same way: it could indicate an incompatible or truncated response, so it
- * remains malformed rather than masking that fault.
+ * The account identity query accepts inline account objects or normalized
+ * relation IDs resolved through the account entity map. An explicitly present
+ * null or literal empty relation is rejection; a missing or unresolvable
+ * relation remains malformed rather than masking an incompatible response.
  */
 const classifyExternalProviderIdentityPayload = (payload: unknown): CodecksExternalProviderCheckCategory =>
 {
     const data = unwrapData(payload);
-    if (!isRecord(data) || !isRecord(data._root))
-    {
-        return "malformed_response";
-    }
-
+    if (!isRecord(data) || !isRecord(data._root)) return "malformed_response";
     const root = data._root;
-    if (!Object.prototype.hasOwnProperty.call(root, "loggedInUser"))
-    {
-        return "malformed_response";
-    }
+    if (!Object.prototype.hasOwnProperty.call(root, "account")) return "malformed_response";
+    if (isExplicitlyEmptyIdentity(root.account)) return "authentication_rejected";
+    const reference = root.account;
+    const accountMap = data.account;
+    const normalizedRef = typeof reference === "string" ? reference.trim().toLowerCase() : "";
+    const mapKey = normalizedRef && isRecord(accountMap)
+        ? Object.keys(accountMap).find((key) => key.trim().toLowerCase() === normalizedRef)
+        : undefined;
+    const account = typeof reference === "string" ? (mapKey && isRecord(accountMap) ? accountMap[mapKey] : undefined) : reference;
+    if (!isRecord(account) || typeof account.id !== "string" || !account.id.trim()) return "malformed_response";
+    return typeof reference !== "string" || account.id.trim().toLowerCase() === normalizedRef ? "authenticated" : "malformed_response";
+};
 
-    if (isExplicitlyEmptyIdentity(root.loggedInUser))
-    {
-        return "authentication_rejected";
-    }
+const ORG_COMMENT_ACTOR_QUERY = Object.freeze({ _root: [{ loggedInUser: ["id", "kind", "isIntegration"] }] });
 
-    const user = getLoggedInUserFromPayload(payload);
-    return user?.id ? "authenticated" : "malformed_response";
+const fetchCommentActor = async (): Promise<{ id: string | number; verifiedOrg: boolean }> =>
+{
+    if ((await getAuthenticatedConfig()).kind !== "ORG") return { id: (await fetchLoggedInUser()).id!, verifiedOrg: false };
+    const payload = await runQuery(ORG_COMMENT_ACTOR_QUERY);
+    const actor = getLoggedInUserFromPayload(payload) as (CodecksUser & { kind?: unknown; isIntegration?: unknown }) | undefined;
+    if (typeof actor?.id !== "string" || !actor.id.trim() || actor.kind !== "api_token" || actor.isIntegration !== true)
+        throw new CodecksOperationError("org_actor_unverified", "Authenticated organization-token comment actor could not be verified; no mutation was sent.");
+    return { id: actor.id, verifiedOrg: true };
 };
 
 const fetchLoggedInUser = async (): Promise<CodecksUser> =>
 {
+    if ((await getAuthenticatedConfig()).kind === "ORG") throw new CodecksOperationError("personal_token_required", "Personal API token is required for this user-specific operation.");
     const user = getLoggedInUserFromPayload(await runQuery(LOGGED_IN_USER_IDENTITY_QUERY));
     if (!user?.id)
     {
@@ -3888,12 +4034,12 @@ export const runExternalProviderIdentityCheck = async (
 {
     try
     {
-        return { category: classifyExternalProviderIdentityPayload(await runExactReadQuery(LOGGED_IN_USER_IDENTITY_QUERY, fetchImplementation)) };
+        return { category: classifyExternalProviderIdentityPayload(await runExactReadQuery(ACCOUNT_IDENTITY_QUERY, fetchImplementation)) };
     }
     catch (error)
     {
         const message = toErrorMessage(error);
-        if (/Codecks API error (?:401|403)\b/.test(message))
+        if (error instanceof CodecksOperationError && (error.category === "authentication_rejected" || error.category === "account_mismatch"))
         {
             return { category: "authentication_rejected" };
         }
@@ -5855,7 +6001,7 @@ export const query = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult("json", "query", "api_error", toErrorMessage(error), { query: normalized });
+            return toStructuredErrorResult("json", "query", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
     },
 });
@@ -5906,7 +6052,7 @@ export const dispatch = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "dispatch", "api_error", toErrorMessage(error), { path });
+            return toStructuredErrorResult(format, "dispatch", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), { path, ...getOperationErrorData(error) });
         }
     },
 });
@@ -6017,7 +6163,7 @@ export const card_search = tool({
                 "",
                 "Matches: 0",
                 "",
-                "No cards matched the search criteria.",
+                "No cards matched within this token's visible projects (not necessarily the whole organization).", "No cards matched the search criteria.",
                 "Tip: prefer bare partial text like `idf` over shell-style globs like `*idf*` unless you need wildcard matching.",
             ];
             return toStructuredResult(
@@ -6026,6 +6172,7 @@ export const card_search = tool({
                 lines.join("\n"),
                 {
                     matches: 0,
+                    visibility: "token_visible_projects_only",
                     rawMatches: 0,
                     returnedCards: 0,
                     scannedCards: result.scannedCards ?? 0,
@@ -6056,6 +6203,7 @@ export const card_search = tool({
             "## Card Search Results",
             "",
             `Matches: ${rawMatches}${rawMatches !== cards.length ? ` (${cards.length} returned by limit)` : ""}`,
+            "Coverage: this token's visible projects only; effective project permissions are not verified.",
             outputMode !== "detailed" && cards.length > compactCardLimit
                 ? `Showing ${outputMode === "counts" ? sampleCards.length : detailCards.length} sample${(outputMode === "counts" ? sampleCards.length : detailCards.length) === 1 ? "" : "s"}; use outputMode=detailed only when you need every card row in context.`
                 : undefined,
@@ -6080,6 +6228,7 @@ export const card_search = tool({
         };
         const baseData: Record<string, unknown> = {
             matches: rawMatches,
+            visibility: "token_visible_projects_only",
             rawMatches,
             returnedCards,
             outputMode,
@@ -6259,6 +6408,7 @@ export const card_list_missing_effort = tool({
             "## Missing Effort Preview",
             "",
             `Eligible cards: ${allEligible.length}${allEligible.length !== eligible.length ? ` (${eligible.length} returned)` : ""}`,
+            "Coverage: this token's visible projects only; effective project permissions are not verified.",
             `Excluded cards: ${allExcluded.length}${allExcluded.length !== excluded.length ? ` (${excluded.length} returned)` : ""}`,
             "",
             ...eligible.map((entry, index) => `${index + 1}. ${formatCardLine(entry.card)}`),
@@ -6279,6 +6429,7 @@ export const card_list_missing_effort = tool({
             lines.join("\n"),
             {
                 scanned: candidates.length,
+                visibility: "token_visible_projects_only",
                 scannedCards: result.scannedCards ?? candidates.length,
                 scanLimit: result.scanLimit ?? scanLimit,
                 pageSize: result.pageSize ?? args.pageSize ?? null,
@@ -7631,7 +7782,7 @@ const buildCardCreatePayload = (options: CardCreatePayloadOptions): Record<strin
         effort: options.effort,
         priority: options.priority,
         childCards: [],
-        userId: options.userId,
+        ...(options.userId !== undefined ? { userId: options.userId } : {}),
         parentCardId: options.parentCardId,
     };
     if (options.isDoc !== undefined)
@@ -7685,6 +7836,8 @@ export const card_create = tool({
         const milestoneArg = blankToUndefined(args.milestone);
         const assigneeArg = blankToUndefined(args.assigneeId);
         const parentCardArg = blankToUndefined(args.parentCardId);
+        if (getBaseConfig().profileKey === "ORG" && (assigneeArg === undefined || deckArg === undefined || args.putOnHand === true))
+            return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "Organization-token card creation requires an explicit assigneeId and deck, and cannot put a card on hand until actor behavior is verified; no mutation was sent.");
 
         let normalizedCardType: { value: CardTypeValue; label: string; isDoc: boolean } | null = null;
         if (args.cardType !== undefined)
@@ -7758,7 +7911,7 @@ export const card_create = tool({
             }
         }
 
-        const user = await fetchLoggedInUser();
+        const user = getBaseConfig().profileKey === "ORG" ? undefined : await fetchLoggedInUser();
         let parentCardId: string | undefined;
         if (parentCardArg !== undefined)
         {
@@ -7771,6 +7924,7 @@ export const card_create = tool({
         }
 
         const createsPrivateCard = !deckId && !parentCardId;
+        if (getBaseConfig().profileKey === "ORG" && (!deckId || args.putOnHand === true)) return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "Organization-token actor behavior is unverified for deckless or hand card creation; no mutation was sent.");
 
         const payload = buildCardCreatePayload({
             assigneeId,
@@ -7780,7 +7934,7 @@ export const card_create = tool({
             milestoneId,
             effort: args.effort ?? null,
             priority: normalizedPriority?.code ?? null,
-            userId: user.id,
+            userId: user?.id,
             parentCardId: parentCardId ?? null,
             isDoc: normalizedCardType?.isDoc,
         });
@@ -8019,7 +8173,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     }
 
     const explicitAssignee = blankToUndefined(record.assigneeId);
-    const defaultAssigneeId = loggedInUser.id ?? getFallbackAssigneeId();
+    const defaultAssigneeId = loggedInUser.id ?? (getBaseConfig().profileKey === "PERSONAL" ? getFallbackAssigneeId() : undefined);
     if (explicitAssignee === undefined && defaultAssigneeId === undefined)
     {
         throw new Error(`cards[${index}] could not resolve a default assignee; provide assigneeId from codecks_user_lookup.`);
@@ -8040,6 +8194,7 @@ const normalizeBulkCreateRecord = async (record: BulkCreateRecord, defaults: Bul
     }
 
     const putOnHand = record.putOnHand ?? false;
+    if (getBaseConfig().profileKey === "ORG" && (!deck || putOnHand)) throw new CodecksOperationError("org_actor_unverified", `cards[${index}] requires a deck and cannot use putOnHand with an organization token; no mutation was sent.`);
     return {
         index,
         correlationKey: record.correlationKey ?? null,
@@ -8085,15 +8240,19 @@ const stableFingerprintValue = (value: unknown): unknown => {
     return value;
 };
 
-const bulkPreviewFingerprint = (operation: "card_bulk_create" | "card_bulk_update", records: Array<{ payload: Record<string, unknown> }>): string =>
-    normalizedMutationFingerprint(stableFingerprintValue({
-        version: 1,
-        operation,
+const bulkPreviewFingerprint = async (operation: "card_bulk_create" | "card_bulk_update", records: Array<{ payload: Record<string, unknown> }>): Promise<string> =>
+{
+    const config = await getAuthenticatedConfig();
+    // HMAC binds previews to the actual resolved credential without exposing a
+    // token hash, cache key, reference, or credential in the result.
+    return createHmac("sha256", config.token).update(JSON.stringify(stableFingerprintValue({
+        version: 2, profile: config.profileKey, account: config.account, operation,
         records: records.map(({ payload }) => {
             const { sessionId: _sessionId, ...canonicalPayload } = payload;
             return canonicalPayload;
         }),
-    }) as Record<string, unknown>);
+    }))).digest("hex");
+};
 
 const actionKeyFor = (operation: "create" | "update", index: number, payload: Record<string, unknown>): string =>
 {
@@ -8225,7 +8384,7 @@ export const card_bulk_create = tool({
         if (structuralErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), { indexedErrors: structuralErrors, results: preflightOutcomeRecords(rawRecords, structuralErrors.map(message => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }))), requestsAttempted: 0 });
         const defaults: BulkCreateRecord = { deck: blankToUndefined(args.deck), milestone: blankToUndefined(args.milestone), parentCardId: blankToUndefined(args.parentCardId) };
         let user: CodecksUser;
-        try { user = await fetchLoggedInUser(); } catch (error) { return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        try { user = getBaseConfig().profileKey === "ORG" ? {} : await fetchLoggedInUser(); } catch (error) { return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         const normalized: NormalizedBulkCreateRecord[] = []; const normalizationErrors: Array<{ index: number; message: string }> = [];
         const normalizationContext: BulkCreateNormalizationContext = { decks: new Map(), milestones: new Map(), assignees: new Map(), parents: new Map() };
         for (let index = 0; index < rawRecords.length; index++) {
@@ -8245,7 +8404,7 @@ export const card_bulk_create = tool({
             }
         }
         if (normalizationErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map(x => x.message).join(" "), { indexedErrors: normalizationErrors, results: preflightOutcomeRecords(rawRecords, normalizationErrors), requestsAttempted: 0 });
-        const previewFingerprint = bulkPreviewFingerprint("card_bulk_create", normalized);
+        const previewFingerprint = await bulkPreviewFingerprint("card_bulk_create", normalized);
         if (!dryRun) {
             const expectedPreviewFingerprint = args.expectedPreviewFingerprint;
             const malformed = typeof expectedPreviewFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(expectedPreviewFingerprint);
@@ -8625,7 +8784,7 @@ export const card_bulk_update = tool({
             });
         }
 
-        const previewFingerprint = bulkPreviewFingerprint("card_bulk_update", normalized);
+        const previewFingerprint = await bulkPreviewFingerprint("card_bulk_update", normalized);
         const normalizationRequests = getOperationContext()?.requestsAttempted ?? 0;
         if (!dryRun)
         {
@@ -9345,18 +9504,20 @@ export const velocity_observations_update = tool({
             const config = getBaseConfig();
             const path = await resolveWorkspacePath(getActiveWorkspaceRoot(), args.observationsPath, "output");
             let existing: ObservationCache | undefined;
-            try { existing = validateObservationCache(JSON.parse(await fs.readFile(path, "utf8")), config.account); }
+            try {
+                existing = validateObservationCache(JSON.parse(await fs.readFile(path, "utf8")), config.account, config.baseUrl);
+                if ((existing.organization as typeof existing.organization & { profile?: string }).profile !== config.profileKey) throw new Error("Observation cache profile differs or has no profile provenance; use a separate cache path.");
+            }
             catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-            const mode = (!existing && requestedMode === "incremental" ? "full" : requestedMode) as "incremental" | "date_window" | "full";
+            // Effective visibility can change without token rotation: never merge stale rows.
+            if (existing && requestedMode !== "full") throw new Error("Incremental observation cache reuse cannot verify unchanged project visibility; use a full refresh.");
+            const mode: "full" | "incremental" | "date_window" = "full";
             const overlapDays = Math.max(0, Math.min(365, Math.floor(Number(args.overlapDays ?? DEFAULT_OVERLAP_DAYS))));
             const to = typeof args.toDate === "string" ? args.toDate : new Date().toISOString().slice(0, 10);
             const allRuns = await fetchAccountRuns(runSummaryFields);
             const completedRuns = allRuns.filter((run) => !run.isDeleted && Boolean(run.completedAt));
             const earliestRunStart = completedRuns.map((run) => String(run.startDate ?? "")).filter(isIsoDate).sort()[0];
-            const earliestIncompleteFrom = existing?.coverage.deliveredCards.filter((entry) => entry.status === "incomplete").map((entry) => entry.from).sort()[0];
-            const latestCoveredTo = existing?.coverage.deliveredCards.map((entry) => entry.to).sort().at(-1);
-            const incrementalFrom = earliestIncompleteFrom ?? (latestCoveredTo ? new Date(new Date(`${latestCoveredTo}T00:00:00.000Z`).getTime() - overlapDays * 86400000).toISOString().slice(0, 10) : undefined);
-            const from = typeof args.fromDate === "string" ? args.fromDate : mode === "incremental" && incrementalFrom ? incrementalFrom : earliestRunStart ?? to;
+            const from = typeof args.fromDate === "string" ? args.fromDate : earliestRunStart ?? to;
             if (from > to) return toStructuredErrorResult(format, "velocity-observations-update", "validation_error", "fromDate must not be after toDate.");
 
             const runObservations = completedRuns
@@ -9369,10 +9530,12 @@ export const velocity_observations_update = tool({
             for (const event of fetched.events) if (!latestByCard.has(event.cardId)) latestByCard.set(event.cardId, event);
             const cardObservations = [...latestByCard.values()].map((event) => createDeliveredCardObservation(event as unknown as Record<string, unknown>));
             const cache = mergeObservationCache({
-                existing, account: config.account, baseUrl: config.baseUrl, now: new Date().toISOString(), mode, overlapDays, from, to,
+                existing: undefined, account: config.account, baseUrl: config.baseUrl, now: new Date().toISOString(), mode, overlapDays, from, to,
                 runs: runObservations, cards: cardObservations, scannedActivities: fetched.scannedActivities, scanLimit, scanLimitReached: fetched.scanLimitReached,
                 warnings: completedRuns.some((run) => !isIsoDate(run.startDate) || !isIsoDate(run.endDate) || String(run.startDate) > String(run.endDate)) ? ["Completed Runs with missing, malformed, or reversed dates were preserved; unusable report periods remain unavailable."] : [],
             });
+            (cache.organization as typeof cache.organization & { profile: string }).profile = config.profileKey;
+            cache.refresh.warnings.push("Complete only within this token's visible projects; effective project permissions are not verifiable from this API snapshot.");
             await atomicWriteFile(path, `${JSON.stringify(cache, null, 2)}\n`, getActiveWorkspaceRoot());
             const lines = ["## Codecks Velocity Observation Cache Updated", "", `- Organization: ${config.account}`, `- Cache: ${path}`, `- Refresh: ${mode} (${from} to ${to}; overlap ${overlapDays} days)`, `- Run observations: ${runObservations.length}`, `- Delivered-card observations: ${cardObservations.length}`, `- Complete: ${cache.refresh.complete ? "yes" : "no"}`];
             return toStructuredResult(format, "velocity-observations-update", lines.join("\n"), { observationsPath: path, cache }, cache.refresh.warnings);
@@ -9423,7 +9586,9 @@ export const velocity_report = tool({
             const csvPath = typeof args.csvPath === "string" && args.csvPath.trim() ? await resolveWorkspacePath(workspace, args.csvPath, "output") : undefined;
             const summaryMarkdownPath = typeof args.summaryMarkdownPath === "string" && args.summaryMarkdownPath.trim() ? await resolveWorkspacePath(workspace, args.summaryMarkdownPath, "output") : undefined;
             assertDistinctPaths([{ label: "observationsPath", path: observationsPath }, { label: "rosterPath", path: rosterPath }, { label: "csvPath", path: csvPath }, { label: "summaryMarkdownPath", path: summaryMarkdownPath }]);
-            const cache = validateObservationCache(JSON.parse(await fs.readFile(observationsPath, "utf8")));
+            const config = getBaseConfig();
+            const cache = validateObservationCache(JSON.parse(await fs.readFile(observationsPath, "utf8")), config.account, config.baseUrl);
+            if ((cache.organization as typeof cache.organization & { profile?: string }).profile !== config.profileKey) throw new Error("Observation cache profile does not match the selected Codecks profile.");
             const roster = rosterPath ? parseVelocityRosterText(await fs.readFile(rosterPath, "utf8")) : undefined;
             const report = buildVelocityReport(cache, { ...args, roster });
             const outputs: Record<string, string> = {};
@@ -10460,7 +10625,9 @@ export const card_add_comment = tool({
         }
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
-        const user = await fetchLoggedInUser();
+        let actor: { id: string | number; verifiedOrg: boolean };
+        try { actor = await fetchCommentActor(); }
+        catch (error) { return toStructuredErrorResult(format, "card-add-comment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
         try
         {
@@ -10469,12 +10636,12 @@ export const card_add_comment = tool({
                 cardId,
                 context: "comment",
                 content: normalizedContent,
-                userId: user.id,
-            });
+                userId: actor.id,
+            }, actor.verifiedOrg ? String(actor.id) : undefined);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-add-comment", "api_error", toErrorMessage(error));
+            return toStructuredErrorResult(format, "card-add-comment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const url = shortCode ? formatCardUrl(shortCode) : "";

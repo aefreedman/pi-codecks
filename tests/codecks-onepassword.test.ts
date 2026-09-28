@@ -11,7 +11,7 @@ const temporary = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-onepassword-"))
 const op = process.execPath;
 const fakeOpScript = path.join(temporary, "run");
 const originalCwd = process.cwd();
-const keys = ["CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_CREDENTIAL_PROVIDER", "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "OP_SERVICE_ACCOUNT_TOKEN", "CODECKS_ONEPASSWORD_REUSE_TTL_MS", "CODECKS_API_BASE"] as const;
+const keys = ["CODECKS_ACCOUNT", "CODECKS_TOKEN", "CODECKS_CREDENTIAL_PROVIDER", "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE", "CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE", "OP_SERVICE_ACCOUNT_TOKEN", "CODECKS_ONEPASSWORD_REUSE_TTL_MS", "CODECKS_API_BASE"] as const;
 const saved = new Map(keys.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 
@@ -20,9 +20,9 @@ import { spawn } from "node:child_process";
 const args = ["run", ...process.argv.slice(2)];
 const [command, flag, delimiter, child, ...childArgs] = args;
 if (command !== "run" || flag !== "--no-masking" || delimiter !== "--" || !child || process.env.OP_SERVICE_ACCOUNT_TOKEN !== "inert-service-token") process.exit(64);
-const result = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "inert-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
+const result = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "cdxat_synthetic-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
 const output = []; result.stdout.on("data", (chunk) => output.push(chunk)); result.stderr.pipe(process.stderr);
-result.on("close", (status) => { const value = Buffer.concat(output).toString("utf8"); process.stdout.write(flag === "--no-masking" ? value : value.replaceAll("inert-onepassword-token", "[REDACTED]")); process.exit(status ?? 1); });
+result.on("close", (status) => { const value = Buffer.concat(output).toString("utf8"); process.stdout.write(flag === "--no-masking" ? value : value.replaceAll("cdxat_synthetic-onepassword-token", "[REDACTED]")); process.exit(status ?? 1); });
 `);
 chmodSync(fakeOpScript, 0o755);
 
@@ -74,12 +74,54 @@ try {
   process.env.OP_SERVICE_ACCOUNT_TOKEN = "inert-service-token";
   __onepasswordTest.resetExecutable();
   globalThis.fetch = (async (_input, init) => {
-    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], "inert-onepassword-token");
+    assert.equal((init?.headers as Record<string, string>)["Authorization"], "Bearer cdxat_synthetic-onepassword-token");
+    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], undefined);
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   }) as typeof fetch;
   process.chdir(temporary);
   const actualHelperResult = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
-  assert.doesNotMatch(String(actualHelperResult), /Error:/, "real bundled helper succeeds using the cross-platform fake op");
+  assert.match(String(actualHelperResult), /Codecks Query Result/, "real bundled helper and bearer transport succeed using the synthetic fake op");
+  process.chdir(originalCwd);
+
+  // The private child receives the selected effective reference, never a stale global value.
+  writeFileSync(fakeOpScript, `#!/usr/bin/env node
+import { spawn } from 'node:child_process';
+const [command, flag, delimiter, child, ...args] = ['run', ...process.argv.slice(2)];
+if (command !== 'run' || flag !== '--no-masking' || delimiter !== '--' || process.env.OP_SERVICE_ACCOUNT_TOKEN !== 'inert-service-token') process.exit(64);
+const refs = { 'op://vault/org/credential': 'org-token', 'op://vault/personal/credential': 'personal-token', 'op://vault/legacy/credential': 'legacy-token' };
+const token = refs[process.env.PI_CODECKS_ONEPASSWORD_CREDENTIAL];
+if (!token) process.exit(65);
+const result = spawn(child, args, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: token }, stdio: ['ignore', 'pipe', 'pipe'] });
+result.stdout.pipe(process.stdout); result.stderr.pipe(process.stderr);
+result.on('close', status => { process.exitCode = status ?? 1; });
+`);
+  process.chdir(temporary);
+  process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "op://vault/legacy/credential";
+  process.env.CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE = "op://vault/org/credential";
+  process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE = "op://vault/personal/credential";
+  const selection = { account: "fixture", signal: new AbortController().signal };
+  assert.equal((await resolveOnePasswordCredential(selection)).token, "org-token", "absent profile selects ORG");
+  assert.equal((await resolveOnePasswordCredential({ ...selection, profileKey: "ORG" })).token, "org-token");
+  assert.equal((await resolveOnePasswordCredential({ ...selection, profileKey: "personal" })).token, "personal-token");
+  const captured = resolveOnePasswordCredential({ ...selection, profileKey: "ORG" });
+  process.env.CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE = "op://vault/personal/credential";
+  assert.equal((await captured).token, "org-token", "in-flight work retains the captured effective reference");
+  process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = "60000";
+  __onepasswordTest.resetProcessLocalState();
+  assert.equal((await resolveOnePasswordCredential(selection)).token, "personal-token", "rotating the profile reference cannot reuse the old credential");
+  process.env.CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE = "op://vault/org/credential";
+  assert.equal((await resolveOnePasswordCredential(selection)).token, "org-token", "rotation back cannot reuse the other reference");
+  process.env.CODECKS_ONEPASSWORD_REUSE_TTL_MS = "0";
+  __onepasswordTest.resetProcessLocalState();
+  delete process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE;
+  assert.equal((await resolveOnePasswordCredential({ ...selection, profileKey: "PERSONAL" })).token, "legacy-token", "global setting supports a single-profile setup");
+  process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE = " ";
+  await assert.rejects(resolveOnePasswordCredential({ ...selection, profileKey: "PERSONAL" }), { credentialCategory: "credential_configuration_invalid" });
+  process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE = "not-a-secret-reference";
+  await assert.rejects(resolveOnePasswordCredential({ ...selection, profileKey: "PERSONAL" }), { credentialCategory: "credential_helper_unavailable" }, "invalid selected reference never falls back to global");
+  delete process.env.CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE;
+  delete process.env.CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE;
+  process.env.PI_CODECKS_ONEPASSWORD_REFERENCE = "op://[REDACTED]/[REDACTED]/[REDACTED]";
   process.chdir(originalCwd);
   let now = 1000;
   let resolutions = 0;

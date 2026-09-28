@@ -489,7 +489,12 @@ const cards: MockCard[] = [
       assert.equal(payload.ok, false);
       assert.equal(payload.error.category, "api_error");
       assert.doesNotMatch(text, /bearer-secret|session-secret|token-secret|credential-secret|header-secret|password-secret|query-secret/);
-      assert.match(text, /\[REDACTED\]/);
+      if (payload.error.dispatchAttempt === "http_response") {
+        assert.equal(payload.error.mutationCertainty, "indeterminate");
+        assert.equal(payload.error.httpStatus, 200);
+      } else {
+        assert.match(text, /\[REDACTED\]/);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;

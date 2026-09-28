@@ -141,10 +141,11 @@ process.stdin.on("end", () => {
   const prohibited = Object.keys(process.env).some((key) => {
     const normalized = key.toUpperCase();
     return /^CODECKS_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
-      || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
+      || normalized === "PI_CODECKS_ONEPASSWORD_REFERENCE"
+      || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF|ONEPASSWORD_REFERENCE)$/.test(normalized)
       || ["CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE"].includes(normalized);
   });
-  process.stdout.write(prohibited ? "not-json" : JSON.stringify({ version: 1, credential: "packed-inert-helper-token" }));
+  process.stdout.write(prohibited ? "not-json" : JSON.stringify({ version: 1, credential: "cdxat_packed-synthetic-helper-token" }));
 });
 `);
   writeFileSync(malformedHelperPath, `process.stdin.resume(); process.stdin.on("end", () => process.stdout.write("not-json"));\n`);
@@ -155,11 +156,11 @@ import * as core from "./node_modules/@aefree/pi-codecks/src/codecks-core.ts";
 
 process.env.CODECKS_ACCOUNT = "packed-helper-account";
 process.env.CODECKS_TOKEN = "ambient-token-that-must-not-reach-helper";
-process.env.CODECKS_PROFILE = "packed-profile";
+process.env.CODECKS_PROFILE = "ORG";
 process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
 process.env.CODECKS_CREDENTIAL_HELPER_MODULE = ${JSON.stringify(helperPath)};
 assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), {
-  account: "packed-helper-account", baseUrl: "https://api.codecks.io", token: "packed-inert-helper-token",
+  account: "packed-helper-account", baseUrl: "https://api.codecks.io", token: "cdxat_packed-synthetic-helper-token", kind: "ORG", profileKey: "ORG",
 });
 process.env.CODECKS_CREDENTIAL_HELPER_MODULE = ${JSON.stringify(malformedHelperPath)};
 await assert.rejects(core.__test.resolveAuthenticatedConfig(), {
@@ -183,7 +184,7 @@ import { spawn } from "node:child_process";
 const [command, flag, delimiter, child, ...childArgs] = ["run", ...process.argv.slice(2)];
 if (command !== "run" || flag !== "--no-masking" || delimiter !== "--" || !child || process.env.OP_SERVICE_ACCOUNT_TOKEN !== "packed-inert-service-token") process.exit(64);
 if (process.env.PACKED_OP_MODE === "malformed") { process.stdout.write("not-json"); process.exit(0); }
-const nested = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "packed-inert-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
+const nested = spawn(child, childArgs, { env: { ...process.env, PI_CODECKS_ONEPASSWORD_CREDENTIAL: "cdxat_packed-synthetic-onepassword-token" }, stdio: ["ignore", "pipe", "pipe"] });
 nested.stdout.pipe(process.stdout); nested.stderr.pipe(process.stderr); nested.once("close", (status) => process.exit(status ?? 1));
 `);
   chmodSync(packedOpScript, 0o755);
@@ -201,12 +202,13 @@ process.env.OP_SERVICE_ACCOUNT_TOKEN = "packed-inert-service-token";
 let fetches = 0;
 globalThis.fetch = async (_input, init) => {
   fetches++;
-  assert.equal(init.headers["X-Auth-Token"], "packed-inert-onepassword-token");
+  assert.equal(init.headers.Authorization, "Bearer cdxat_packed-synthetic-onepassword-token");
+  assert.equal(init.headers["X-Auth-Token"], undefined);
   return new Response(JSON.stringify({ data: {} }), { status: 200 });
 };
 const queryResult = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
 assert.equal(fetches, 1, 'the installed helper must actually resolve, not merely return an error string');
-assert.doesNotMatch(String(queryResult), /Error:/);
+assert.match(String(queryResult), /Codecks Query Result/);
 process.env.PACKED_OP_MODE = "malformed";
 await assert.rejects(core.__test.resolveAuthenticatedConfig(), { credentialCategory: 'credential_helper_unavailable', provider: 'onepassword' });
 delete process.env.PACKED_OP_MODE;

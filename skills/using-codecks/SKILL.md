@@ -1,7 +1,7 @@
 ---
 name: using-codecks
 description: Use for ordinary single-card Codecks lookup and mutation, Deck descriptions, milestones, Runs, attachments, conversations, credentials, and safe query/dispatch fallback. Excludes multi-card bulk create/import/update workflows.
-allowed-tools: codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_batch codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
+allowed-tools: codecks_profile_select codecks_tool_search codecks_query codecks_dispatch codecks_card_search codecks_card_list_done_within_timeframe codecks_card_get codecks_card_get_batch codecks_card_get_formatted codecks_card_get_vision_board codecks_card_create codecks_card_set_parent codecks_deck_get codecks_deck_update codecks_milestone_list codecks_milestone_get codecks_milestone_update codecks_run_list codecks_run_get codecks_run_delivered_effort codecks_run_average_effort codecks_velocity_report codecks_run_update codecks_card_update_run codecks_card_add_attachment codecks_card_update codecks_card_update_status codecks_card_add_comment codecks_card_add_review codecks_card_add_blocker codecks_card_add_block codecks_card_reply_resolvable codecks_card_edit_resolvable_entry codecks_card_close_resolvable codecks_card_reopen_resolvable codecks_card_list_resolvables codecks_list_open_resolvable_cards codecks_list_logged_in_user_actionable_resolvables codecks_card_update_effort codecks_card_update_priority codecks_user_lookup
 ---
 
 # Using Codecks
@@ -29,7 +29,7 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 
 ## Core workflow
 
-1. Use an already-active specialized tool. Otherwise use `codecks_tool_search` to activate the single smallest sufficient capability or reviewed prerequisite pair.
+1. If the user explicitly requests their personal identity, discover `codecks_profile_select` and select PERSONAL for task scope (session only on explicit session-wide request); otherwise use the default ORG profile. Do not switch on failure. Then use an already-active specialized tool. Otherwise use `codecks_tool_search` to activate the single smallest sufficient capability or reviewed prerequisite pair.
 2. Identify an exact target. If multiple cards/entities match, ask the user to choose using a stable visible reference.
 3. Read the operation-specific reference below before preparing a write or interpreting incomplete evidence.
 4. For a mutation, verify that the user explicitly intends that tracker operation. Local implementation completion is not permission to update Codecks.

@@ -6,8 +6,8 @@ const ENV_KEYS = [
   "CODECKS_ACCOUNT", "CODECKS_SUBDOMAIN", "CODECKS_API_BASE", "CODECKS_TOKEN", "CODECKS_API_TOKEN",
   "CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE",
   "PI_CODECKS_ONEPASSWORD_OP_EXECUTABLE", "PI_CODECKS_ONEPASSWORD_REFERENCE", "CODECKS_ONEPASSWORD_REUSE_TTL_MS",
-  "CODECKS_PROFILE_ALPHA_PROD_ACCOUNT", "CODECKS_PROFILE_ALPHA_PROD_SUBDOMAIN", "CODECKS_PROFILE_ALPHA_PROD_API_BASE",
-  "CODECKS_PROFILE_ALPHA_PROD_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_API_TOKEN", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF", "CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF",
+  "CODECKS_PROFILE_PERSONAL_ACCOUNT", "CODECKS_PROFILE_PERSONAL_SUBDOMAIN", "CODECKS_PROFILE_PERSONAL_API_BASE",
+  "CODECKS_PROFILE_PERSONAL_TOKEN", "CODECKS_PROFILE_PERSONAL_API_TOKEN", "CODECKS_PROFILE_PERSONAL_TOKEN_REF", "CODECKS_PROFILE_PERSONAL_TOKEN_OP_REF",
 ] as const;
 const savedEnvironment = new Map(ENV_KEYS.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
@@ -21,64 +21,62 @@ try {
   process.env.CODECKS_ACCOUNT = "global-account";
   process.env.CODECKS_SUBDOMAIN = "fallback-account";
   process.env.CODECKS_API_BASE = "https://global-api.invalid";
-  process.env.CODECKS_TOKEN = "direct-token";
-  process.env.CODECKS_API_TOKEN = "api-token";
-  assert.deepEqual(core.__test.getBaseConfig(), { account: "global-account", baseUrl: "https://global-api.invalid", profileKey: undefined });
-  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "direct-token", providerId: "environment" });
+  process.env.CODECKS_TOKEN = "cdxat_direct-token";
+  process.env.CODECKS_API_TOKEN = "cdxat_api-token";
+  assert.deepEqual(core.__test.getBaseConfig(), { account: "global-account", baseUrl: "https://global-api.invalid", profileKey: "ORG" });
+  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "cdxat_direct-token", providerId: "environment" });
 
   delete process.env.CODECKS_TOKEN;
-  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "api-token", providerId: "environment" });
+  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "cdxat_api-token", providerId: "environment" });
 
-  process.env.CODECKS_PROFILE = "alpha-prod";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_ACCOUNT = "profile-account";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_SUBDOMAIN = "profile-subdomain";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_API_BASE = "https://profile-api.invalid";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN = "profile-token";
-  process.env.CODECKS_PROFILE_ALPHA_PROD_API_TOKEN = "profile-api-token";
-  assert.deepEqual(core.__test.getBaseConfig(), { account: "profile-account", baseUrl: "https://profile-api.invalid", profileKey: "alpha-prod" });
-  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "profile-token", providerId: "environment" });
+  process.env.CODECKS_PROFILE = "PERSONAL";
+  process.env.CODECKS_PROFILE_PERSONAL_ACCOUNT = "profile-account";
+  process.env.CODECKS_PROFILE_PERSONAL_SUBDOMAIN = "profile-subdomain";
+  process.env.CODECKS_PROFILE_PERSONAL_API_BASE = "https://profile-api.invalid";
+  process.env.CODECKS_PROFILE_PERSONAL_TOKEN = "cdxut_profile-token";
+  process.env.CODECKS_PROFILE_PERSONAL_API_TOKEN = "cdxut_profile-api-token";
+  assert.deepEqual(core.__test.getBaseConfig(), { account: "profile-account", baseUrl: "https://profile-api.invalid", profileKey: "PERSONAL" });
+  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "cdxut_profile-token", providerId: "environment" });
 
-  delete process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN;
-  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "profile-api-token", providerId: "environment" });
+  delete process.env.CODECKS_PROFILE_PERSONAL_TOKEN;
+  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "cdxut_profile-api-token", providerId: "environment" });
 
-  delete process.env.CODECKS_PROFILE_ALPHA_PROD_API_TOKEN;
+  delete process.env.CODECKS_PROFILE_PERSONAL_API_TOKEN;
   delete process.env.CODECKS_API_TOKEN;
-  process.env.CODECKS_TOKEN = "global-fallback-token";
-  assert.deepEqual(await core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), { token: "global-fallback-token", providerId: "environment" });
+  process.env.CODECKS_TOKEN = "cdxat_global-fallback-token";
+  await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), /Missing Codecks token for profile 'PERSONAL'/);
 
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF = "inert-operation-reference";
+  process.env.CODECKS_PROFILE_PERSONAL_TOKEN_OP_REF = "inert-operation-reference";
   await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), {
-    message: "Codecks profile 'alpha-prod' uses a TOKEN_REF/TOKEN_OP_REF value, which is not supported by the environment provider. Select CODECKS_CREDENTIAL_PROVIDER=onepassword or set CODECKS_TOKEN / CODECKS_PROFILE_<PROFILE>_TOKEN.",
+    message: "Codecks profile 'PERSONAL' uses a TOKEN_REF/TOKEN_OP_REF value, which is not supported by the environment provider. Select CODECKS_CREDENTIAL_PROVIDER=onepassword or set CODECKS_TOKEN / CODECKS_PROFILE_<PROFILE>_TOKEN.",
   });
-  delete process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_OP_REF;
-  process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF = "inert-reference";
+  delete process.env.CODECKS_PROFILE_PERSONAL_TOKEN_OP_REF;
+  process.env.CODECKS_PROFILE_PERSONAL_TOKEN_REF = "inert-reference";
   await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), /TOKEN_REF\/TOKEN_OP_REF/);
-  delete process.env.CODECKS_PROFILE_ALPHA_PROD_TOKEN_REF;
+  delete process.env.CODECKS_PROFILE_PERSONAL_TOKEN_REF;
 
   clearEnvironment();
   assert.throws(() => core.__test.getBaseConfig(), /Missing Codecks account\. Set CODECKS_ACCOUNT \(or CODECKS_SUBDOMAIN\), or configure CODECKS_PROFILE\./);
   process.env.CODECKS_ACCOUNT = "account-only";
   await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), /Missing Codecks credentials\. Set CODECKS_TOKEN \(or CODECKS_API_TOKEN\) and CODECKS_ACCOUNT/);
-  process.env.CODECKS_PROFILE = "alpha-prod";
+  process.env.CODECKS_PROFILE = "PERSONAL";
   delete process.env.CODECKS_ACCOUNT;
-  assert.throws(() => core.__test.getBaseConfig(), /Missing Codecks account for profile 'alpha-prod'\. Set CODECKS_PROFILE_ALPHA_PROD_ACCOUNT\./);
-  process.env.CODECKS_PROFILE_ALPHA_PROD_ACCOUNT = "profile-account-only";
+  assert.throws(() => core.__test.getBaseConfig(), /Missing Codecks account for profile 'PERSONAL'\. Set CODECKS_PROFILE_PERSONAL_ACCOUNT\./);
+  process.env.CODECKS_PROFILE_PERSONAL_ACCOUNT = "profile-account-only";
   await assert.rejects(core.__test.resolveEnvironmentCredential(core.__test.getBaseConfig()), {
-    message: "Missing Codecks token for profile 'alpha-prod'. Set CODECKS_PROFILE_ALPHA_PROD_TOKEN.",
+    message: "Missing Codecks token for profile 'PERSONAL'. Set CODECKS_PROFILE_PERSONAL_TOKEN.",
   });
 
   clearEnvironment();
   process.env.CODECKS_PROFILE = "invalid profile";
-  assert.throws(() => core.__test.getBaseConfig(), {
-    message: "Invalid CODECKS_PROFILE value. Use letters, numbers, '-', or '_'.",
-  });
+  assert.throws(() => core.__test.getBaseConfig(), /Invalid CODECKS_PROFILE/);
 
   clearEnvironment();
   process.env.CODECKS_ACCOUNT = "selector-account";
-  process.env.CODECKS_TOKEN = "selector-token";
-  assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), { account: "selector-account", baseUrl: "https://api.codecks.io", token: "selector-token" });
+  process.env.CODECKS_TOKEN = "cdxat_selector-token";
+  assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), { account: "selector-account", baseUrl: "https://api.codecks.io", token: "cdxat_selector-token", kind: "ORG", profileKey: "ORG" });
   process.env.CODECKS_CREDENTIAL_PROVIDER = "environment";
-  assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), { account: "selector-account", baseUrl: "https://api.codecks.io", token: "selector-token" });
+  assert.deepEqual(await core.__test.resolveAuthenticatedConfig(), { account: "selector-account", baseUrl: "https://api.codecks.io", token: "cdxat_selector-token", kind: "ORG", profileKey: "ORG" });
   process.env.CODECKS_CREDENTIAL_PROVIDER = "external-helper";
   await assert.rejects(core.__test.resolveAuthenticatedConfig(), /External Codecks credential helper configuration is invalid\./);
   process.env.CODECKS_CREDENTIAL_PROVIDER = "unknown-provider";
@@ -92,14 +90,14 @@ try {
     async resolve(request) {
       resolutions += 1;
       requestedAccounts.push(request.account);
-      return { token: "inert-provider-token", providerId: "test" };
+      return { token: "cdxat_inert-provider-token", providerId: "test" };
     },
   });
   let fetchCalls = 0;
   globalThis.fetch = (async (_input, init) => {
     fetchCalls += 1;
     assert.equal((init?.headers as Record<string, string>)["X-Account"], "selector-account");
-    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], "inert-provider-token");
+    assert.equal((init?.headers as Record<string, string>)["Authorization"], "Bearer cdxat_inert-provider-token");
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, async () => {
@@ -141,7 +139,7 @@ try {
   fetchCalls = 0;
   globalThis.fetch = (async (_input, init) => {
     fetchCalls += 1;
-    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], "inert-provider-token");
+    assert.equal((init?.headers as Record<string, string>)["Authorization"], "Bearer cdxat_inert-provider-token");
     return fetchCalls === 1
       ? new Response("retry", { status: 503, statusText: "Unavailable" })
       : new Response(JSON.stringify({ data: {} }), { status: 200 });
@@ -153,7 +151,7 @@ try {
   fetchCalls = 0;
   globalThis.fetch = (async (_input, init) => {
     fetchCalls += 1;
-    assert.equal((init?.headers as Record<string, string>)["X-Auth-Token"], "inert-provider-token");
+    assert.equal((init?.headers as Record<string, string>)["Authorization"], "Bearer cdxat_inert-provider-token");
     return new Response(JSON.stringify({ data: {} }), { status: 200 });
   }) as typeof fetch;
   await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/update", payload: { id: "fixture" }, format: "json" }));
@@ -168,7 +166,7 @@ try {
   let helperCalls = 0;
   __onepasswordTest.setLifecycleDependenciesForTests({ resolve: async () => {
     helperCalls++;
-    return { token: "same-token", providerId: "onepassword" };
+    return { token: "cdxat_same-token", providerId: "onepassword" };
   } });
   fetchCalls = 0;
   globalThis.fetch = (async () => {
@@ -176,14 +174,14 @@ try {
     return new Response("unauthorized", { status: 401, statusText: "Unauthorized" });
   }) as typeof fetch;
   const rejected401 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
-  assert.match(String(rejected401), /Codecks API error 401/);
+  assert.match(String(rejected401), /HTTP 401/);
   assert.equal(__onepasswordTest.getProcessLocalState().cacheEntries, 0, "401 evicts the actual resolved generation");
   assert.equal(fetchCalls, 1, "authentication rejection does not replay the request");
   assert.equal(helperCalls, 1);
 
   globalThis.fetch = (async () => new Response("forbidden", { status: 403, statusText: "Forbidden" })) as typeof fetch;
   const rejected403 = await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));
-  assert.match(String(rejected403), /Codecks API error 403/);
+  assert.match(String(rejected403), /HTTP 403/);
   assert.equal(helperCalls, 2, "operation after 401 launches a fresh helper");
   assert.equal(__onepasswordTest.getProcessLocalState().cacheEntries, 1, "generic 403 permission failures do not evict credentials");
   await core.runWithAbortSignal(undefined, () => core.query.execute({ query: { _root: [] } }));

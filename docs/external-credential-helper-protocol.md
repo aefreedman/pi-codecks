@@ -6,7 +6,7 @@ For the user-facing choice, migration, and security limits, see [Configuration i
 
 ## Migration and launcher configuration
 
-Existing users may leave `CODECKS_CREDENTIAL_PROVIDER` unset and continue with the default ambient `environment` provider. To migrate to an adapter, retain non-secret account/profile/API-base settings, move manager authentication and references into trusted adapter configuration, and set the explicit selector plus helper module path below. No Codecks tool arguments, model input, or helper auto-discovery participate in selection.
+Existing users may leave `CODECKS_CREDENTIAL_PROVIDER` unset and use the default ambient `environment` provider with a current `cdxat_` or `cdxut_` API token. Legacy token formats and `X-Auth-Token` transport are unsupported. The separate built-in 1Password provider supports profile-specific references (`CODECKS_PROFILE_ORG_ONEPASSWORD_REFERENCE` / `CODECKS_PROFILE_PERSONAL_ONEPASSWORD_REFERENCE`) to distinct items whose token field may be named `credential` in one vault. To migrate to an adapter, retain non-secret account/profile/API-base settings, move manager authentication and references into trusted adapter configuration, and set the explicit selector plus helper module path below. No Codecks tool arguments, model input, or helper auto-discovery participate in selection.
 
 Set these values before starting Pi:
 
@@ -29,13 +29,13 @@ The parent writes exactly one JSON value to helper stdin, with no credential mat
 {"version":1,"service":"codecks","account":"example-account","profile":"optional-profile"}
 ```
 
-`profile` is omitted when no Codecks profile is active. The helper must write exactly one JSON value to stdout and exit zero:
+The selected ORG or PERSONAL profile is supplied as non-secret metadata; legacy callers without a selected profile may omit `profile`. A selected PERSONAL profile requires the adapter to select its own personal credential, never fall back to an ORG credential. `account` remains the configured subdomain assertion (required until URL/token-derived identity is validated live). The helper must write exactly one JSON value to stdout and exit zero:
 
 ```json
 {"version":1,"credential":"credential-value"}
 ```
 
-The credential must be a nonempty string. Do not write banners, line-oriented diagnostics, JSONL, additional properties, or any other stdout bytes. Protocol version 1 has no expiry, refresh, lease, account override, or metadata fields.
+The credential must be a nonempty current Codecks API token with the profile's matching kind. The parent validates the documented `cdxat_` (ORG) / `cdxut_` (PERSONAL) prefix without assuming that the prefix grants any permission. Do not write banners, line-oriented diagnostics, JSONL, additional properties, or any other stdout bytes. Protocol version 1 has no expiry, refresh, lease, account override, or metadata fields.
 
 ## Helper requirements
 
@@ -46,13 +46,13 @@ The credential must be a nonempty string. Do not write banners, line-oriented di
 - Exit nonzero for an unavailable manager or unresolved credential. Do not attempt a fallback token source that the adapter was not configured to use.
 - Handle parent termination promptly. `pi-codecks` applies bounded runtime/stdout/stderr limits and makes a best-effort process-tree termination attempt on timeout or operation cancellation; its caller settles without waiting for that attempt to complete.
 
-The helper inherits a sanitized environment. `pi-codecks` case-insensitively removes global and profile Codecks direct-token and secret-reference variables plus profile/provider/helper selectors before launching it; manager-specific variables may remain. This narrows accidental ambient-Codecks fallback, but it is not an operating-system isolation boundary against trusted same-user code.
+The helper inherits a sanitized environment. `pi-codecks` case-insensitively removes global/profile Codecks direct-token and secret-reference variables (including both profile 1Password references and the legacy global reference) plus profile/provider/helper selectors before launching it; manager-specific variables may remain. This narrows accidental ambient-Codecks fallback, but it is not an operating-system isolation boundary against trusted same-user code.
 
 ## Security boundaries and non-goals
 
 The trusted launcher chooses the helper path and manager configuration. The protocol keeps tokens out of Pi tool arguments, helper argv, public results, and normal diagnostics, but it does not protect against malicious installed extensions, trusted same-user processes, or memory inspection. JavaScript credentials cannot be reliably zeroed; helpers and callers should keep them short-lived.
 
-Version 1 deliberately has no secret broker or daemon, adapter discovery, package-manager lookup, credential cache across top-level operations, refresh/lease metadata, automatic re-resolution, automatic 401 retry, account override, or model-facing credential API. This advanced external-helper protocol remains manager-neutral; the separate built-in `onepassword` provider is not routed through a user-supplied module path.
+Version 1 deliberately has no secret broker or daemon, adapter discovery, package-manager lookup, credential cache across top-level operations, refresh/lease metadata, automatic re-resolution, automatic 401 retry, account override, or model-facing credential-value API. Agent-facing profile selection only chooses a configured ORG/PERSONAL identity, not a token or reference. This advanced external-helper protocol remains manager-neutral; the separate built-in `onepassword` provider is not routed through a user-supplied module path.
 
 ## Built-in 1Password diagnostic envelope
 

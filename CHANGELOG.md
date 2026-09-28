@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+### Changed
+
+- Migrate Codecks credentials to current organization/personal API tokens and Bearer authorization across query, dispatch, identity and upload signing; reject legacy token formats without fallback. Keep account subdomain assertion required pending live token-derived URL verification and preserve Retry-After units.
+- Add profile-specific 1Password references with ORG default and agent-selectable task/session PERSONAL profile on explicit user intent. Isolate credentials and previews across profiles, reset session selection on new/resume/fork, and keep in-flight operations on their original credential.
+- Authenticate organization credentials through account identity without inventing a user; guard unverified ORG actor-dependent writes and personal-only workflows before dispatch. Expose sanitized permission/account errors, token-visible scan coverage and conservative observation-cache refresh.
+- Align Pi development dependencies and tool-loading eval pin with current stable 0.87.1; expand credential-free auth/profile tests and update public configuration, security and live-test guidance. Live account and Test-deck actor semantics remain unverified pending trusted profile-reference configuration.
+- Reject cross-account or cross-API-base observation caches before update or offline velocity report output, and cover registered Pi profile lifecycle resets, task restoration, session selection and in-flight snapshots with mocked events.
+- Parse documented top-level API error codes and fixed authentication message codes without exposing arbitrary vendor text; keep bounded query error paths distinct from request endpoints. Resolve account identity from documented normalized relation-ID and account-map responses as well as inline account objects.
+- A distinct, safely diagnosed Test-only `resolvables/create` request identified the required `userId` field. A bounded follow-up using the authenticated ORG `api_token` principal (distinct from the human assignee) succeeded and its exact Comment author matched the ORG-created card author. Enable only `card_add_comment` with verified ORG actor identity; retain direct dispatch and other actor-dependent ORG guards. The earlier inconclusive fixture was not replayed.
+- Preserve bounded HTTP status, safe documented API validation diagnostics, and mutation dispatch-attempt/outcome certainty in structured errors; allow-list live harness rejection evidence without raw responses or transport exceptions. A diagnostic correction now exposes bounded sanitized dispatch validation text and structural error metadata even without a recognized query code; HTTP 400 explained `body must have property 'userId'`. This does not retroactively resolve the earlier inconclusive probe.
+
 ## [0.13.2] - 2026-09-21
 
 ### Changed

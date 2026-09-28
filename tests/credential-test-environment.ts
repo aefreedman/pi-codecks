@@ -14,7 +14,8 @@ export function useInertEnvironmentCredentialProvider(): void {
   }
   process.env.CODECKS_CREDENTIAL_PROVIDER = "environment";
   process.env.CODECKS_ACCOUNT = "test-account";
-  process.env.CODECKS_TOKEN = "test-token";
+  process.env.CODECKS_PROFILE = "PERSONAL";
+  process.env.CODECKS_PROFILE_PERSONAL_TOKEN = "cdxut_synthetic-test-token";
 
   let restored = false;
   const restore = (): void => {
