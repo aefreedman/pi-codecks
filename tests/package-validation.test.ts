@@ -30,11 +30,12 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
 
 const expectedFiles = [
   "index.ts", "src/", "skills/", "prompts/",
-  "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md", "docs/testing.md",
+  "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md",
   "references/", "README.md", "CHANGELOG.md", "LICENSE",
 ];
 assert.deepEqual(packageJson.files, expectedFiles);
 assert.equal(packageJson.files.includes("docs/release.md"), false, "maintainer-only release process must remain repository-only");
+assert.equal(packageJson.files.includes("docs/testing.md"), false, "repository-only test instructions refer to unshipped test scripts");
 for (const forbidden of ["tests/", "scripts/", ".github/", "docs/plans/", "todos/", ".pi/"]) {
   assert.equal(packageJson.files.includes(forbidden), false, `package allow-list must exclude ${forbidden}`);
 }

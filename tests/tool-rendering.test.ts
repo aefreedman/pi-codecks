@@ -160,7 +160,7 @@ try {
     assert.equal(typeof tool.renderCall, "function", tool.name);
     assert.equal(typeof tool.renderResult, "function", tool.name);
     assert.equal((tool as { renderShell?: string }).renderShell, undefined, "use Pi's existing shell");
-    if (tool.name === "codecks_tool_search") continue;
+    if (tool.name === "codecks_tool_search" || tool.name === "codecks_profile_select") continue;
     const name = tool.name.replace(/^codecks_/, "");
     const coreTool = (core as unknown as Record<string, { execute: (args: unknown) => Promise<unknown> }>)[name];
     const original = coreTool.execute;

@@ -361,7 +361,7 @@ const validateCoverage = (value: unknown, label: string): void => {
     });
 };
 
-export const validateObservationCache = (value: unknown, expectedAccount?: string): ObservationCache => {
+export const validateObservationCache = (value: unknown, expectedAccount?: string, expectedBaseUrl?: string): ObservationCache => {
     if (!isRecord(value) || value.schemaVersion !== VELOCITY_CACHE_SCHEMA_VERSION || !isRecord(value.organization)) throw new Error(`Observation cache must use schemaVersion ${VELOCITY_CACHE_SCHEMA_VERSION}.`);
     const account = textOrNull(value.organization.account);
     const baseUrl = textOrNull(value.organization.baseUrl);
@@ -379,6 +379,7 @@ export const validateObservationCache = (value: unknown, expectedAccount?: strin
         if (card.effortStatus === "observed" ? finiteOrNull(card.effort) === null : card.effortStatus !== "missing_estimate" || card.effort !== null) throw new Error(`Observation cache delivered card '${key}' has inconsistent effort state.`);
     }
     if (expectedAccount && account.toLowerCase() !== expectedAccount.toLowerCase()) throw new Error(`Observation cache belongs to Codecks organization '${account}', not '${expectedAccount}'.`);
+    if (expectedBaseUrl && baseUrl !== expectedBaseUrl) throw new Error("Observation cache API base differs from the configured Codecks API base; use a separate cache path.");
     return value as ObservationCache;
 };
 

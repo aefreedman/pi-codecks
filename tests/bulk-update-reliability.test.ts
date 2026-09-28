@@ -7,7 +7,7 @@ useInertEnvironmentCredentialProvider();
 const CARD_ID = "11111111-1111-4111-8111-111111111111";
 const parse = (value: unknown): any => JSON.parse(String(value).match(/```json\s*([\s\S]*?)\s*```/)![1]);
 const response = (payload: unknown, status = 200, headers: HeadersInit = {}) => new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json", ...headers } });
-const card = () => response({ data: { card: { [CARD_ID]: { cardId: CARD_ID, accountSeq: 31, title: "Existing", content: "Existing body", status: "not_started", isDoc: false } } } });
+const card = (hasDeck = true) => response({ data: { card: { [CARD_ID]: { cardId: CARD_ID, accountSeq: 31, title: "Existing", content: "Existing body", status: "not_started", isDoc: false, ...(hasDeck ? { deck: { id: "deck-1", title: "Deck" } } : {}) } } } });
 const invoke = (args: Record<string, unknown>, updates: any[] = []) => core.runWithAbortSignal(undefined, () => core.card_bulk_update.execute(args), process.cwd(), update => updates.push(update));
 const originalFetch = globalThis.fetch;
 
@@ -107,6 +107,18 @@ try {
   assert.equal(payloads.at(-1)!.effort, 0);
   assert.equal(payloads.at(-1)!.priority, null);
   assert.deepEqual(payloads.at(-1)!.masterTags, []);
+
+  const beforeDeckless = payloads.length;
+  globalThis.fetch = (async (input) => {
+    if (String(input).includes("/dispatch/")) throw new Error("deckless clearAssignee must not dispatch");
+    return card(false);
+  }) as typeof fetch;
+  const invalidDecklessClear = parse(await invoke({ updates: [{ cardId: CARD_ID, clearAssignee: true }], format: "json" }));
+  assert.equal(invalidDecklessClear.data.invalidRecordCount, 1);
+  assert.match(invalidDecklessClear.data.results[0].error.message, /unassigned and deckless/);
+  assert.equal(payloads.length, beforeDeckless);
+  const movedToDeck = parse(await invoke({ updates: [{ cardId: CARD_ID, deck: 42, clearAssignee: true }], format: "json" }));
+  assert.equal(movedToDeck.ok, true, "an existing deckless card can become unassigned when simultaneously moved to a deck");
 
   console.log("bulk update reliability tests passed");
 } finally { core.__test.resetRateGate(); globalThis.fetch = originalFetch; }

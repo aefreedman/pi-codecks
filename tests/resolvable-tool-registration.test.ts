@@ -63,7 +63,12 @@ const prepare = (toolName: string, args: AnyRecord): AnyRecord => {
   return tool.prepareArguments!(args) as AnyRecord;
 };
 
-assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "includeArchived", "format"]);
+assertProperties("codecks_card_get", ["cardId", "title", "location", "deck", "milestone", "userId", "includeArchived", "format"]);
+assertProperties("codecks_card_add_to_hand", ["cardId", "userId", "format"]);
+assertProperties("codecks_card_remove_from_hand", ["cardId", "userId", "format"]);
+assertProperties("codecks_card_get_formatted", ["cardId", "title", "location", "userId", "format"]);
+assertProperties("codecks_card_search", ["location", "userId"]);
+assertProperties("codecks_card_list_missing_effort", ["location", "userId"]);
 assertProperties("codecks_card_list_missing_effort", ["title", "location", "deck", "milestone", "skipCodes", "includeDone", "includeExcluded", "limit", "scanLimit", "pageSize", "includeArchived", "format"]);
 assertProperties("codecks_card_search", ["title", "text", "searchIn", "cardCode", "location", "deck", "milestone", "limit", "scanLimit", "pageSize", "includeArchived", "includeDone", "outputMode", "format"]);
 assertProperties("codecks_run_list", ["title", "includeDeleted", "includeCompleted", "limit", "format"]);
@@ -173,6 +178,12 @@ assert.equal(prepare("codecks_card_get", { card_id: "$3cv", include_archived: tr
 assert.equal(prepare("codecks_card_get", { card_id: "$3cv", include_archived: true }).includeArchived, true);
 assert.equal(prepare("codecks_card_get", { id: "$111", cardId: "$222" }).cardId, "$222");
 assert.equal(prepare("codecks_card_get", { card_id_or_code: "$333" }).cardId, "$333");
+assert.equal(prepare("codecks_card_add_to_hand", { card_id: "$333", user_id: "123" }).userId, "123");
+assert.equal(prepare("codecks_card_remove_from_hand", { card_id: "$333", user_id: "123" }).cardId, "$333");
+assert.equal(prepare("codecks_card_search", { location: "hand", user_id: "123" }).userId, "123");
+assert.equal(prepare("codecks_card_list_missing_effort", { location: "hand", user_id: "123" }).userId, "123");
+assert.equal(prepare("codecks_card_get", { location: "hand", user_id: "123" }).userId, "123");
+assert.equal(prepare("codecks_card_get_formatted", { location: "hand", user_id: "123" }).userId, "123");
 assert.equal(prepare("codecks_card_get", { short_code: "$444" }).cardId, "$444");
 assert.deepEqual(
   prepare("codecks_card_search", { title: "Meeting prep", location: "Design Docs", format: "json" }),

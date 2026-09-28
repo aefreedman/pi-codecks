@@ -37,6 +37,7 @@ export class PiToolHarness {
   readonly setActiveToolsCalls: string[][] = [];
   private readonly sessionStartHandlers: SessionHandler[] = [];
   private readonly sessionShutdownHandlers: SessionHandler[] = [];
+  private readonly agentSettledHandlers: SessionHandler[] = [];
   private readonly sourceInfoAvailable: boolean;
   private readonly extensionSourceInfo: ToolSourceInfo;
   private activeTools: string[];
@@ -67,6 +68,7 @@ export class PiToolHarness {
     on: (event: string, handler: SessionStartHandler) => {
       if (event === "session_start") this.sessionStartHandlers.push(handler);
       if (event === "session_shutdown") this.sessionShutdownHandlers.push(handler);
+      if (event === "agent_settled") this.agentSettledHandlers.push(handler);
     },
     getActiveTools: () => [...this.activeTools],
     getAllTools: () => [...this.registry.values()],
@@ -87,6 +89,11 @@ export class PiToolHarness {
     this.branchEntries = [...branchEntries];
     const ctx = { sessionManager: this.sessionManager };
     for (const handler of this.sessionStartHandlers) await handler({ reason }, ctx);
+  }
+
+  async settleAgent(): Promise<void> {
+    const ctx = { sessionManager: this.sessionManager };
+    for (const handler of this.agentSettledHandlers) await handler({}, ctx);
   }
 
   async shutdownSession(reason = "shutdown", sessionManager = this.sessionManager): Promise<void> {

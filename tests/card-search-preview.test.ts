@@ -482,14 +482,19 @@ const cards: MockCard[] = [
       await core.card_search.execute({ format: "json" }),
       await core.card_list_missing_effort.execute({ format: "json" }),
       await core.query.execute({ query: { _root: ["account"], password: "query-secret" } }),
-      await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: {}, format: "json" }), process.cwd()),
+      await core.runWithAbortSignal(undefined, () => core.dispatch.execute({ path: "cards/create", payload: { deckId: "synthetic-deck", assigneeId: null, content: "synthetic" }, format: "json" }), process.cwd()),
     ]) {
       const text = String(result);
       const payload = parseStructuredJson(text);
       assert.equal(payload.ok, false);
       assert.equal(payload.error.category, "api_error");
       assert.doesNotMatch(text, /bearer-secret|session-secret|token-secret|credential-secret|header-secret|password-secret|query-secret/);
-      assert.match(text, /\[REDACTED\]/);
+      if (payload.error.dispatchAttempt === "http_response") {
+        assert.equal(payload.error.mutationCertainty, "indeterminate");
+        assert.equal(payload.error.httpStatus, 200);
+      } else {
+        assert.match(text, /\[REDACTED\]/);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;

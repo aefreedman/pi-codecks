@@ -9,7 +9,6 @@ const requiredFiles = [
   "README.md",
   "docs/external-credential-helper-protocol.md",
   "docs/resolvable-inbox-heuristics.md",
-  "docs/testing.md",
   "index.ts",
   "package.json",
   "prompts/codecks-inbox.md",
@@ -24,7 +23,7 @@ const requiredFiles = [
   "src/pi-tool-compat.ts",
   "src/velocity-report.ts",
 ];
-const repositoryOnlyFiles = ["docs/release.md"];
+const repositoryOnlyFiles = ["docs/release.md", "docs/testing.md"];
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);
 const allowedPrefixes = ["docs/", "prompts/", "references/", "skills/", "src/"];

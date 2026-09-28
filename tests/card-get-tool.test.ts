@@ -362,7 +362,7 @@ const testBatchRequiresExplicitCompleteCollection = async (tools: ToolModule): P
 
 const testEquivalentWorkloadCounts = async (tools: ToolModule): Promise<void> => {
   let credentials = 0, requests = 0;
-  tools.__test.setCredentialProviderForTests({ id: "fixture", resolve: async () => { credentials++; return { token: "inert", providerId: "fixture" }; } });
+  tools.__test.setCredentialProviderForTests({ id: "fixture", resolve: async () => { credentials++; return { token: "cdxut_synthetic-inert", providerId: "fixture" }; } });
   try {
     await withMockedFetch(query => {
       requests++;

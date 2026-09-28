@@ -12,7 +12,8 @@ process.stdin.on("end", () => {
       codecksCredentialKeys: Object.keys(process.env).filter((key) => {
         const normalized = key.toUpperCase();
         return /^CODECKS_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
-          || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF)$/.test(normalized)
+          || normalized === "PI_CODECKS_ONEPASSWORD_REFERENCE"
+          || /^CODECKS_PROFILE_[A-Z0-9_]+_(?:TOKEN|API_TOKEN|TOKEN_REF|TOKEN_OP_REF|ONEPASSWORD_REFERENCE)$/.test(normalized)
           || ["CODECKS_PROFILE", "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_CREDENTIAL_HELPER_MODULE"].includes(normalized);
       }),
       managerSetting: process.env.PI_CODECKS_HELPER_MANAGER_SETTING,
@@ -21,15 +22,15 @@ process.stdin.on("end", () => {
 
   switch (process.env.PI_CODECKS_HELPER_MODE) {
     case "malformed": process.stdout.write("not-json"); break;
-    case "extra": process.stdout.write('{"version":1,"credential":"inert-helper-token"}{"extra":true}'); break;
-    case "wrong-version": process.stdout.write('{"version":2,"credential":"inert-helper-token"}'); break;
+    case "extra": process.stdout.write('{"version":1,"credential":"cdxat_synthetic-helper-token"}{"extra":true}'); break;
+    case "wrong-version": process.stdout.write('{"version":2,"credential":"cdxat_synthetic-helper-token"}'); break;
     case "empty": process.stdout.write('{"version":1,"credential":"   "}'); break;
     case "oversized": process.stdout.write("x".repeat(20 * 1024)); break;
-    case "stderr": process.stderr.write("attempted disclosure: inert-helper-token"); process.stdout.write('{"version":1,"credential":"inert-helper-token"}'); break;
+    case "stderr": process.stderr.write("attempted disclosure: inert-helper-token"); process.stdout.write('{"version":1,"credential":"cdxat_synthetic-helper-token"}'); break;
     case "stderr-oversized": process.stderr.write("x".repeat(20 * 1024)); break;
     case "nonzero": process.stderr.write("attempted disclosure: inert-helper-token"); process.exitCode = 7; break;
     case "timeout": setTimeout(() => undefined, 60_000); break;
     case "close": break;
-    default: process.stdout.write('{"version":1,"credential":"inert-helper-token"}'); break;
+    default: process.stdout.write('{"version":1,"credential":"cdxat_synthetic-helper-token"}'); break;
   }
 });

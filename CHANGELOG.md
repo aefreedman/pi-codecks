@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.14.0] - 2026-09-28
+
+### Added
+
+- Support Codecks organization and personal API tokens, with ORG selected by default and task- or session-scoped PERSONAL selection on explicit user request. Profile-specific 1Password references, environment credentials, and external helpers remain supported; credentials and bulk previews stay isolated across profiles.
+- Enable verified ORG actor attribution for shared card attachments and Comment/Review/Blocker threads, replies, own-entry edits, and close/reopen actions. Add focused single-card tools to read and edit a named human Hand, requiring a complete ordered baseline, drift check, and exact write readback.
+- Add credential-free registered-tool and real Pi-host lifecycle coverage for profile restoration and session resets.
+
+### Changed
+
+- **Breaking:** Require current `cdxat_`/`cdxut_` tokens and Bearer authorization for Codecks requests; legacy tokens and header transport have no fallback. Continue to require explicit account/subdomain configuration.
+- Allow ORG card creation when either a deck or assignee is specified; reject unassigned deckless cards. PERSONAL self-assignment defaults remain unchanged. Reject bulk assignee removal that would leave a card unassigned and deckless.
+- Keep ORG personal desk, own Hand/bookmarks, and create-time `putOnHand` guarded; named Hand tools for existing cards use an explicit human target. Hand-order writes cannot exclude concurrent edits after their final pre-dispatch check.
+- Align Pi development, validation and peer minimums with stable 0.87.1; earlier Pi releases are not a supported baseline.
+
+### Fixed
+
+- Preserve bounded permission and mutation-certainty diagnostics without forwarding credentials or raw vendor responses. Reject observation caches from another account, API base, or profile; resolve normalized account-identity responses.
+
 ## [0.13.2] - 2026-09-21
 
 ### Changed

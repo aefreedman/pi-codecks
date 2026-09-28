@@ -1,15 +1,29 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadRegisteredTools } from "./pi-tool-harness.ts";
 import { observationCache } from "./velocity-fixtures.ts";
+import * as core from "../src/codecks-core.ts";
+
+const configKeys = ["CODECKS_ACCOUNT", "CODECKS_PROFILE", "CODECKS_API_BASE", "CODECKS_PROFILE_ORG_ACCOUNT", "CODECKS_PROFILE_ORG_API_BASE"] as const;
+const previousConfig = new Map(configKeys.map((key) => [key, process.env[key]]));
+const previousFetch = globalThis.fetch;
+for (const key of configKeys) delete process.env[key];
+process.env.CODECKS_ACCOUNT = "example";
+process.env.CODECKS_API_BASE = "https://api.codecks.io";
+let credentialResolutions = 0;
+let networkRequests = 0;
+core.__test.setCredentialProviderForTests({ id: "offline-fixture", resolve: async () => { credentialResolutions++; throw new Error("Offline report must not resolve a credential."); } });
+globalThis.fetch = (async () => { networkRequests++; throw new Error("Offline report must not fetch."); }) as typeof fetch;
 
 const root = await mkdtemp(join(tmpdir(), "pi-codecks-velocity-"));
 try {
   await mkdir(join(root, "input"), { recursive: true });
-  await writeFile(join(root, "input", "observations.json"), `${JSON.stringify(observationCache(), null, 2)}\n`, "utf8");
+  const scopedCache = observationCache();
+  (scopedCache.organization as typeof scopedCache.organization & { profile: string }).profile = "ORG";
+  await writeFile(join(root, "input", "observations.json"), `${JSON.stringify(scopedCache, null, 2)}\n`, "utf8");
   await writeFile(join(root, "input", "roster.yaml"), "members:\n  - name: Alex | QA\n    userId: user-a\n", "utf8");
 
   const tools = await loadRegisteredTools();
@@ -41,6 +55,7 @@ try {
   assert(json.data.transformations.length > 0);
   assert.match(await readFile(join(root, "output", "report.csv"), "utf8"), /raw_delivered_card/);
   assert.match(await readFile(join(root, "output", "report.md"), "utf8"), /## Transformations/);
+  assert.equal(json.data.organization.account, "example", "valid offline reports preserve cache provenance");
 
   const csvOnly = await invoke({ observationsPath: "input/observations.json", csvPath: "output/only.csv", format: "json" });
   assert.equal(csvOnly.ok, true);
@@ -59,7 +74,37 @@ try {
   const missingPath = await invoke({ format: "json" });
   assert.equal(missingPath.ok, false);
   assert.match(missingPath.error.message, /observationsPath is required/);
+
+  const rejectCache = async (label: string, expectedError: RegExp): Promise<void> => {
+    const path = `input/${label}.json`;
+    const csvPath = `output/${label}.csv`;
+    const markdownPath = `output/${label}.md`;
+    const reportResult = await invoke({ observationsPath: path, csvPath, summaryMarkdownPath: markdownPath, format: "json" });
+    assert.equal(reportResult.ok, false, `${label} offline report must fail closed`);
+    assert.match(reportResult.error.message, expectedError);
+    await assert.rejects(stat(join(root, csvPath)), { code: "ENOENT" });
+    await assert.rejects(stat(join(root, markdownPath)), { code: "ENOENT" });
+    const updateResult = await updater.execute("test", { observationsPath: path, refreshMode: "full", format: "json" }, undefined, undefined, { cwd: root });
+    const updateText = updateResult.content[0].text as string;
+    const updateJson = JSON.parse(updateText.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? updateText);
+    assert.equal(updateJson.ok, false, `${label} update must reject before network, even in full mode`);
+    assert.match(updateJson.error.message, expectedError);
+    assert.equal(credentialResolutions, 0);
+    assert.equal(networkRequests, 0);
+  };
+  await writeFile(join(root, "input", "other-account.json"), JSON.stringify({ ...scopedCache, organization: { ...scopedCache.organization, account: "other-account" } }));
+  await rejectCache("other-account", /belongs to Codecks organization/);
+  await writeFile(join(root, "input", "other-base.json"), JSON.stringify({ ...scopedCache, organization: { ...scopedCache.organization, baseUrl: "https://other.invalid" } }));
+  await rejectCache("other-base", /API base differs/);
+  assert.equal(credentialResolutions, 0);
+  assert.equal(networkRequests, 0);
 } finally {
+  core.__test.setCredentialProviderForTests();
+  globalThis.fetch = previousFetch;
+  for (const key of configKeys) {
+    const value = previousConfig.get(key);
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
   await rm(root, { recursive: true, force: true });
 }
 

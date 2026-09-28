@@ -32,7 +32,7 @@ try
     // Direct execution without an accounting context cannot claim definite absence of requests.
     const direct = payload(await core.card_get.execute({ cardId: "seq:42", format: "json" }));
     assert.equal(direct.error.requestSent, undefined);
-    core.__test.setCredentialProviderForTests({ id: "test", resolve: async () => ({ token: "inert", providerId: "test" }) });
+    core.__test.setCredentialProviderForTests({ id: "test", resolve: async () => ({ token: "cdxat_synthetic-inert", providerId: "test" }) });
     // An error surfacing after dispatch must not erase that dispatch, even if typed as credential failure.
     globalThis.fetch = (async () => { requests++; throw new CodecksCredentialError("credential_rate_limited"); }) as typeof fetch;
     const afterDispatch = payload(await core.runWithAbortSignal(undefined, () => core.card_get.execute({ cardId: "seq:42", format: "json" })));

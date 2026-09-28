@@ -59,7 +59,8 @@ const resolveRuntimeConfig = (): { apiBase: string; token: string; account: stri
     throw new Error("Codecks integration tests no longer execute 1Password helpers directly. Resolve the secret through pi-onepassword or another explicit secret integration, then set CODECKS_TOKEN or CODECKS_PROFILE_<PROFILE>_TOKEN.");
   }
 
-  const token = (profileTokenDirect ?? process.env.CODECKS_TOKEN ?? process.env.CODECKS_API_TOKEN ?? "").trim();
+  const token = (profileTokenDirect ?? (profile?.toUpperCase() === "PERSONAL" ? undefined : process.env.CODECKS_TOKEN ?? process.env.CODECKS_API_TOKEN) ?? "").trim();
+  if (token && !/^cdx(?:at|ut)_/.test(token)) throw new Error("Unsupported Codecks token format; use cdxat_ or cdxut_.");
 
   return { apiBase, token, account, profile };
 };
@@ -353,7 +354,7 @@ const requestJson = async (path: string, body: unknown): Promise<unknown> => {
         headers: {
           "Content-Type": "application/json",
           "X-Account": ACCOUNT,
-          "X-Auth-Token": TOKEN,
+          Authorization: `Bearer ${TOKEN}`,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
@@ -902,6 +903,11 @@ const run = async (): Promise<number> => {
   } catch (error) {
     preflightFailures += 1;
     fail(`run read-only validation failed: ${(error as Error).message}`);
+  }
+
+  if (CREATE_DECK_ENV.trim() && !TOKEN.startsWith("cdxut_")) {
+    fail("The legacy integration mutation script requires a PERSONAL API token for actor-dependent fixtures; organization-token writes need dedicated verified tests.");
+    return 1;
   }
 
   if (!CREATE_DECK_ENV.trim()) {
