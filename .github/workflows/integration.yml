@@ -23,6 +23,10 @@ jobs:
     env:
       CODECKS_ACCOUNT: ${{ secrets.CODECKS_ACCOUNT }}
       CODECKS_TOKEN: ${{ secrets.CODECKS_TOKEN }}
+      # This legacy actor-dependent integration harness uses a PERSONAL test identity.
+      # The product's default ORG profile is unchanged.
+      CODECKS_PROFILE: PERSONAL
+      CODECKS_PROFILE_PERSONAL_TOKEN: ${{ secrets.CODECKS_TOKEN }}
       CODECKS_TEST_DECK: ${{ secrets.CODECKS_TEST_DECK }}
     steps:
       - name: Check out protected default branch
