@@ -150,6 +150,8 @@ const testDirectShortCodeReturnsStructuredCard = async (tools: ToolModule): Prom
     const cardsRelation = getAccountRelation(query, "cards");
     assert.ok(cardsRelation, `expected direct account card query: ${JSON.stringify(query)}`);
     assert.match(cardsRelation.key, /accountSeq/);
+    assert.match(JSON.stringify(cardsRelation.fields), /"childCards"/, "detail retrieval keeps full child relations");
+    assert.doesNotMatch(JSON.stringify(cardsRelation.fields), /count:childCards/, "detail retrieval is not replaced with count-only selection");
     return jsonResponse({ data: buildDetailPayload() });
   }, async () => {
     const result = await tools.card_get.execute({ cardId: CARD_REF });

@@ -3890,7 +3890,7 @@ const cardSummaryFields = [
 
 const cardPlanningFields = [
     ...cardSummaryFields,
-    { childCards: ["cardId", "accountSeq"] },
+    "count:childCards",
 ];
 
 const cardDetailFields = [
@@ -3968,26 +3968,7 @@ const handCardFields = [
     "userId",
     "isVisible",
     "sortIndex",
-    {
-        card: [
-            "cardId",
-            "accountSeq",
-            "title",
-            "status",
-            "derivedStatus",
-            "isDoc",
-            "visibility",
-            "lastUpdatedAt",
-            "dueDate",
-            "effort",
-            "priority",
-            "masterTags",
-            { deck: ["id", "title", "accountSeq"] },
-            { milestone: ["id", "name", "accountSeq"] },
-            { assignee: ["id", "name", "fullName"] },
-            { childCards: ["cardId", "accountSeq"] },
-        ],
-    },
+    { card: cardPlanningFields },
     { user: ["id", "name", "fullName"] },
 ];
 
@@ -5328,15 +5309,25 @@ const hasOwn = (value: CodecksEntity, key: string): boolean =>
 
 const getCardChildCountInfo = (card: CodecksEntity): { known: boolean; count: number | null } =>
 {
-    if (!hasOwn(card, "childCards"))
+    const aggregate = card["count:childCards"];
+    if (typeof aggregate === "number" && Number.isSafeInteger(aggregate) && aggregate >= 0)
+    {
+        return { known: true, count: aggregate };
+    }
+
+    const relation = getRelation(card, "childCards");
+    const children = Array.isArray(relation) ? relation : [relation];
+    const isChildReference = (value: unknown): boolean =>
+        (typeof value === "string" && value.trim().length > 0)
+        || (typeof value === "number" && Number.isFinite(value))
+        || (Boolean(value) && typeof value === "object" && !Array.isArray(value)
+            && ["cardId", "accountSeq", "id"].some((key) => (value as CodecksEntity)[key] !== undefined));
+    if (relation === undefined || relation === null || !children.every(isChildReference))
     {
         return { known: false, count: null };
     }
 
-    return {
-        known: true,
-        count: normalizeCollection(getRelation(card, "childCards") as unknown[] | undefined).length,
-    };
+    return { known: true, count: children.length };
 };
 
 const getCardChildCount = (card: CodecksEntity): number =>

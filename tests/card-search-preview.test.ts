@@ -12,7 +12,9 @@ type FetchMockOptions = {
   rejectCardQueries?: boolean;
   ignoreDeckFilter?: boolean;
   denyCardQueries?: boolean;
+  denyAggregate?: boolean;
   denyPageAtOffset?: number;
+  keepChildRelationOnSummary?: boolean;
 };
 
 const deck = { id: "deck-dev", title: "Dev", accountSeq: 2 };
@@ -51,8 +53,10 @@ const makeCardsPayload = (relationKey: string, cards: MockCard[]) => ({
   },
 });
 
+let lastMockResponseSerializedBytes = 0;
 const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => {
   const requests: any[] = [];
+  lastMockResponseSerializedBytes = 0;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body ?? "{}"));
     requests.push(body);
@@ -82,6 +86,9 @@ const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => 
     if (options.denyCardQueries) {
       return new Response(JSON.stringify({ error: "missing_scope", path: "_root.account.cards", requiredScope: "card:read" }), { status: 403 });
     }
+    if (options.denyAggregate && queryText.includes('count:childCards')) {
+      return new Response(JSON.stringify({ error: "invalid_aggregate", path: "_root.account.cards", message: "Invalid aggregate selection" }), { status: 400 });
+    }
 
     const relationKey = getCardsRelationKey(body.query);
     assert.ok(relationKey, `expected cards relation in ${queryText}`);
@@ -95,7 +102,21 @@ const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => 
     const offset = Number(filters.$offset ?? 0);
     const limit = Number(filters.$limit ?? scopedCards.length);
     const page = scopedCards.slice(offset, offset + limit);
-    return new Response(JSON.stringify(makeCardsPayload(relationKey, page)), {
+    const selection = (body.query._root[0].account[0] as Record<string, unknown>)[relationKey] as unknown[];
+    const projected = page.map((card) => {
+      if (!selection.includes("count:childCards")) return card;
+      const result = { ...card };
+      if (!options.keepChildRelationOnSummary) delete result.childCards;
+      if (Object.prototype.hasOwnProperty.call(card, "count:childCards")) {
+        if (card["count:childCards"] === undefined) delete result["count:childCards"];
+      } else if (Array.isArray(card.childCards)) {
+        result["count:childCards"] = card.childCards.length;
+      }
+      return result;
+    });
+    const responseText = JSON.stringify(makeCardsPayload(relationKey, projected));
+    lastMockResponseSerializedBytes += Buffer.byteLength(responseText);
+    return new Response(responseText, {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -191,6 +212,8 @@ const cards: MockCard[] = [
   assert.equal(payload.data.matches, 5);
   assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev", "resolved deck is pushed into the paged server filter");
   assert.ok(JSON.stringify(requests[1].query).includes('"deck"'), "deck relation remains selected for defensive verification");
+  assert.ok(JSON.stringify(requests[1].query).includes('"count:childCards"'), "paged summaries request only the child-count aggregate");
+  assert.ok(!JSON.stringify(requests[1].query).includes('"childCards"'), "paged summaries do not request child references");
 
   const first = payload.data.cards[0];
   assert.equal(first.shortCode, "$14j");
@@ -203,6 +226,79 @@ const cards: MockCard[] = [
   assert.equal(first.deckId, "deck-dev");
   assert.equal(first.milestoneId, "milestone-alpha");
   assert.equal(first.lastUpdatedAt, "2026-05-11T00:00:00.000Z");
+}
+
+{
+  const manyChildren = {
+    ...cards[2], cardId: "synthetic-many-children", accountSeq: 200,
+    childCards: Array.from({ length: 250 }, (_, index) => `synthetic-child-${index}`),
+  };
+  const requests = installFetchMock([manyChildren, cards[0]]);
+  const result = parseStructuredJson(String(await core.card_search.execute({ outputMode: "counts", format: "json" })));
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1, "aggregate and former child-relation summary each require one page request, no per-card preflight");
+  assert.equal(result.data.matches, 2);
+  assert.equal(result.data.facets.status.not_started, 2, "counts output retains status facets rather than reducing to one aggregate total");
+  assert.equal(result.data.sampleCards[0].childCount, 250);
+  assert.equal(result.data.sampleCards[0].childCountKnown, true);
+  assert.equal(result.data.sampleCards[1].childCount, 0);
+  assert.equal(result.data.sampleCards[1].childCountKnown, true);
+  assert.ok(JSON.stringify(requests[0].query).includes('"count:childCards"'));
+  assert.ok(!JSON.stringify(requests[0].query).includes('"childCards"'));
+  const oldNormalizedBytes = Buffer.byteLength(JSON.stringify(makeCardsPayload(getCardsRelationKey(requests[0].query)!, [manyChildren, cards[0]])));
+  assert.ok(lastMockResponseSerializedBytes < oldNormalizedBytes, `synthetic normalized JSON: aggregate ${lastMockResponseSerializedBytes} bytes < old child refs ${oldNormalizedBytes} bytes; same one request`);
+  console.log(`Synthetic high-child fixture: one request each; normalized JSON aggregate ${lastMockResponseSerializedBytes} bytes vs previous child refs ${oldNormalizedBytes} bytes (not wire/compressed bytes).`);
+}
+
+{
+  const fixture = [
+    { ...cards[0], cardId: "synthetic-unknown-count", accountSeq: 210, childCards: undefined, "count:childCards": undefined },
+    { ...cards[0], cardId: "synthetic-invalid-count", accountSeq: 211, childCards: undefined, "count:childCards": "0" },
+    { ...cards[0], cardId: "synthetic-negative-count", accountSeq: 212, childCards: undefined, "count:childCards": -1 },
+    { ...cards[0], cardId: "synthetic-observed-zero", accountSeq: 213, childCards: [], "count:childCards": 0 },
+    { ...cards[0], cardId: "synthetic-relation-fallback", accountSeq: 214, childCards: ["synthetic-child"], "count:childCards": "invalid" },
+  ];
+  installFetchMock(fixture);
+  const result = parseStructuredJson(String(await core.card_search.execute({ format: "json" })));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.data.cards.map((card: any) => [card.childCountKnown, card.childCount]), [
+    [false, null], [false, null], [false, null], [true, 0], [false, null],
+  ], "missing/invalid/forbidden-like aggregate values must not become known zero");
+  installFetchMock(fixture, { keepChildRelationOnSummary: true });
+  const withRelation = parseStructuredJson(String(await core.card_search.execute({ format: "json" })));
+  assert.equal(withRelation.data.cards[3].childCountKnown, true, "present empty relation is still a known zero");
+  assert.equal(withRelation.data.cards[4].childCount, 1, "a valid present child relation may backfill an invalid aggregate without another request");
+}
+
+{
+  const requests: any[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    requests.push(body);
+    const root = body.query?._root?.[0];
+    if (root?.loggedInUser) {
+      return new Response(JSON.stringify({ data: { _root: { loggedInUser: "synthetic-user" }, user: { "synthetic-user": { id: "synthetic-user" } } } }), { status: 200 });
+    }
+    const relationKey = Object.keys(root?.account?.[0] ?? {})[0];
+    assert.match(relationKey, /^(handCards|queueEntries)\(/);
+    const relationFields = root.account[0][relationKey];
+    assert.ok(JSON.stringify(relationFields).includes('"count:childCards"'), "Hand/bookmark summaries request child aggregates");
+    assert.ok(!JSON.stringify(relationFields).includes('"childCards"'), "Hand/bookmark summaries omit child identities");
+    const isHand = relationKey.startsWith("queueEntries(");
+    const entity = isHand ? "queueEntry" : "handCard";
+    return new Response(JSON.stringify({ data: {
+      _root: { account: { [relationKey]: ["row-1"] } },
+      [entity]: { "row-1": { userId: "synthetic-user", sortIndex: 0, card: "synthetic-card" } },
+      card: { "synthetic-card": { ...cards[0], cardId: "synthetic-card", "count:childCards": 7, childCards: undefined } },
+    } }), { status: 200 });
+  }) as typeof fetch;
+  for (const location of ["hand", "bookmarks"] as const) {
+    const result = parseStructuredJson(String(await core.card_search.execute({ location, format: "json" })));
+    assert.equal(result.ok, true, `${location} summary should hydrate numeric count`);
+    assert.equal(result.data.cards[0].childCount, 7);
+    assert.equal(result.data.cards[0].childCountKnown, true);
+  }
+  assert.equal(requests.length, 4, "each personal summary needs only its existing identity + relation read");
 }
 
 {
@@ -377,6 +473,18 @@ const cards: MockCard[] = [
   assert.equal(denied.error.apiCode, "missing_scope");
   assert.equal(denied.error.apiPath, "_root.account.cards");
   assert.equal(requests.length, 2, "a rejected scoped query never falls back to an account-wide query");
+  assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev");
+  assert.ok(JSON.stringify(requests[1].query).includes('"count:childCards"'), "aggregate selection errors are not retried without the aggregate");
+}
+
+{
+  const requests = installFetchMock(cards, { denyAggregate: true });
+  const rejected = parseStructuredJson(String(await core.card_search.execute({ deck: "Dev", format: "json" })));
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.apiCode, "invalid_aggregate");
+  assert.equal(rejected.error.apiPath, "_root.account.cards");
+  assert.equal(rejected.error.httpStatus, 400);
+  assert.equal(requests.length, 2, "invalid aggregate never retries without aggregate or without deck filter");
   assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev");
 }
 

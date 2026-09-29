@@ -11,6 +11,7 @@ and this project follows semantic versioning for public package releases.
 
 - Push resolved Deck filters into paged card searches while retaining defensive Deck and local milestone checks; a Deck-scoped scan budget now counts server-returned Deck rows without broad fallback on permission or query errors. Milestone-only searches remain account-visible scans.
 - Bound optional resolvable diagnostic relation probes to schema-confirmed ordered has-many relations; unsupported relations fail locally rather than sending invalid pagination.
+- Use Codecks `count:childCards` in summary/search/effort-preview reads instead of downloading child-card references solely to calculate a count; preserve full child relations in detail views, multifacet counts output, and unknown versus observed-zero counts.
 
 ### Fixed
 
