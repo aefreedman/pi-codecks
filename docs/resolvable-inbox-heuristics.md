@@ -99,4 +99,4 @@ Enable debug tools and use:
 - `codecks_debug_logged_in_user_resolvable_participation`
 - `codecks_debug_logged_in_user_resolvables`
 
-These tools are intended for low-frequency diagnostics only.
+These tools are intended for low-frequency diagnostics only. Optional relation probes paginate only schema-confirmed sortable has-many relations; unsupported, single-row, or array-backed relations report a local unsupported probe result instead of sending an invalid `$limit` query. Probe failures do not establish that a user has no notifications or participants.

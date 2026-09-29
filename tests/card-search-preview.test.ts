@@ -10,6 +10,9 @@ type MockCard = Record<string, unknown>;
 
 type FetchMockOptions = {
   rejectCardQueries?: boolean;
+  ignoreDeckFilter?: boolean;
+  denyCardQueries?: boolean;
+  denyPageAtOffset?: number;
 };
 
 const deck = { id: "deck-dev", title: "Dev", accountSeq: 2 };
@@ -27,6 +30,12 @@ const getCardsRelationKey = (query: any): string | undefined => {
   const accountEntries = root?.account;
   if (!Array.isArray(accountEntries)) return undefined;
   return accountEntries.flatMap((entry: any) => Object.keys(entry ?? {})).find((key: string) => key.startsWith("cards("));
+};
+
+const getCardsFilters = (request: any): Record<string, any> => {
+  const key = getCardsRelationKey(request.query);
+  assert.ok(key, "expected a paged account cards relation");
+  return JSON.parse(key.slice("cards(".length, -1));
 };
 
 const makeCardsPayload = (relationKey: string, cards: MockCard[]) => ({
@@ -70,13 +79,22 @@ const installFetchMock = (cards: MockCard[], options: FetchMockOptions = {}) => 
     if (options.rejectCardQueries) {
       throw new Error("mock Codecks outage");
     }
+    if (options.denyCardQueries) {
+      return new Response(JSON.stringify({ error: "missing_scope", path: "_root.account.cards", requiredScope: "card:read" }), { status: 403 });
+    }
 
     const relationKey = getCardsRelationKey(body.query);
     assert.ok(relationKey, `expected cards relation in ${queryText}`);
-    const filters = JSON.parse(relationKey.slice("cards(".length, -1));
+    const filters = getCardsFilters(body);
+    if (options.denyPageAtOffset !== undefined && Number(filters.$offset ?? 0) >= options.denyPageAtOffset) {
+      return new Response(JSON.stringify({ error: "missing_scope", path: "_root.account.cards", requiredScope: "card:read" }), { status: 403 });
+    }
+    const scopedCards = options.ignoreDeckFilter || filters.deckId === undefined
+      ? cards
+      : cards.filter((card) => card.deck === filters.deckId || card.deck_id === filters.deckId || card.deckId === filters.deckId);
     const offset = Number(filters.$offset ?? 0);
-    const limit = Number(filters.$limit ?? cards.length);
-    const page = cards.slice(offset, offset + limit);
+    const limit = Number(filters.$limit ?? scopedCards.length);
+    const page = scopedCards.slice(offset, offset + limit);
     return new Response(JSON.stringify(makeCardsPayload(relationKey, page)), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -171,8 +189,8 @@ const cards: MockCard[] = [
   assert.equal(payload.ok, true);
   assert.equal(payload.action, "card-search");
   assert.equal(payload.data.matches, 5);
-  assert.ok(!JSON.stringify(requests[1].query).includes("deckId"), "deck-scoped search should avoid the live-API-unsafe deckId cards filter");
-  assert.ok(JSON.stringify(requests[1].query).includes('"deck"'), "deck-scoped search should request deck relation data for client-side filtering");
+  assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev", "resolved deck is pushed into the paged server filter");
+  assert.ok(JSON.stringify(requests[1].query).includes('"deck"'), "deck relation remains selected for defensive verification");
 
   const first = payload.data.cards[0];
   assert.equal(first.shortCode, "$14j");
@@ -194,8 +212,9 @@ const cards: MockCard[] = [
 
   assert.equal(payload.ok, true);
   assert.equal(payload.action, "card-search");
-  assert.ok(!JSON.stringify(requests[1].query).includes("milestoneId"), "milestone-scoped search should avoid the live-API-unsafe milestoneId cards filter");
+  assert.equal(getCardsFilters(requests[1]).milestoneId, undefined, "milestone pushdown stays unverified and local");
   assert.ok(JSON.stringify(requests[1].query).includes('"milestone"'), "milestone-scoped search should request milestone relation data for client-side filtering");
+  assert.equal(getCardsFilters(requests[1]).deckId, undefined, "milestone-only search remains an account-visible scan");
 }
 
 {
@@ -323,12 +342,15 @@ const cards: MockCard[] = [
 }
 
 {
-  installFetchMock(cards);
+  const requests = installFetchMock(cards);
   const intersectionText = String(await core.card_search.execute({ location: "milestone", deck: "Dev", milestone: "Alpha", format: "json" }));
   const intersection = parseStructuredJson(intersectionText);
   assert.equal(intersection.ok, true);
   assert.equal(intersection.data.matches, 1);
   assert.equal(intersection.data.cards[0].title, "Eligible card");
+  assert.equal(getCardsFilters(requests[2]).deckId, "deck-dev", "only the verified deck predicate is pushed down");
+  assert.equal(getCardsFilters(requests[2]).milestoneId, undefined, "milestone is still verified after the deck-scoped read");
+  assert.equal(intersection.data.scannedCards, 5, "intersection coverage counts deck rows before local milestone filtering");
 
   const ignoredText = String(await core.card_list_missing_effort.execute({ location: "hand", deck: "Dev", format: "json" }));
   const ignored = parseStructuredJson(ignoredText);
@@ -345,6 +367,61 @@ const cards: MockCard[] = [
   assert.equal(payload.action, "card-list-missing-effort");
   assert.equal(payload.error.category, "api_error");
   assert.match(payload.error.message, /mock Codecks outage/);
+}
+
+{
+  const requests = installFetchMock(cards, { denyCardQueries: true });
+  const denied = parseStructuredJson(String(await core.card_search.execute({ deck: "Dev", format: "json" })));
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.category, "missing_scope");
+  assert.equal(denied.error.apiCode, "missing_scope");
+  assert.equal(denied.error.apiPath, "_root.account.cards");
+  assert.equal(requests.length, 2, "a rejected scoped query never falls back to an account-wide query");
+  assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev");
+}
+
+{
+  const requests = installFetchMock(cards, { denyPageAtOffset: 2 });
+  const denied = parseStructuredJson(String(await core.card_search.execute({ deck: "Dev", pageSize: 2, scanLimit: 5, format: "json" })));
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.category, "missing_scope");
+  assert.equal(denied.error.scannedCards, 2, "earlier pages remain measured, but are not presented as complete matches");
+  assert.equal(denied.error.requestsAttempted, 2);
+  assert.equal(denied.error.complete, false);
+  assert.equal(denied.error.cards, undefined, "private earlier-page rows are not copied into error details");
+  assert.equal(requests.length, 3);
+  assert(requests.slice(1).every((request) => getCardsFilters(request).deckId === "deck-dev"), "no failed page broadens to account scan");
+  const preview = parseStructuredJson(String(await core.card_list_missing_effort.execute({ deck: "Dev", pageSize: 2, scanLimit: 5, format: "json" })));
+  assert.equal(preview.ok, false);
+  assert.equal(preview.error.category, "missing_scope");
+  assert.equal(preview.error.scannedCards, 2);
+}
+
+{
+  const savedFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    requests++;
+    const queryText = JSON.stringify(JSON.parse(String(init?.body ?? "{}")).query);
+    const invalidLimit = queryText.includes('$limit');
+    return new Response(JSON.stringify({
+      error: invalidLimit ? "invalid_limit" : "invalid_order",
+      path: "_root.account.cards",
+      message: invalidLimit ? "$limit requires $order" : "$order must name a sortable field",
+    }), { status: 400 });
+  }) as typeof fetch;
+  try {
+    for (const [filter, code] of [[{ $limit: 2 }, "invalid_limit"], [{ $order: { field: "createdAt" } }, "invalid_order"]] as const) {
+      const key = `cards(${JSON.stringify(filter)})`;
+      const result = parseStructuredJson(String(await core.query.execute({ query: { _root: [{ account: [{ [key]: ["cardId"] }] }] } })));
+      assert.equal(result.ok, false);
+      assert.equal(result.error.category, "api_error");
+      assert.equal(result.error.apiCode, code);
+      assert.equal(result.error.apiPath, "_root.account.cards");
+      assert.match(result.error.validationMessage, /\$limit requires \$order|\$order must name/);
+    }
+    assert.equal(requests, 2, "invalid query diagnostics are preserved without broad retries");
+  } finally { globalThis.fetch = savedFetch; }
 }
 
 {
@@ -394,23 +471,49 @@ const cards: MockCard[] = [
 
 {
   const pagedCards = [
-    { ...cards[5], cardId: "other-1", accountSeq: 301 },
-    { ...cards[5], cardId: "other-2", accountSeq: 302 },
-    { ...cards[0], cardId: "target-after-page-one", accountSeq: 303, title: "Late scoped match" },
+    ...Array.from({ length: 100 }, (_, index) => ({ ...cards[5], cardId: `other-${index}`, accountSeq: 300 + index })),
+    { ...cards[0], cardId: "target-after-old-account-window", accountSeq: 500, title: "Late scoped match" },
   ];
   const requests = installFetchMock(pagedCards);
-  const text = String(await core.card_search.execute({ deck: "Dev", pageSize: 2, scanLimit: 10, format: "json" }));
+  const text = String(await core.card_search.execute({ deck: "Dev", pageSize: 2, scanLimit: 2, format: "json" }));
   const payload = parseStructuredJson(text);
 
   assert.equal(payload.ok, true);
   assert.equal(payload.data.matches, 1);
   assert.equal(payload.data.cards[0].title, "Late scoped match");
-  assert.equal(payload.data.scannedCards, 3);
+  assert.equal(payload.data.scannedCards, 1, "server-scoped budget counts only the returned deck row, not 100 unrelated cards");
   assert.equal(payload.data.complete, true);
   assert.equal(payload.data.scanLimitReached, false);
   const cardRequests = requests.map((request) => getCardsRelationKey(request.query)).filter(Boolean) as string[];
-  assert.equal(cardRequests.length, 2);
-  assert.match(cardRequests[1], /"\$offset":2/);
+  assert.equal(cardRequests.length, 1);
+  assert.equal(getCardsFilters(requests[1]).deckId, "deck-dev");
+}
+
+{
+  const requests = installFetchMock([
+    { ...cards[5], cardId: "wrong-deck" },
+    { ...cards[0], cardId: "right-deck", deck: undefined, deck_id: "deck-dev" },
+  ], { ignoreDeckFilter: true });
+  const result = parseStructuredJson(String(await core.card_search.execute({ deck: "Dev", pageSize: 3, scanLimit: 3, format: "json" })));
+  assert.equal(result.data.matches, 1, "unexpected server rows are still rejected by client scope verification");
+  assert.equal(result.data.cards[0].title, "Eligible card");
+  assert.equal(result.data.scannedCards, 2);
+  assert.equal(result.data.complete, true);
+  assert.equal(requests.length, 2);
+}
+
+{
+  installFetchMock([
+    { ...cards[5], cardId: "other-first" },
+    { ...cards[0], cardId: "archived-deck-card", visibility: "archived" },
+    { ...cards[0], cardId: "visible-deck-card" },
+  ]);
+  const result = parseStructuredJson(String(await core.card_search.execute({ deck: "Dev", pageSize: 2, scanLimit: 2, format: "json" })));
+  assert.equal(result.data.scannedCards, 2, "the scoped budget counts server rows even when archive filtering drops one");
+  assert.equal(result.data.matches, 1);
+  assert.equal(result.data.complete, false);
+  assert.equal(result.data.scanLimitReached, true);
+  assert.match(result.warnings[0], /incomplete/i);
 }
 
 {

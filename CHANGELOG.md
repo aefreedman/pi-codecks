@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+### Changed
+
+- Push resolved Deck filters into paged card searches while retaining defensive Deck and local milestone checks; a Deck-scoped scan budget now counts server-returned Deck rows without broad fallback on permission or query errors. Milestone-only searches remain account-visible scans.
+- Bound optional resolvable diagnostic relation probes to schema-confirmed ordered has-many relations; unsupported relations fail locally rather than sending invalid pagination.
+
+### Fixed
+
+- Preserve structured permission/query diagnostics and bounded scan progress when a scoped card page fails, without including earlier card rows in errors.
+
 ## [0.14.0] - 2026-09-28
 
 ### Added

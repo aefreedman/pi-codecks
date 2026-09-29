@@ -22,7 +22,7 @@ Read this reference for card lookup, creation, ordinary updates, lifecycle chang
 ## Search
 
 - `codecks_card_search` excludes archived/deleted cards by default; set `includeArchived=true` only when explicitly needed.
-- Supplying a Deck or milestone without `location` infers that scope. Deck and milestone may be combined for an intersection.
+- Supplying a Deck or milestone without `location` infers that scope. Deck-scoped paged account-card searches push the resolved Deck ID to the server, then defensively verify each result; `scanLimit` counts returned Deck rows. Deck + milestone intersections push only the Deck filter and verify the milestone locally; milestone-only searches still scan token-visible account cards. A rejected scoped query never falls back to a broad scan.
 - `title` supports partial and glob-style `*`/`?` matching. Use `text` with `searchIn: "title_or_content"` or `"content"` for bodies.
 - Compact output is the default. Prefer `outputMode: "counts"` for aggregate analysis and `"detailed"` only when every row is required.
 - No-match results are successful empty searches. Inspect criteria/tips rather than treating them as failures.
