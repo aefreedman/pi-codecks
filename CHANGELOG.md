@@ -5,17 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.14.1] - 2026-09-28
 
 ### Changed
 
-- Push resolved Deck filters into paged card searches while retaining defensive Deck and local milestone checks; a Deck-scoped scan budget now counts server-returned Deck rows without broad fallback on permission or query errors. Milestone-only searches remain account-visible scans.
-- Bound optional resolvable diagnostic relation probes to schema-confirmed ordered has-many relations; unsupported relations fail locally rather than sending invalid pagination.
-- Use Codecks `count:childCards` in summary/search/effort-preview reads instead of downloading child-card references solely to calculate a count; preserve full child relations in detail views, multifacet counts output, and unknown versus observed-zero counts.
+- Filter paged card searches by resolved Deck ID at the server while still checking Deck and milestone scopes locally. Deck-scoped scan limits now count server-returned Deck cards; milestone-only searches still scan token-visible account cards.
+- Request `count:childCards` for card-search and effort-preview summaries instead of fetching child references just to count them. Full detail views still fetch children, and count-only search output retains its facets. Missing or invalid counts remain unknown rather than observed zero; previously ambiguous missing child data could appear as zero.
 
 ### Fixed
 
-- Preserve structured permission/query diagnostics and bounded scan progress when a scoped card page fails, without including earlier card rows in errors.
+- Preserve bounded permission/query diagnostics and scan progress on rejected scoped card pages without retrying a broader query or exposing earlier rows.
+- Order optional diagnostic relation probes with supported fields and reject unsupported probes locally instead of sending invalid pagination.
 
 ## [0.14.0] - 2026-09-28
 
