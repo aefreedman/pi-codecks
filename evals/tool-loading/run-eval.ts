@@ -97,7 +97,7 @@ function parseOptions(argv: string[]): Options {
 }
 
 function validate(config: EvalConfig, cases: EvalCase[], baseline: JsonObject, options: Options): void {
-  if (config.piVersionPrefix !== "0.87.1") fail("config must pin Pi 0.87.1 exactly");
+  if (config.piVersionPrefix !== "0.99.1") fail("config must pin Pi 0.99.1 exactly");
   if (!Number.isInteger(config.timeoutMs) || config.timeoutMs <= 0 || !Number.isInteger(config.maxOutputChars) || config.maxOutputChars <= 0) fail("invalid numeric config bounds");
   if (!sameSet(config.conditions, ["all-active", "balanced", "loader-only"])) fail("config must declare all three loading conditions");
   if (!sameSet(config.mutationTools, EXPECTED_MUTATION_TOOLS)) fail("config mutationTools must list every package-exposed Codecks mutation exactly once");

@@ -54,9 +54,14 @@ assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.deepEqual(packageJson.dependencies, { typebox: "1.3.8" }, "TypeBox is a runtime import and must resolve for standalone installed packages.");
-assert.equal(packageJson.peerDependencies?.typebox, undefined, "runtime TypeBox must not rely on an optional peer.");
-assert.equal(packageJson.peerDependenciesMeta?.typebox, undefined, "runtime TypeBox must not rely on optional peer metadata.");
+assert.equal(packageJson.dependencies?.typebox, undefined, "Pi supplies TypeBox; do not install a production copy.");
+assert.equal(packageJson.peerDependencies?.typebox, "*");
+assert.deepEqual(packageJson.peerDependenciesMeta?.typebox, { optional: true });
+assert.equal(packageJson.devDependencies?.typebox, "1.3.8");
+for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+  assert.equal(packageJson.peerDependencies?.[name], "*");
+  assert.equal(packageJson.devDependencies?.[name], "0.99.1");
+}
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], undefined);

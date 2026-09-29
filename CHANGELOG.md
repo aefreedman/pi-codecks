@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## Unreleased
+
+- Align development and deterministic validation with Pi 0.99.1. Use wildcard Pi peers and the host-provided TypeBox peer instead of a production copy.
+
 ## [0.14.1] - 2026-09-28
 
 ### Changed
