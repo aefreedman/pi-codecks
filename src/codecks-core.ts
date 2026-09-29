@@ -3890,7 +3890,7 @@ const cardSummaryFields = [
 
 const cardPlanningFields = [
     ...cardSummaryFields,
-    { childCards: ["cardId", "accountSeq"] },
+    "count:childCards",
 ];
 
 const cardDetailFields = [
@@ -3968,26 +3968,7 @@ const handCardFields = [
     "userId",
     "isVisible",
     "sortIndex",
-    {
-        card: [
-            "cardId",
-            "accountSeq",
-            "title",
-            "status",
-            "derivedStatus",
-            "isDoc",
-            "visibility",
-            "lastUpdatedAt",
-            "dueDate",
-            "effort",
-            "priority",
-            "masterTags",
-            { deck: ["id", "title", "accountSeq"] },
-            { milestone: ["id", "name", "accountSeq"] },
-            { assignee: ["id", "name", "fullName"] },
-            { childCards: ["cardId", "accountSeq"] },
-        ],
-    },
+    { card: cardPlanningFields },
     { user: ["id", "name", "fullName"] },
 ];
 
@@ -5328,15 +5309,25 @@ const hasOwn = (value: CodecksEntity, key: string): boolean =>
 
 const getCardChildCountInfo = (card: CodecksEntity): { known: boolean; count: number | null } =>
 {
-    if (!hasOwn(card, "childCards"))
+    const aggregate = card["count:childCards"];
+    if (typeof aggregate === "number" && Number.isSafeInteger(aggregate) && aggregate >= 0)
+    {
+        return { known: true, count: aggregate };
+    }
+
+    const relation = getRelation(card, "childCards");
+    const children = Array.isArray(relation) ? relation : [relation];
+    const isChildReference = (value: unknown): boolean =>
+        (typeof value === "string" && value.trim().length > 0)
+        || (typeof value === "number" && Number.isFinite(value))
+        || (Boolean(value) && typeof value === "object" && !Array.isArray(value)
+            && ["cardId", "accountSeq", "id"].some((key) => (value as CodecksEntity)[key] !== undefined));
+    if (relation === undefined || relation === null || !children.every(isChildReference))
     {
         return { known: false, count: null };
     }
 
-    return {
-        known: true,
-        count: normalizeCollection(getRelation(card, "childCards") as unknown[] | undefined).length,
-    };
+    return { known: true, count: children.length };
 };
 
 const getCardChildCount = (card: CodecksEntity): number =>
@@ -5371,7 +5362,12 @@ const relationMatchesLookupId = (value: unknown, lookupId: string | number): boo
 
 
 const cardMatchesClientScopes = (card: CodecksEntity, scopes: ClientCardScopeFilter[]): boolean =>
-    scopes.every((scope) => relationMatchesLookupId(card[scope.type], scope.id));
+    scopes.every((scope) =>
+    {
+        const values = [card[scope.type], card[`${scope.type}_id`], card[`${scope.type}Id`]]
+            .filter((value) => value !== undefined && value !== null);
+        return values.length > 0 && values.every((value) => relationMatchesLookupId(value, scope.id));
+    });
 
 type TextSearchMatcher = {
     raw: string;
@@ -5872,6 +5868,7 @@ const fetchCardMatches = async (args: CardSearchParams): Promise<CardSearchResul
         {
             return { error: renderLookupMessage(deckResult, String(args.deck ?? "")) };
         }
+        filters.deckId = deckResult.id;
         clientScopeFilters.push({ type: "deck", id: deckResult.id });
     }
 
@@ -6132,7 +6129,7 @@ export const card_search = tool({
         milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone name or ID when location=milestone."),
         userId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Explicit human user ID for ORG location=hand; PERSONAL reads its own hand."),
         limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum number of matching cards to return."),
-        scanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum globally ordered cards to scan before reporting incomplete results."),
+        scanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum server-returned cards to scan; deck scope counts server-filtered deck cards, other searches count account-visible cards."),
         pageSize: tool.schema.number().min(1).max(500).optional().describe("Cards requested per page during the bounded scan."),
         includeArchived: tool.schema.boolean().optional().describe("Include cards whose visibility is archived/deleted (default: false)."),
         includeDone: tool.schema.boolean().optional().describe("Include cards whose status/derivedStatus is done (default: true). Set false for open/undone searches."),
@@ -6165,12 +6162,19 @@ export const card_search = tool({
         }
         catch (error)
         {
+            const cause = error instanceof PagedCardScanFailure ? error.cause : error;
             return toStructuredErrorResult(
                 format,
                 "card-search",
-                error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)),
-                toErrorMessage(error),
-                getOperationErrorData(error),
+                cause instanceof CodecksOperationError ? cause.category : classifyApiErrorCategory(toErrorMessage(cause)),
+                toErrorMessage(cause),
+                {
+                    ...getOperationErrorData(cause),
+                    ...(error instanceof PagedCardScanFailure ? {
+                        scannedCards: error.scan.scannedCards, requestsAttempted: error.scan.requestsAttempted,
+                        queueWaitMs: error.scan.queueWaitMs, elapsedMs: error.scan.elapsedMs, complete: false,
+                    } : {}),
+                },
             );
         }
 
@@ -6419,7 +6423,7 @@ export const card_list_missing_effort = tool({
         includeDone: tool.schema.boolean().optional().describe("Include done cards in eligible results (default: false)."),
         includeExcluded: tool.schema.boolean().optional().describe("Include excluded cards with reason codes in the result (default: true)."),
         limit: tool.schema.number().min(1).max(3000).optional().describe("Maximum candidate/exclusion rows to return."),
-        scanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum globally ordered cards to scan before reporting incomplete results."),
+        scanLimit: tool.schema.number().min(1).max(10000).optional().describe("Maximum server-returned cards to scan; deck scope counts server-filtered deck cards, other searches count account-visible cards."),
         pageSize: tool.schema.number().min(1).max(500).optional().describe("Cards requested per page during the bounded scan."),
         includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards in the scan (default: false)."),
         format: outputFormatArg,
@@ -6446,7 +6450,13 @@ export const card_list_missing_effort = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-list-missing-effort", "api_error", toErrorMessage(error), {
+            const cause = error instanceof PagedCardScanFailure ? error.cause : error;
+            return toStructuredErrorResult(format, "card-list-missing-effort", cause instanceof CodecksOperationError ? cause.category : classifyApiErrorCategory(toErrorMessage(cause)), toErrorMessage(cause), {
+                ...getOperationErrorData(cause),
+                ...(error instanceof PagedCardScanFailure ? {
+                    scannedCards: error.scan.scannedCards, requestsAttempted: error.scan.requestsAttempted,
+                    queueWaitMs: error.scan.queueWaitMs, elapsedMs: error.scan.elapsedMs, complete: false,
+                } : {}),
                 scope: {
                     title: args.title ?? null,
                     location: args.location ?? null,
@@ -12684,6 +12694,16 @@ export const list_logged_in_user_actionable_resolvables = tool({
     },
 });
 
+// Optional probes must not send $limit without $order, or paginate unknown/single/fkAsArray relations.
+// Only these schema-confirmed hasMany relations have a known sortable field and safe selection.
+const resolvableDebugRelations: Record<string, { order: string; fields: string[] }> = {
+    participants: { order: "-firstJoinedAt", fields: ["userId", "resolvableId", "firstJoinedAt"] },
+    entries: { order: "-createdAt", fields: ["entryId", "createdAt"] },
+};
+const userDebugRelations: Record<string, { order: string; fields: string[] }> = {
+    participations: { order: "-firstJoinedAt", fields: ["userId", "resolvableId", "firstJoinedAt"] },
+};
+
 export const debug_logged_in_user_resolvable_participation = tool({
     description: "Probe participant/subscription/opt-out signals for logged-in-user attention-worthy resolvables and estimate bubble states.",
     args: {
@@ -12929,13 +12949,21 @@ export const debug_logged_in_user_resolvable_participation = tool({
                     continue;
                 }
 
-                const relationKey = relationQuery(relationName, { $limit: relationProbeLimit });
+                const supported = resolvableDebugRelations[relationName];
+                if (!supported)
+                {
+                    const error = `Unsupported resolvable probe relation '${relationName}'; only known ordered hasMany relations may be paginated.`;
+                    warnings.push(error);
+                    resolvableRelationProbes.push({ relation: relationName, ok: false, error });
+                    continue;
+                }
+                const relationKey = relationQuery(relationName, { $order: supported.order, $limit: relationProbeLimit });
                 const probeQuery = {
                     [sampleKey]: [
                         "id",
                         "context",
                         {
-                            [relationKey]: ["id", "entryId", "name", "fullName"],
+                            [relationKey]: supported.fields,
                         },
                     ],
                 };
@@ -13376,7 +13404,15 @@ export const debug_logged_in_user_resolvables = tool({
                 continue;
             }
 
-            const relationKey = relationQuery(relationName, { $limit: relationProbeLimit });
+            const supported = userDebugRelations[relationName];
+            if (!supported)
+            {
+                const error = `Unsupported loggedInUser probe relation '${relationName}'; only known ordered hasMany relations may be paginated.`;
+                warnings.push(error);
+                relationProbes.push({ relation: relationName, ok: false, error });
+                continue;
+            }
+            const relationKey = relationQuery(relationName, { $order: supported.order, $limit: relationProbeLimit });
             const probeQuery = {
                 _root: [
                     {
@@ -13384,7 +13420,7 @@ export const debug_logged_in_user_resolvables = tool({
                             "id",
                             "name",
                             {
-                                [relationKey]: ["id"],
+                                [relationKey]: supported.fields,
                             },
                         ],
                     },

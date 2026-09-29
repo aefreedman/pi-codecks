@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
+## [0.14.1] - 2026-09-28
+
+### Changed
+
+- Filter paged card searches by resolved Deck ID at the server while still checking Deck and milestone scopes locally. Deck-scoped scan limits now count server-returned Deck cards; milestone-only searches still scan token-visible account cards.
+- Request `count:childCards` for card-search and effort-preview summaries instead of fetching child references just to count them. Full detail views still fetch children, and count-only search output retains its facets. Missing or invalid counts remain unknown rather than observed zero; previously ambiguous missing child data could appear as zero.
+
+### Fixed
+
+- Preserve bounded permission/query diagnostics and scan progress on rejected scoped card pages without retrying a broader query or exposing earlier rows.
+- Order optional diagnostic relation probes with supported fields and reject unsupported probes locally instead of sending invalid pagination.
+
 ## [0.14.0] - 2026-09-28
 
 ### Added
