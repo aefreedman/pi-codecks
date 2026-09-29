@@ -1,6 +1,6 @@
 # Release Process
 
-`pi-codecks` uses npm trusted publishing with provenance. Publishing begins only when a maintainer creates a GitHub Release from an annotated version tag; the GitHub `npm` environment adds the `v*` tag policy without a redundant reviewer gate. The npm package must trust this repository's `.github/workflows/publish.yml` workflow. No long-lived `NPM_TOKEN` is used by the workflow.
+`pi-codecks` uses npm trusted publishing with provenance. Publishing begins only when a maintainer creates a GitHub Release from an annotated version tag; the GitHub `npm` environment adds the `v*` tag policy without a redundant reviewer gate. The npm package must trust this repository's workflow filename `publish.yml` (located at `.github/workflows/publish.yml`). No long-lived `NPM_TOKEN` is used by the workflow.
 
 ## Repository controls
 
@@ -10,7 +10,7 @@ Before relying on the workflows for release or live validation, verify the GitHu
 - Actions use read-only default permissions and reviewed commit-SHA pins; Dependabot proposes dependency and action-pin updates.
 - The `codecks-integration` environment uses a dedicated limited CI identity and disposable fixture deck, runs without a reviewer gate, and allows deployments only from `main`.
 - The `npm` environment runs without a reviewer gate and allows only the intended `v*` release-tag policy; manual GitHub Release creation remains the human publication-intent gate.
-- npm trusted publishing is bound to this repository, package, and `.github/workflows/publish.yml`.
+- npm trusted publishing is bound to owner `aefreedman`, repository `pi-codecks`, package `@aefree/pi-codecks`, workflow filename `publish.yml`, and environment `npm`. The GitHub-hosted Node 24 runner must provide npm 11.5.1 or newer; no `NODE_AUTH_TOKEN` or long-lived npm write token is supplied to publication.
 - Dependency alerts/security updates, private vulnerability reporting, secret scanning, and push protection are enabled when available.
 
 Review these controls periodically and before granting access to additional collaborators.
