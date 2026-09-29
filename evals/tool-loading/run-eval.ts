@@ -1,3 +1,4 @@
+import { CODECKS_MUTATION_TOOL_NAMES } from "./mutation-guard.ts";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -33,13 +34,7 @@ const ACTIVE_BY_CONDITION: Record<Condition, readonly string[]> = {
   balanced: [LOADER, "codecks_card_get", "codecks_card_search"],
   "loader-only": [LOADER],
 };
-const EXPECTED_MUTATION_TOOLS = [
-  "codecks_dispatch", "codecks_card_create", "codecks_card_set_parent", "codecks_card_add_attachment", "codecks_card_update",
-  "codecks_card_bulk_create", "codecks_card_bulk_update", "codecks_card_update_effort", "codecks_card_update_status", "codecks_card_update_priority",
-  "codecks_milestone_update", "codecks_run_update", "codecks_card_update_run", "codecks_card_add_comment", "codecks_card_add_review",
-  "codecks_card_add_blocker", "codecks_card_add_block", "codecks_card_reply_resolvable", "codecks_card_edit_resolvable_entry",
-  "codecks_card_close_resolvable", "codecks_card_reopen_resolvable",
-];
+const EXPECTED_MUTATION_TOOLS = [...CODECKS_MUTATION_TOOL_NAMES];
 
 function readJson<T>(path: string): T { return JSON.parse(readFileSync(path, "utf8")) as T; }
 function fail(message: string): never { throw new Error(message); }

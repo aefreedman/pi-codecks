@@ -4,7 +4,7 @@ This package-local behavioral eval compares `all-active`, `balanced`, and `loade
 
 ## Safety boundary
 
-`mutation-guard.ts` blocks every package-exposed Codecks mutation at Pi's `tool_call` event, before the registered Codecks tool can execute or issue a network request. This includes `codecks_dispatch` because it can write. The matrix contains mutation-selection and fixture/preflight cases only; it does not authorize any live Codecks write.
+`mutation-guard.ts` blocks every package-exposed Codecks mutation at Pi's `tool_call` event, before the registered Codecks tool can execute or issue a network request. This includes `codecks_dispatch`, deck and hand updates, and bulk previews (which publish detail artifacts). The guard also blocks velocity cache updates and reports requesting CSV/Markdown artifacts; reports without outputs remain permitted. The matrix contains mutation-selection and fixture/preflight cases only; it does not authorize any live Codecks write.
 
 Read-only cases use the account configured in the caller's environment. Run them only against an account where ordinary read access is authorized. Do not place credentials, fixture data, or provider captures in this directory.
 
