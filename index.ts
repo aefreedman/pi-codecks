@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
+import { CARD_GET_OUTPUT_SCHEMA, finalizeCardGetOutput, projectCardGetOutput } from "./src/card-get-output";
 import { renderCodecksCall, renderCodecksResult } from "./src/codecks-renderers";
 import { CodecksProfileSession, isProfileConfigured } from "./src/codecks-profile-session";
 import {
@@ -1222,6 +1223,8 @@ function getCoreTool(exportName: string): CoreTool {
 }
 
 export default function codecksTools(pi: ExtensionAPI) {
+  // Supported pilot order: output modifiers (including Safety Rails) load first.
+  pi.on("tool_result", event => finalizeCardGetOutput(event));
   const enabledExports = ENABLE_DEBUG_TOOLS ? CODECKS_EXPORTS : DEFAULT_CODECKS_EXPORTS;
   const enabledToolNames = new Set<string>([...enabledExports.map(toToolName), CODECKS_PROFILE_SELECT_NAME]);
   const profiles = new CodecksProfileSession();
@@ -1246,6 +1249,7 @@ export default function codecksTools(pi: ExtensionAPI) {
       promptSnippet: legacyPromptMetadata ? config.promptSnippet : undefined,
       promptGuidelines: legacyPromptMetadata ? config.promptGuidelines : undefined,
       parameters: config.parameters ?? ANY_PARAMETERS,
+      ...(exportName === "card_get" ? { outputSchema: CARD_GET_OUTPUT_SCHEMA } : {}),
       prepareArguments: config.prepareArguments,
       renderCall(args, theme, context) {
         return renderCodecksCall(exportName, args, theme, context);
@@ -1259,7 +1263,7 @@ export default function codecksTools(pi: ExtensionAPI) {
         const executionParams = cardGetTextFormat ? { ...normalizedParams, format: "json" } : normalizedParams;
         const result = await core.runWithAbortSignal(
           signal,
-          async () => coreTool.execute(executionParams),
+          async () => exportName === "card_get" ? core.card_get.read(executionParams) : coreTool.execute(executionParams),
           ctx.cwd ?? process.cwd(),
           onUpdate ? (progress) => {
             const prefix = exportName === "card_bulk_create" ? "Bulk create" : exportName === "card_bulk_update" ? "Bulk update" : "Codecks request";
@@ -1279,14 +1283,21 @@ export default function codecksTools(pi: ExtensionAPI) {
           } : undefined,
           profiles.profile,
         );
-        const rawText = toText(result);
+        const cardRead = exportName === "card_get" ? result as Awaited<ReturnType<typeof core.readCardGet>> : undefined;
+        const structuredContent = exportName === "card_get" ? projectCardGetOutput(cardRead?.payload) : undefined;
+        if (structuredContent?.ok === false && (structuredContent.error.code === "output_contract_error" || structuredContent.error.code === "output_too_large")) {
+          return { content: [{ type: "text", text: structuredContent.error.message }], details: { exportName, outputContractError: true }, structuredContent, isError: true };
+        }
+        const legacyResult = cardRead ? cardRead.text : result;
+        const rawText = toText(legacyResult);
         const cardPresentation = exportName === "card_get" ? parseStructuredPayload(rawText) : undefined;
         const text = cardGetTextFormat && cardPresentation ? formatCardGetText(cardPresentation) ?? rawText : rawText;
         return {
           content: [{ type: "text", text }],
+          ...(structuredContent ? { structuredContent, isError: structuredContent.ok === false } : {}),
           details: {
             exportName,
-            rawResult: result,
+            rawResult: legacyResult,
             ...(cardPresentation ? { cardPresentation } : {}),
           },
         };

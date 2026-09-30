@@ -7,6 +7,15 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+### Added
+
+- Pilot a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.
+- Add a card-get-only post-modifier conformance guard, deterministic DTO tests, and an isolated real Pi/codemode/Safety Rails host test. Supported load order requires output modifiers before pi-codecks; later hooks remain outside the guarantee.
+
+### Fixed
+
+- Do not establish title-match absence or uniqueness from incomplete card-get scans; preserve incomplete-read evidence without broadening scans, retries, or fallback.
+
 ## [0.14.2] - 2026-09-29
 
 ### Changed

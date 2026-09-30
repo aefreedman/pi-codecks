@@ -162,10 +162,11 @@ try {
     assert.equal((tool as { renderShell?: string }).renderShell, undefined, "use Pi's existing shell");
     if (tool.name === "codecks_tool_search" || tool.name === "codecks_profile_select") continue;
     const name = tool.name.replace(/^codecks_/, "");
-    const coreTool = (core as unknown as Record<string, { execute: (args: unknown) => Promise<unknown> }>)[name];
-    const original = coreTool.execute;
+    const coreTool = (core as unknown as Record<string, Record<string, (args: unknown) => Promise<unknown>>>)[name];
+    const method = name === "card_get" ? "read" : "execute";
+    const original = coreTool[method];
     let received: unknown;
-    coreTool.execute = async args => { received = args; return cardRaw; };
+    coreTool[method] = async args => { received = args; return name === "card_get" ? { text: cardRaw, payload: JSON.parse(cardRaw.match(/```json\n([\s\S]*)\n```/)![1]) } : cardRaw; };
     try {
       for (const format of ["json", "text"]) {
         const args = freeze({ cardId: "$abc", format, extraFixtureArgument: { untouched: true } });
@@ -185,8 +186,20 @@ try {
         }
         assert.equal(JSON.stringify(executed), snapshot, `${tool.name} agent data must be byte-for-byte unchanged after rendering`);
       }
-    } finally { coreTool.execute = original; }
+    } finally { coreTool[method] = original; }
   }
+  // The adapter must fail closed even before host hooks when its internal seam is missing/invalid.
+  const originalRead = core.card_get.read;
+  try {
+    for (const malformed of [undefined, { text: "misleading success", payload: undefined }, { text: "misleading success", payload: { ok: true, action: "card-get", data: {} } }]) {
+      core.card_get.read = async () => malformed as Awaited<ReturnType<typeof originalRead>>;
+      const executed = await tools.get("codecks_card_get")!.execute("invalid-seam", { cardId: "$abc" }, undefined, undefined, { cwd: process.cwd() });
+      assert.equal(executed.isError, true);
+      assert.equal(executed.structuredContent.ok, false);
+      assert.equal(executed.structuredContent.error.code, "output_contract_error");
+      assert.doesNotMatch(JSON.stringify(executed), /misleading success/);
+    }
+  } finally { core.card_get.read = originalRead; }
   const loader = tools.get("codecks_tool_search")!;
   const browse = freeze(await loader.execute("browse", {}));
   const browseBefore = JSON.stringify(browse);

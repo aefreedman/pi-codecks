@@ -978,6 +978,7 @@ type ErrorCategory =
     | "validation_error"
     | "not_found"
     | "ambiguous_match"
+    | "incomplete_read"
     | "conflict"
     | "out_of_scope"
     | "forbidden"
@@ -6992,7 +6993,44 @@ export const card_get = tool({
     },
     async execute(args)
     {
+        return (await readCardGet(args)).text;
+    },
+    // Internal adapter seam, separate from the legacy string execute interface.
+    read: readCardGet,
+});
+
+/** Package-internal read seam; legacy callers retain their fenced JSON/text interface. */
+export async function readCardGet(args: Record<string, any>): Promise<{ text: string; payload: Record<string, unknown> }>
+{
         const format = args.format ?? "json";
+        const success = (_format: OutputFormat, action: string, text: string, data: Record<string, unknown>) => ({
+            text: toStructuredResult(format, action, text, data),
+            payload: { ok: true, action, data },
+        });
+        const failure = (_format: OutputFormat, action: string, category: string, message: string, data: Record<string, unknown> = {}) => ({
+            text: toStructuredErrorResult(format, action, category as ErrorCategory, message, data),
+            payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data } },
+        });
+        const observeSummary = (summary: Record<string, unknown>, source: CodecksEntity): Record<string, unknown> =>
+        {
+            const clean = { ...summary };
+            const derived = new Set(["shortCode", "cardRef", "accountSeqRef", "url", "cardType", "isDoc", "contentTrust", "tags"]);
+            for (const field of Object.keys(clean))
+            {
+                if (!derived.has(field) && source[field] === undefined) delete clean[field];
+                else if (!derived.has(field) && source[field] === null) clean[field] = null;
+            }
+            if (source.accountSeq === undefined)
+            {
+                for (const field of ["shortCode", "cardRef", "accountSeqRef", "url"]) delete clean[field];
+            }
+            if ("cardType" in clean && !isCardTypeKnown(source))
+            {
+                clean.cardType = "unknown";
+                delete clean.isDoc;
+            }
+            return clean;
+        };
         const parsedId = parseCardIdentifier(args.cardId);
         const requestedId = args.cardId !== undefined ? String(args.cardId).trim() : "";
         const bareNumericLookup = /^\d+$/.test(requestedId);
@@ -7010,7 +7048,7 @@ export const card_get = tool({
             {
                 if (!args.title || !String(args.title).trim())
                 {
-                    return toStructuredErrorResult(format, "card-get", "validation_error", "Card ID or title is required.");
+                    return failure(format, "card-get", "validation_error", "Card ID or title is required.");
                 }
 
                 const inferredCode = extractCardCode(args.title);
@@ -7027,20 +7065,27 @@ export const card_get = tool({
 
                 if (result.error)
                 {
-                    return toStructuredErrorResult(format, "card-get", "validation_error", result.error);
+                    return failure(format, "card-get", "validation_error", result.error);
                 }
 
                 const cards = result.cards ?? [];
+                if (result.complete !== true)
+                {
+                    return failure(format, "card-get", "incomplete_read", "Title scan is incomplete; absence and uniqueness are not established.", {
+                        complete: false,
+                        candidates: cards.map(normalizeCardCandidate),
+                    });
+                }
                 if (cards.length === 0)
                 {
-                    return toStructuredErrorResult(format, "card-get", "not_found", "No cards matched the search criteria.", {
+                    return failure(format, "card-get", "not_found", "No cards matched the search criteria.", {
                         title: args.title,
                     });
                 }
 
                 if (cards.length > 1)
                 {
-                    return toStructuredErrorResult(format, "card-get", "ambiguous_match", "Multiple cards matched the search criteria.", {
+                    return failure(format, "card-get", "ambiguous_match", "Multiple cards matched the search criteria.", {
                         matches: cards.length,
                         candidates: cards.map(normalizeCardCandidate),
                     });
@@ -7049,7 +7094,7 @@ export const card_get = tool({
                 cardId = (cards[0].cardId as string | number | undefined) ?? cards[0].accountSeq;
                 if (!hasCardTarget(cardId))
                 {
-                    return toStructuredErrorResult(format, "card-get", "not_found", "Matched card is missing an ID. Please provide the card ID.");
+                    return failure(format, "card-get", "not_found", "Matched card is missing an ID. Please provide the card ID.");
                 }
 
                 const parsedMatch = parseCardIdentifier(cardId);
@@ -7062,7 +7107,7 @@ export const card_get = tool({
                 const seqHint = bareNumericLookup
                     ? `Bare numeric identifiers are short codes. If ${requestedId} came from accountSeq, retry with seq:${requestedId}.`
                     : undefined;
-                return toStructuredErrorResult(format, "card-get", "not_found", seqHint ? `Card not found. ${seqHint}` : "Card not found.", {
+                return failure(format, "card-get", "not_found", seqHint ? `Card not found. ${seqHint}` : "Card not found.", {
                     cardId: args.cardId ?? cardId ?? null,
                     ...(seqHint ? { recoveryHint: seqHint, suggestedCardRef: `seq:${requestedId}` } : {}),
                 });
@@ -7082,19 +7127,66 @@ export const card_get = tool({
                 "--- END CODECKS CARD CONTENT ---",
             ].join("\n").trim();
 
-            return toStructuredResult(format, "card-get", text, { card });
+            const read = success(format, "card-get", text, { card });
+            // Only the internal seam distinguishes unreturned fields from explicit nulls.
+            // The legacy text/rendering payload remains unchanged.
+            const observed = observeSummary(card, detail.card);
+            for (const key of ["cardId", "accountSeq", "title", "content", "status", "derivedStatus", "visibility", "effort", "priority", "dueDate", "lastUpdatedAt", "deck", "milestone", "assignee", "creator", "parentCard", "childCards"])
+            {
+                if (detail.card[key] === undefined) delete observed[key];
+                else if (detail.card[key] === null) observed[key] = null;
+            }
+            if (detail.card.masterTags === undefined) delete observed.tags;
+            else if (detail.card.masterTags === null) observed.tags = null;
+            if (!isCardTypeKnown(detail.card))
+            {
+                observed.cardType = "unknown";
+                delete observed.isDoc;
+            }
+            // Summary normalizers are renderer-oriented and fill missing values with null.
+            // Keep genuinely absent nested fields absent in the programmatic observation.
+            for (const key of ["deck", "milestone", "assignee", "creator"])
+            {
+                const source = detail.card[key];
+                const summary = observed[key];
+                if (source && typeof source === "object" && summary && typeof summary === "object")
+                {
+                    observed[key] = observeSummary(summary as Record<string, unknown>, source as CodecksEntity);
+                }
+                else if (source !== null) delete observed[key];
+            }
+            const parent = resolveFromMap(detail.card.parentCard, detail.cardMap)
+                ?? (detail.card.parentCard && typeof detail.card.parentCard === "object" ? detail.card.parentCard as CodecksEntity : undefined);
+            if (parent && observed.parentCard && typeof observed.parentCard === "object")
+                observed.parentCard = observeSummary(observed.parentCard as Record<string, unknown>, parent);
+            else if (detail.card.parentCard !== null) delete observed.parentCard;
+            const children = extractRelationEntities(detail.card, "childCards", detail.cardMap);
+            if (Array.isArray(observed.childCards))
+                observed.childCards = children.map(child => observeSummary(normalizeRelatedCardSummary(child)!, child));
+            if (Array.isArray(detail.card.childCards) && detail.card.childCards.length !== children.length)
+                delete observed.childCards;
+            read.payload = { ok: true, action: "card-get", data: { card: observed } };
+            return read;
         }
         catch (error)
         {
             const category = isCredentialRateLimitedError(error)
                 ? "credential_rate_limited"
                 : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-            return toStructuredErrorResult(format, "card-get", category, toErrorMessage(error), {
+            if (error instanceof PagedCardScanFailure)
+            {
+                return failure(format, "card-get", "incomplete_read", "Title scan failed before completion; absence and uniqueness are not established.", {
+                    complete: false,
+                    candidates: error.scan.cards
+                        .filter(card => cardMatchesText(card, createTextSearchMatcher(args.title), "title"))
+                        .map(normalizeCardCandidate),
+                });
+            }
+            return failure(format, "card-get", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),
             });
         }
-    },
-});
+}
 
 export const card_get_batch = tool({
     description: "Fetch up to 25 exact Codecks card short-code or account-sequence references in one structured read.",
