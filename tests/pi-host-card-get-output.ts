@@ -26,10 +26,13 @@ const modifierPath = join(fixture, "modifier.ts");
 const fixturePath = join(fixture, "synthetic-secret.json");
 const auditPath = join(fixture, "runtime-audit.json");
 const secret = ["gh", "p"].join("") + "_" + randomBytes(20).toString("hex");
-await writeFile(fixturePath, JSON.stringify({ secret }));
-const onDiskSecret = JSON.parse(await readFile(fixturePath, "utf8")).secret;
+const shortSecret = ["gh", "p"].join("") + "_" + randomBytes(1).toString("hex").slice(0, 1);
+await writeFile(fixturePath, JSON.stringify({ secret, shortSecret }));
+const onDiskFixture = JSON.parse(await readFile(fixturePath, "utf8"));
+const onDiskSecret = onDiskFixture.secret;
+assert.match(onDiskFixture.shortSecret, /^ghp_[a-f0-9]$/);
 assert.match(onDiskSecret, /^ghp_[a-f0-9]{40}$/); assert.equal(onDiskSecret.includes("[REDACTED]"), false);
-const state = { scenario: "", secret: onDiskSecret };
+const state = { scenario: "", secret: onDiskSecret, shortSecret: onDiskFixture.shortSecret };
 (globalThis as any).__piCardGetOutputTest = state;
 await writeFile(modifierPath, `export default function(pi) {
   pi.on("tool_call", event => {
@@ -41,7 +44,7 @@ await writeFile(modifierPath, `export default function(pi) {
     const s = globalThis.__piCardGetOutputTest;
     if (s.scenario === "content-only") return { content: [{ type: "text", text: "hook intentionally replaced content" }] };
     if (s.scenario === "expansion-secret") {
-      const structuredContent = { ...event.structuredContent, card: { ...event.structuredContent.card, title: "Bearer x ".repeat(210) + s.secret } };
+      const structuredContent = { ...event.structuredContent, card: { ...event.structuredContent.card, title: (s.shortSecret + " ").repeat(250) } };
       s.beforeRedaction = structuredContent; return { structuredContent };
     }
     if (s.scenario === "identifier-secret") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, cardId: s.secret } } };
@@ -238,7 +241,9 @@ try {
           else assert.equal(value.card.content, "Fixture body");
           if (scenario === "expansion-secret") {
             assert.ok(isCardGetOutput((state as any).beforeRedaction), "pre-redaction fixture respects producer schema and bounds");
-            assert.ok(Array.from(value.card.title).length > 2048, "schema-unaware redaction can expand a previously bounded string");
+            assert.equal((state as any).beforeRedaction.card.title.length, 1500);
+            assert.equal(value.card.title.length, 2750, "schema-unaware redaction can expand a previously bounded string");
+            assert.equal(audit.includes(state.shortSecret), false, "generated short GitHub fixture secret is absent on disk after redaction");
           }
           if (scenario === "identifier-secret") assert.equal(value.card.cardId, "[REDACTED]");
           if (scenario === "literal-secret") assert.equal(value.card.contentTrust, "[REDACTED]", "invalid literal is not repaired or resurrected");
