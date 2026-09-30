@@ -1,10 +1,10 @@
 # Codecks dynamic tool-loading eval
 
-This package-local behavioral eval compares `all-active`, `balanced`, and `loader-only` in **fresh Pi 0.87.1 JSON subprocesses**. It is not a skill eval: sessions, skills, prompt templates, built-in tools, discovered extensions, and context files are disabled.
+This package-local behavioral eval compares `all-active`, `balanced`, and `loader-only` in **fresh Pi 0.99.1 JSON subprocesses**. It is not a skill eval: sessions, skills, prompt templates, built-in tools, discovered extensions, and context files are disabled.
 
 ## Safety boundary
 
-`mutation-guard.ts` blocks every package-exposed Codecks mutation at Pi's `tool_call` event, before the registered Codecks tool can execute or issue a network request. This includes `codecks_dispatch` because it can write. The matrix contains mutation-selection and fixture/preflight cases only; it does not authorize any live Codecks write.
+`mutation-guard.ts` blocks every package-exposed Codecks mutation at Pi's `tool_call` event, before the registered Codecks tool can execute or issue a network request. This includes `codecks_dispatch`, deck and hand updates, and bulk previews (which publish detail artifacts). The guard also blocks velocity cache updates and reports requesting CSV/Markdown artifacts; reports without outputs remain permitted. The matrix contains mutation-selection and fixture/preflight cases only; it does not authorize any live Codecks write.
 
 Read-only cases use the account configured in the caller's environment. Run them only against an account where ordinary read access is authorized. Do not place credentials, fixture data, or provider captures in this directory.
 
@@ -26,4 +26,4 @@ npx tsx evals/tool-loading/run-eval.ts --model openai-codex/gpt-5.6-terra:medium
 
 `--keep` retains raw provider payload captures in the system temporary directory; they are deleted by default. Sanitized summaries are written beneath ignored `results/`. `--include-events` adds only event type/tool-name crumbs to that summary.
 
-A live runner requires the worktree-local Pi development dependency at `0.87.1`. `--dry-run` validates the committed eval contract without contacting a model or requiring that peer dependency.
+A live runner requires the worktree-local Pi development dependency at `0.99.1`. `--dry-run` validates the committed eval contract without contacting a model or requiring that peer dependency.

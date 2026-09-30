@@ -1,9 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * Eval-only network safety boundary. These are every package-exposed operation
- * that can mutate Codecks state. Blocking occurs at tool_call, before the
- * registered tool's execute function can construct or send its API request.
+ * Eval-only no-persistent-side-effects boundary. Tracker writes (including bulk
+ * previews, which publish detail artifacts), cache updates, and requested report
+ * outputs are blocked at tool_call before execute. In-memory reports remain safe.
  */
 export const CODECKS_MUTATION_TOOL_NAMES = new Set([
   "codecks_dispatch",
@@ -16,6 +16,9 @@ export const CODECKS_MUTATION_TOOL_NAMES = new Set([
   "codecks_card_update_effort",
   "codecks_card_update_status",
   "codecks_card_update_priority",
+  "codecks_deck_update",
+  "codecks_card_add_to_hand",
+  "codecks_card_remove_from_hand",
   "codecks_milestone_update",
   "codecks_run_update",
   "codecks_card_update_run",
@@ -31,10 +34,12 @@ export const CODECKS_MUTATION_TOOL_NAMES = new Set([
 
 export default function codecksEvalMutationGuard(pi: ExtensionAPI): void {
   pi.on("tool_call", (event) => {
-    if (!CODECKS_MUTATION_TOOL_NAMES.has(event.toolName)) return;
+    const writesLocally = event.toolName === "codecks_velocity_observations_update"
+      || (event.toolName === "codecks_velocity_report" && ["csvPath", "summaryMarkdownPath", "csv_path", "summary_markdown_path"].some((key) => event.input[key] !== undefined));
+    if (!CODECKS_MUTATION_TOOL_NAMES.has(event.toolName) && !writesLocally) return;
     return {
       block: true,
-      reason: `Eval mutation guard blocked ${event.toolName} before execution. No live Codecks mutation is authorized by this eval.`,
+      reason: `Eval mutation guard blocked ${event.toolName} before execution. No tracker or persistent local write is authorized by this eval.`,
     };
   });
 }

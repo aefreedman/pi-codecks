@@ -50,13 +50,21 @@ assert.match(packageJson.scripts?.["pack:smoke"] ?? "", /packed-tarball-smoke/);
 assert.match(packageJson.scripts?.["validate:external-provider-live"] ?? "", /validate-external-provider-live/);
 assert.match(packageJson.scripts?.["test:characterization"] ?? "", /bulk-create-characterization/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-readonly-auth-contract/);
-assert.equal(packageJson.devDependencies?.tsx, "4.23.1");
+assert.equal(packageJson.devDependencies?.tsx, "4.23.15");
+assert.equal(packageJson.devDependencies?.typescript, "7.0.2");
+assert.equal(packageJson.devDependencies?.["@types/node"], "22.20.4");
+assert.equal(packageJson.engines?.node, ">=22.19.0");
 assert.match(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-dispatch\.test\.ts/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-workflow-provider|pi-workflow/);
 assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-authorization/);
-assert.deepEqual(packageJson.dependencies, { typebox: "1.3.8" }, "TypeBox is a runtime import and must resolve for standalone installed packages.");
-assert.equal(packageJson.peerDependencies?.typebox, undefined, "runtime TypeBox must not rely on an optional peer.");
-assert.equal(packageJson.peerDependenciesMeta?.typebox, undefined, "runtime TypeBox must not rely on optional peer metadata.");
+assert.equal(packageJson.dependencies?.typebox, undefined, "Pi supplies TypeBox; do not install a production copy.");
+assert.equal(packageJson.peerDependencies?.typebox, "*");
+assert.deepEqual(packageJson.peerDependenciesMeta?.typebox, { optional: true });
+assert.equal(packageJson.devDependencies?.typebox, "1.3.8");
+for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
+  assert.equal(packageJson.peerDependencies?.[name], "*");
+  assert.equal(packageJson.devDependencies?.[name], "0.99.1");
+}
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.devDependencies?.["@aefree/pi-workflow"], undefined);

@@ -1,11 +1,14 @@
 {
   "schemaVersion": 1,
-  "piVersionPrefix": "0.87.1",
+  "piVersionPrefix": "0.99.1",
   "timeoutMs": 90000,
   "maxOutputChars": 2097152,
   "conditions": ["all-active", "balanced", "loader-only"],
   "mutationTools": [
     "codecks_dispatch",
+    "codecks_deck_update",
+    "codecks_card_add_to_hand",
+    "codecks_card_remove_from_hand",
     "codecks_card_create",
     "codecks_card_set_parent",
     "codecks_card_add_attachment",

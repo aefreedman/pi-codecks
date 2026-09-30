@@ -27,8 +27,8 @@ try {
   const archivePath = path.join(archiveDir, packed.filename);
   assert.ok(existsSync(archivePath), "expected npm pack to create a tarball in the temporary directory");
 
-  // Supply locked TypeBox and Pi's TUI peer (plus its two dependencies) as
-  // local tarballs so the consumer test stays offline even on a cold npm cache.
+  // Supply host-provided TypeBox and Pi's TUI peer (plus its two dependencies)
+  // explicitly as local tarballs so the consumer test stays offline even on a cold npm cache.
   const dependencyArchives = ["typebox", "@earendil-works/pi-tui", "get-east-asian-width", "marked"].map(name => {
     const packed = parsePackResult(runNpm([
       "pack", "--json", "--ignore-scripts", "--pack-destination", archiveDir,
@@ -58,7 +58,9 @@ try {
   assert.deepEqual(packageJson.pi?.skills, ["./skills"]);
   assert.deepEqual(packageJson.pi?.prompts, ["./prompts"]);
   assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined, "packed package must not declare a workflow integration");
-  assert.ok(existsSync(path.join(consumerDir, "node_modules", "typebox", "package.json")), "packed consumer must resolve TypeBox from the package runtime dependency");
+  assert.equal(packageJson.dependencies?.typebox, undefined, "packed package must not install a production TypeBox copy");
+  assert.equal(packageJson.peerDependencies?.typebox, "*");
+  assert.ok(existsSync(path.join(consumerDir, "node_modules", "typebox", "package.json")), "neutral consumer must resolve the explicitly supplied TypeBox host peer");
 
   for (const relativePath of [
     "index.ts",
