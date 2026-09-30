@@ -30,7 +30,7 @@ The v1 limits are chosen for one useful card without shipping an unbounded graph
 
 | Limit | Value | Behavior |
 | --- | --- | --- |
-| Compact UTF-8 JSON DTO | 65,536 bytes | Fail closed with `output_too_large` if exceeded, including after hooks |
+| Compact UTF-8 JSON DTO | 65,536 bytes | Fail closed with `output_too_large` if the Codecks-produced DTO exceeds it |
 | Card content | 32,768 Unicode code points | Clip; `projection: false` |
 | Every other string (including error message) | 2,048 Unicode code points | Clip; `projection: false` |
 | Tags / child cards | 25 each | Clip; `projection: false` |
@@ -46,17 +46,20 @@ The bounded codes are `validation_error`, `not_found`, `ambiguous_match`, `incom
 
 An incomplete title scan cannot establish zero matches or a unique match, even when its current candidate list has zero/one item. It returns `incomplete_read` without fetching purportedly unique detail. A failed page preserves bounded candidate evidence from earlier pages. Use an explicit reusable card reference when available; do not infer permission to broaden or retry from the DTO.
 
-Thrown, validation-blocked, policy-blocked, and pre-aborted host calls can fail before the package result finalizer runs. Those native failures may have no DTO; codemode rejects rather than returning successful text. Catch them separately from `ok: false` outcomes.
+Thrown, validation-blocked, policy-blocked, and pre-aborted host calls can fail without a Codecks-produced DTO. Those native failures may have no DTO; codemode rejects rather than returning successful text. Catch them separately from `ok: false` outcomes.
 
-## Supported output-hook composition
+## Producer ownership and independent output hooks
 
-Load **Safety Rails and all other output-modifying extensions before pi-codecks** in the effective Pi extension order. SDK tests explicitly order their extension paths that way and use the actual exported `createCodemodeExtension`, actual package extension, actual Safety Rails redactor, fake Codecks fetch, and a local scripted provider. The host test requires the Safety Rails sibling checkout; it never installs or downloads it.
+Codecks validates only the DTO produced by its own execute adapter. Missing/malformed internal read data returns a fresh bounded `output_contract_error`; producer byte overflow returns `output_too_large`. Both set native `isError: true` and fixed safe diagnostics. Legacy rendering data is not used to reconstruct rejected output. No replay is introduced.
 
-The package's card-get-only `tool_result` guard validates the post-modifier DTO, byte bound, and agreement between `ok` and native error status. Missing/invalid data or status mismatch becomes a fresh `output_contract_error`; a schema-valid DTO exceeding the post-hook byte budget becomes `output_too_large`. Both set `isError: true`, with only fixed safe diagnostics in text/details. It never resurrects pre-redaction snapshots, rejected payloads, or renderer details, and never replays the read. Safety Rails preserves clean structured data when text-only or details-only redaction occurs; structured-only redaction is also checked for schema conformance.
+Safety Rails is an independent optional security extension, not a Codecks prerequisite. No relative load order is required. Other Pi extensions may intentionally change result shape, content, structured data, or native error status. Codecks registers no result hook to police these transformations, revalidate post-hook data, or resurrect original values.
 
-**Limit:** a later third-party hook can still drop/invalidate data or change status after the guard. Pi may then return text to scripts. The negative-order host fixture demonstrates that fallback; this pilot does not promise global host enforcement. Schema conformance is not a universal secret-absence proof. External card content remains untrusted even when typed and redacted.
+Pi drops structured data on a content-only hook replacement. With no structured data and no native error, codemode returns replacement text; with native error it rejects. When structured data is present, codemode returns it before checking native error, without validating the tool's schema. The host-behavior fixture observes this directly rather than expecting Codecks to repair it.
+
+Optional compatibility tests compose the actual Safety Rails redactor in both load orders. The tested structured/text/details redactions retain false, zero, null, status and receipts. The redactor is schema-unaware: a redacted bounded identifier can remain schema-valid while changing meaning, modified literal/enumeration fields can remain invalid after redaction, and replacement text can expand a previously valid string past its length bound. These fixtures are observations, not a guarantee that arbitrary transformations conform. Producer validation and typed/redacted content are not universal secret-absence proofs; external card content remains untrusted.
 
 ## Offline proof
 
 - `npm run test:card-get-output`: deterministic projection/schema/seam tests.
-- `npm run test:pi-host-card-get`: isolated real SDK host, codemode receipts, redaction and hook-order tests; no paid provider, MCP, or real transport. Synthetic secret values are generated and checked on disk so output masking cannot supply false evidence.
+- `npm run test:pi-host-card-get`: default isolated real SDK host with Codecks alone, actual codemode, fake fetch and scripted local provider; producer contract/bounds/errors and native failure receipts, plus isolated Pi hook behavior. No sibling checkout, paid provider, MCP, or real transport is required.
+- `npm run test:pi-host-card-get:safety-rails`: opt-in compatibility using the actual Safety Rails redactor before and after Codecks. This test explicitly fails if the sibling checkout is missing; neither production Codecks nor its default tests require it. Generated synthetic secret values and redacted runtime outputs are checked on disk so output masking cannot supply false evidence.

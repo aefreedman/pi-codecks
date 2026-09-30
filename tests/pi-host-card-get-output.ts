@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,21 +11,25 @@ import { isCardGetOutput, CARD_GET_OUTPUT_SCHEMA } from "../src/card-get-output.
 // These are real file-loaded extensions and the SDK's exported codemode factory, not tool imitations.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = join(root, "index.ts");
-const redactorPath = resolve(root, "../pi-safety-rails/extensions/tool-output-redactor.ts");
+const compatibility = process.argv.includes("--safety-rails");
+const redactorPath = compatibility ? resolve(root, "../pi-safety-rails/extensions/tool-output-redactor.ts") : undefined;
+if (compatibility) {
+  try { await access(redactorPath); }
+  catch { throw Error("Opt-in Safety Rails compatibility test requires its sibling checkout; default Codecks host test does not."); }
+}
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-output-"));
 const agentDir = join(fixture, "agent");
 const modifierPath = join(fixture, "modifier.ts");
-const laterPath = join(fixture, "later.ts");
 const fixturePath = join(fixture, "synthetic-secret.json");
 const auditPath = join(fixture, "runtime-audit.json");
 const secret = ["gh", "p"].join("") + "_" + randomBytes(20).toString("hex");
 await writeFile(fixturePath, JSON.stringify({ secret }));
 const onDiskSecret = JSON.parse(await readFile(fixturePath, "utf8")).secret;
 assert.match(onDiskSecret, /^ghp_[a-f0-9]{40}$/); assert.equal(onDiskSecret.includes("[REDACTED]"), false);
-const state = { scenario: "", secret: onDiskSecret, late: false };
+const state = { scenario: "", secret: onDiskSecret };
 (globalThis as any).__piCardGetOutputTest = state;
 await writeFile(modifierPath, `export default function(pi) {
   pi.on("tool_call", event => {
@@ -35,19 +39,20 @@ await writeFile(modifierPath, `export default function(pi) {
   pi.on("tool_result", event => {
     if (event.toolName !== "codecks_card_get") return;
     const s = globalThis.__piCardGetOutputTest;
-    if (s.scenario.startsWith("missing")) return { content: [{ type: "text", text: "misleading success text" }] };
-    if (s.scenario === "invalid") return { structuredContent: { ok: true, rejected: s.secret } };
-    if (s.scenario === "status-mismatch") return { isError: true };
-    if (s.scenario === "error-status-mismatch") return { isError: false };
-    if (s.scenario === "byte-overflow") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, content: "😀".repeat(20000) } } };
+    if (s.scenario === "content-only") return { content: [{ type: "text", text: "hook intentionally replaced content" }] };
+    if (s.scenario === "expansion-secret") {
+      const structuredContent = { ...event.structuredContent, card: { ...event.structuredContent.card, title: "Bearer x ".repeat(210) + s.secret } };
+      s.beforeRedaction = structuredContent; return { structuredContent };
+    }
+    if (s.scenario === "identifier-secret") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, cardId: s.secret } } };
+    if (s.scenario === "literal-secret") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, contentTrust: s.secret } } };
+    if (s.scenario === "enum-secret") return { structuredContent: { ...event.structuredContent, error: { ...event.structuredContent.error, code: s.secret } } };
+    if (s.scenario === "error-text-secret") return { content: [{ type: "text", text: s.secret }], structuredContent: event.structuredContent };
     if (s.scenario === "structured-secret") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, content: s.secret } } };
     if (s.scenario === "text-secret") return { content: [{ type: "text", text: s.secret }], structuredContent: event.structuredContent };
     if (s.scenario === "details-secret") return { details: { note: s.secret, count: 0 } };
   });
 }`);
-await writeFile(laterPath, `export default function(pi) { pi.on("tool_result", event => {
-  if (event.toolName === "codecks_card_get" && globalThis.__piCardGetOutputTest.late) return { content: [{ type: "text", text: "later hook dropped DTO" }] };
-}); }`);
 const keys = new Set([...Object.keys(process.env).filter(key => /^(?:CODECKS_|PI_CODECKS_)/.test(key)), "CODECKS_CREDENTIAL_PROVIDER", "CODECKS_PROFILE", "CODECKS_ACCOUNT", "CODECKS_PROFILE_ORG_TOKEN", "PI_CODECKS_TOOL_LOADING_MODE"]);
 const previous = Object.fromEntries([...keys].map(key => [key, process.env[key]]));
 for (const key of keys) delete process.env[key];
@@ -73,6 +78,8 @@ globalThis.fetch = (async (_input, init) => {
     // A full 500-row page repeated to the unchanged 3000-row scan bound: no retry/fallback.
     cards = Array.from({ length: 500 }, (_, i) => ({ cardId: `fixture-${i}`, accountSeq: i, title: ["partial-one", "partial-failure"].includes(state.scenario) && i === 0 ? "Possible match" : "Unrelated", content: "", isDoc: false, effort: 0, dueDate: null }));
   }
+  if (state.scenario === "producer-bytes") cards[0].content = "😀".repeat(20000);
+  if (state.scenario === "producer-clipping") { cards[0].title = "x".repeat(2049); cards[0].content = "x".repeat(32769); }
   const data: any = { card: Object.fromEntries(cards.map(card => [card.cardId, card])) };
   if (relation) { data._root = { account: "fixture" }; data.account = { fixture: { [relation]: cards.map(card => card.cardId) } }; }
   else if (direct) data[direct] = "fixture-main";
@@ -108,9 +115,9 @@ try {
     },
   });
   const model = modelRuntime.getModel("card-get-local", "fixture"); assert.ok(model);
-  const makeSession = async (negativeOrder = false) => {
+  const makeSession = async (order: "alone" | "before" | "after" = "alone") => {
     const services = await createAgentSessionServices({ cwd: fixture, agentDir, modelRuntime, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
-      resourceLoaderOptions: { additionalExtensionPaths: negativeOrder ? [redactorPath, extensionPath, laterPath] : [modifierPath, redactorPath, extensionPath],
+      resourceLoaderOptions: { additionalExtensionPaths: order === "alone" ? [modifierPath, extensionPath] : order === "before" ? [modifierPath, redactorPath, extensionPath] : [extensionPath, modifierPath, redactorPath],
         extensionFactories: [createCodemodeExtension({ mode: "on", models: false }), pi => {
           pi.registerTool({ name: "pilot_throw", label: "Fixture throw", description: "Synthetic thrown failure", parameters: Type.Object({}), async execute() { throw Error("synthetic thrown execution"); } });
           pi.registerTool({ name: "pilot_abort", label: "Fixture abort", description: "Pre-aborted child call", parameters: Type.Object({}), async execute(_id, _params, _signal, _update, ctx) {
@@ -123,10 +130,13 @@ try {
     });
     assert.deepEqual(services.diagnostics.filter(d => d.type === "error"), []); assert.deepEqual(services.resourceLoader.getExtensions().errors, []);
     const loaded = services.resourceLoader.getExtensions().extensions.map(e => resolve(e.path));
-    assert.ok(loaded.includes(redactorPath)); assert.ok(loaded.includes(extensionPath));
-    assert.ok(loaded.indexOf(redactorPath) < loaded.indexOf(extensionPath), "real Safety Rails must precede the package guard");
-    if (!negativeOrder) assert.ok(loaded.indexOf(modifierPath) < loaded.indexOf(redactorPath));
-    else assert.ok(loaded.indexOf(laterPath) > loaded.indexOf(extensionPath));
+    assert.ok(loaded.includes(extensionPath));
+    if (order === "alone") assert.equal(loaded.includes(redactorPath), false, "default proof has no Safety Rails dependency");
+    else {
+      assert.ok(loaded.includes(redactorPath));
+      assert.equal(loaded.indexOf(redactorPath) < loaded.indexOf(extensionPath), order === "before");
+      assert.ok(loaded.indexOf(modifierPath) < loaded.indexOf(redactorPath));
+    }
     const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(fixture), model, thinkingLevel: "off", tools: ["codecks_card_get", "codemode", "pilot_throw", "pilot_abort"] });
     sessions.push(session); await session.bindExtensions({});
     session.extensionRunner.onError(error => extensionErrors.push(error));
@@ -141,18 +151,20 @@ try {
     session.subscribe(event => { if (event.type === "tool_execution_end") records.push({ scenario: state.scenario, ...event }); });
     return session;
   };
-  const session = await makeSession();
+  let session = await makeSession();
   const run = async (scenario: string, name: string, args: Record<string, unknown>) => {
     state.scenario = scenario; action = { name, arguments: args };
     const before = fakeFetches;
+    const startRecord = records.length;
     let timer: ReturnType<typeof setTimeout>;
     try { await Promise.race([session.prompt(`pilot:${scenario}`), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error(`Timeout: ${scenario}`)), 20000); })]); }
     finally { clearTimeout(timer!); }
     const parent: any = session.messages.filter(m => m.role === "toolResult").at(-1); assert.ok(parent);
-    return { parent, children: records.filter(r => r.scenario === scenario && r.toolName === "codecks_card_get"), fetches: fakeFetches - before };
+    return { parent, children: records.slice(startRecord).filter(r => r.scenario === scenario && r.toolName === "codecks_card_get"), fetches: fakeFetches - before };
   };
   const text = (result: any) => result.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n");
   const script = (args: Record<string, unknown>) => ({ code: `const value = await tools.codecks_card_get(${JSON.stringify(args)}); if (typeof value !== "object" || value === null) throw Error("unexpected text fallback"); text(value);` });
+  if (!compatibility) {
   const direct = await run("direct", "codecks_card_get", { cardId: "seq:0" });
   const directValue = direct.children[0].result.structuredContent;
   assert.equal(direct.parent.isError, false); assert.ok(isCardGetOutput(directValue)); assert.equal(directValue.ok, true);
@@ -164,18 +176,16 @@ try {
   assert.ok(isCardGetOutput(nested.children[0].result.structuredContent)); assert.doesNotMatch(text(nested.children[0].result), /```json/); assert.match(text(nested.parent), /"schemaVersion":1/);
   const directFailure = await run("direct-error", "codecks_card_get", {});
   assert.equal(directFailure.parent.isError, true); assert.equal(directFailure.children[0].result.structuredContent.ok, false); assert.equal(directFailure.children[0].result.structuredContent.error.code, "validation_error"); assert.equal(directFailure.fetches, 0);
-  for (const scenario of ["domain-error", "missing", "invalid", "status-mismatch", "error-status-mismatch", "api-error", "fetch-throws"]) {
-    const args = ["domain-error", "error-status-mismatch"].includes(scenario) ? {} : { cardId: "seq:0" };
+  for (const scenario of ["domain-error", "api-error", "fetch-throws"]) {
+    const args = scenario === "domain-error" ? {} : { cardId: "seq:0" };
     const result = await run(scenario, "codemode", script(args));
     assert.equal(result.parent.isError, false, `${scenario}: parent handles the child's data failure`);
     assert.equal(result.children.length, 1); const child = result.children[0];
-    assert.equal(child.isError, true); assert.ok(isCardGetOutput(child.result.structuredContent)); assert.equal(child.result.structuredContent.ok, false);
+    assert.equal(child.isError, true, scenario); assert.ok(isCardGetOutput(child.result.structuredContent)); assert.equal(child.result.structuredContent.ok, false);
     assert.equal(result.parent.details.calls[0].status, "error"); assert.equal(result.parent.nestedCalls.calls[0].status, "error");
     assert.match(text(result.parent), /"ok":false/); assert.doesNotMatch(text(result.parent), /misleading success text|unexpected text fallback/);
-    if (["missing", "invalid", "status-mismatch", "error-status-mismatch", "blocked"].includes(scenario)) assert.equal(child.result.structuredContent.error.code, "output_contract_error");
-    if (scenario === "blocked") assert.equal(result.fetches, 0);
   }
-  const oversized = await run("byte-overflow", "codemode", script({ cardId: "seq:0" }));
+  const oversized = await run("producer-bytes", "codemode", script({ cardId: "seq:0" }));
   assert.equal(oversized.parent.isError, false); assert.equal(oversized.children[0].isError, true);
   assert.ok(isCardGetOutput(oversized.children[0].result.structuredContent));
   assert.equal(oversized.children[0].result.structuredContent.ok, false);
@@ -185,25 +195,15 @@ try {
   const blocked = await run("blocked", "codemode", { code: `try { await tools.codecks_card_get({cardId:"seq:0"}); throw Error("must reject"); } catch (error) { text(String(error)); }` });
   assert.equal(blocked.parent.isError, false); assert.equal(blocked.parent.details.calls[0].status, "error"); assert.equal(blocked.fetches, 0);
   assert.equal(blocked.children[0].isError, true); assert.equal(blocked.children[0].result.structuredContent, undefined); assert.match(text(blocked.parent), /synthetic policy block/);
-  const directMalformed = await run("missing-direct", "codecks_card_get", { cardId: "seq:0" });
-  assert.equal(directMalformed.parent.isError, true); assert.equal(directMalformed.children[0].result.structuredContent.error.code, "output_contract_error");
-  assert.doesNotMatch(text(directMalformed.parent), /misleading success text/);
+  const clipped = await run("producer-clipping", "codemode", script({ cardId: "seq:0" }));
+  assert.equal(clipped.children[0].isError, false); assert.equal(clipped.children[0].result.structuredContent.completeness.projection, false);
+  assert.equal(clipped.children[0].result.structuredContent.card.title.length, 2048); assert.equal(clipped.children[0].result.structuredContent.card.content.length, 32768);
   for (const scenario of ["partial-zero", "partial-one", "partial-failure"]) {
     const result = await run(scenario, "codemode", script({ title: "Possible match" }));
     assert.equal(result.parent.isError, false); assert.equal(result.children[0].isError, true);
     const value = result.children[0].result.structuredContent; assert.ok(isCardGetOutput(value)); assert.equal(value.error.code, "incomplete_read"); assert.equal(value.completeness.read, "incomplete");
     assert.equal(value.evidence?.candidates?.length ?? 0, scenario === "partial-zero" ? 0 : 1);
     assert.equal(result.fetches, scenario === "partial-failure" ? 2 : 6, "unchanged 3000-row bounded scan; no detail read, broaden, or fallback");
-  }
-  for (const scenario of ["structured-secret", "text-secret", "details-secret"]) {
-    const result = await run(scenario, "codemode", script({ cardId: "seq:0" }));
-    const child = result.children[0]; assert.equal(child.isError, false); assert.ok(isCardGetOutput(child.result.structuredContent));
-    // Check actual runtime values persisted to disk, not possibly-masked harness output.
-    await writeFile(auditPath, JSON.stringify({ child, parent: result.parent }));
-    const audit = await readFile(auditPath, "utf8"); assert.equal(audit.includes(onDiskSecret), false); assert.ok(audit.includes("[REDACTED]"));
-    if (scenario === "structured-secret") assert.equal(child.result.structuredContent.card.content, "[REDACTED]");
-    else assert.equal(child.result.structuredContent.card.content, "Fixture body");
-    assert.equal(result.parent.details.calls[0].status, "ok");
   }
   const thrown = await run("thrown", "codemode", { code: `try { await tools.pilot_throw({}); throw Error("must reject"); } catch (error) { text(String(error)); }` });
   assert.equal(thrown.parent.isError, false); assert.equal(thrown.parent.details.calls[0].status, "error"); assert.match(text(thrown.parent), /synthetic thrown execution/);
@@ -213,15 +213,42 @@ try {
   assert.ok(abortedOutcome); assert.equal(abortedOutcome.isError, true);
   // Pre-aborted nested calls may short-circuit before finalization; they remain native failures, never success text.
   if (abortedOutcome.result.structuredContent !== undefined) { assert.ok(isCardGetOutput(abortedOutcome.result.structuredContent)); assert.equal(abortedOutcome.result.structuredContent.ok, false); }
-  const negative = await makeSession(true); state.scenario = "later-hook"; state.late = true;
-  action = { name: "codemode", arguments: { code: `const value = await tools.codecks_card_get({cardId:"seq:0"}); text({type:typeof value,value});` } };
-  await negative.prompt("pilot:negative-order");
-  const negativeParent: any = negative.messages.filter(m => m.role === "toolResult").at(-1);
-  assert.equal(negativeParent.isError, false); assert.match(text(negativeParent), /"type":"string"/); assert.match(text(negativeParent), /later hook dropped DTO/);
-  assert.equal(negativeParent.details.calls[0].status, "ok", "documented limit: later hooks can still cause successful text fallback");
+  const replaced = await run("content-only", "codemode", { code: `const value = await tools.codecks_card_get({cardId:"seq:0"}); text({type:typeof value,value});` });
+  assert.equal(replaced.parent.isError, false); assert.match(text(replaced.parent), /"type":"string"/);
+  assert.match(text(replaced.parent), /hook intentionally replaced content/);
+  assert.equal(replaced.children[0].result.structuredContent, undefined);
+  assert.equal(replaced.parent.details.calls[0].status, "ok", "Pi content-only replacement drops DTO; Codecks does not repair other extensions");
+  } else {
+    for (const order of ["before", "after"] as const) {
+      session = await makeSession(order);
+      for (const scenario of ["structured-secret", "text-secret", "details-secret", "identifier-secret", "literal-secret", "enum-secret", "error-text-secret", "expansion-secret"]) {
+        const domainError = ["enum-secret", "error-text-secret"].includes(scenario);
+        const result = await run(scenario, "codemode", script(domainError ? {} : { cardId: "seq:0" }));
+        const child = result.children[0]; assert.equal(child.isError, domainError); assert.equal(result.parent.isError, false);
+        const value = child.result.structuredContent;
+        // A schema-unaware redactor cannot guarantee literals/enumerations survive arbitrary modifications.
+        assert.equal(isCardGetOutput(value), !["literal-secret", "enum-secret", "expansion-secret"].includes(scenario));
+        assert.equal(result.parent.details.calls[0].status, domainError ? "error" : "ok");
+        assert.equal(result.parent.nestedCalls.calls[0].status, domainError ? "error" : "ok");
+        await writeFile(auditPath, JSON.stringify({ child, parent: result.parent }));
+        const audit = await readFile(auditPath, "utf8"); assert.equal(audit.includes(onDiskSecret), false); assert.ok(audit.includes("[REDACTED]"));
+        if (!domainError) {
+          assert.equal(value.card.isDoc, false); assert.equal(value.card.effort, 0); assert.equal(value.card.accountSeq, 0); assert.equal(value.card.dueDate, null);
+          if (scenario === "structured-secret") assert.equal(value.card.content, "[REDACTED]");
+          else assert.equal(value.card.content, "Fixture body");
+          if (scenario === "expansion-secret") {
+            assert.ok(isCardGetOutput((state as any).beforeRedaction), "pre-redaction fixture respects producer schema and bounds");
+            assert.ok(Array.from(value.card.title).length > 2048, "schema-unaware redaction can expand a previously bounded string");
+          }
+          if (scenario === "identifier-secret") assert.equal(value.card.cardId, "[REDACTED]");
+          if (scenario === "literal-secret") assert.equal(value.card.contentTrust, "[REDACTED]", "invalid literal is not repaired or resurrected");
+        } else if (scenario === "enum-secret") assert.equal(value.error.code, "[REDACTED]", "invalid enumeration is not repaired");
+      }
+    }
+  }
   assert.deepEqual(extensionErrors, []); assert.equal(realTransport, 0); assert.equal(modelCalls, turns * 2);
   assert.ok(requests.length > 0); assert.ok(fakeFetches > 0);
-  console.log(`Real Pi card_get host pilot passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; supported modifier → Safety Rails → package order and later-hook limitation verified.`);
+  console.log(`Real Pi card_get host pilot passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
 } finally {
   for (const session of sessions) await session.dispose();
   globalThis.fetch = originalFetch; delete (globalThis as any).__piCardGetOutputTest;

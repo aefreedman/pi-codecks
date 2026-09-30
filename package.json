@@ -58,6 +58,7 @@
     "test:pi-host-smoke": "tsx tests/pi-host-lifecycle-smoke.ts",
     "test:card-get-output": "tsx tests/card-get-output.test.ts",
     "test:pi-host-card-get": "tsx tests/pi-host-card-get-output.ts",
+    "test:pi-host-card-get:safety-rails": "tsx tests/pi-host-card-get-output.ts --safety-rails",
     "test:integration": "tsx tests/codecks-tool-validation.ts",
     "test:integration:bulk-clear": "tsx tests/bulk-update-live.test.ts",
     "test:all": "npm run test:unit && npm run test:integration",

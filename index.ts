@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
-import { CARD_GET_OUTPUT_SCHEMA, finalizeCardGetOutput, projectCardGetOutput } from "./src/card-get-output";
+import { CARD_GET_OUTPUT_SCHEMA, projectCardGetOutput } from "./src/card-get-output";
 import { renderCodecksCall, renderCodecksResult } from "./src/codecks-renderers";
 import { CodecksProfileSession, isProfileConfigured } from "./src/codecks-profile-session";
 import {
@@ -1223,8 +1223,6 @@ function getCoreTool(exportName: string): CoreTool {
 }
 
 export default function codecksTools(pi: ExtensionAPI) {
-  // Supported pilot order: output modifiers (including Safety Rails) load first.
-  pi.on("tool_result", event => finalizeCardGetOutput(event));
   const enabledExports = ENABLE_DEBUG_TOOLS ? CODECKS_EXPORTS : DEFAULT_CODECKS_EXPORTS;
   const enabledToolNames = new Set<string>([...enabledExports.map(toToolName), CODECKS_PROFILE_SELECT_NAME]);
   const profiles = new CodecksProfileSession();

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Value } from "typebox/value";
-import { CARD_GET_OUTPUT_SCHEMA, CARD_GET_LIMITS, projectCardGetOutput, isCardGetOutput, finalizeCardGetOutput } from "../src/card-get-output.ts";
+import { CARD_GET_OUTPUT_SCHEMA, CARD_GET_LIMITS, projectCardGetOutput, isCardGetOutput } from "../src/card-get-output.ts";
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 useInertEnvironmentCredentialProvider();
 const success = (card: Record<string, unknown> = {}) => ({ ok: true, action: "card-get", data: { card: { contentTrust: "external", cardId: "fixture-card", ...card } } });
@@ -52,16 +52,6 @@ for (const [name, payload] of Object.entries({ missing: undefined, wrongAction: 
 test("strict schema rejects unknown keys at every object depth", () => {
   const value = projectCardGetOutput(success({ deck: { title: "Deck" } }));
   for (const bad of [{ ...value, private: true }, { ...value, card: { ...value.card, private: true } }, { ...value, card: { ...value.card, deck: { title: "Deck", private: true } } }]) assert.equal(Value.Check(CARD_GET_OUTPUT_SCHEMA, bad), false);
-});
-test("conformance guard validates data and native status without restoring rejected payload", () => {
-  const good = projectCardGetOutput(success());
-  assert.equal(finalizeCardGetOutput({ toolName: "other", structuredContent: undefined, isError: false }), undefined);
-  assert.equal(finalizeCardGetOutput({ toolName: "codecks_card_get", structuredContent: good, isError: false }), undefined);
-  for (const [structuredContent, isError] of [[undefined, false], [{ ...good, extra: "rejected-secret" }, false], [good, true], [projectCardGetOutput(error()), false]] as const) {
-    const replacement = finalizeCardGetOutput({ toolName: "codecks_card_get", structuredContent, isError });
-    assert.equal(replacement?.isError, true); assert.equal(replacement?.structuredContent.ok, false); assert.ok(isCardGetOutput(replacement?.structuredContent));
-    assert.equal(JSON.stringify(replacement).includes("rejected-secret"), false);
-  }
 });
 test("real internal read seam preserves missing vs null without changing legacy text", async () => {
   const core = await import("../src/codecks-core.ts");

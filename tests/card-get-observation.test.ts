@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Value } from "typebox/value";
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
-import { projectCardGetOutput, finalizeCardGetOutput, CARD_GET_OUTPUT_SCHEMA } from "../src/card-get-output.ts";
+import { projectCardGetOutput } from "../src/card-get-output.ts";
 useInertEnvironmentCredentialProvider();
 const core = await import("../src/codecks-core.ts");
 const absentRefs = (value: any) => { for (const key of ["shortCode", "cardRef", "accountSeqRef", "url"]) assert.equal(Object.hasOwn(value, key), false, key); };
@@ -68,12 +67,3 @@ for (const branch of ["ambiguous", "incomplete", "failed-page"] as const) {
     } finally { globalThis.fetch = original; core.__test.resetRateGate(); }
   });
 }
-test("schema-valid post-hook byte overflow has its distinct safe error code", () => {
-  const dto = projectCardGetOutput({ ok: true, action: "card-get", data: { card: { contentTrust: "external" } } });
-  const oversized = { ...dto, card: { ...dto.card, content: "😀".repeat(20000) } };
-  assert.equal(Value.Check(CARD_GET_OUTPUT_SCHEMA, oversized), true);
-  assert.ok(Buffer.byteLength(JSON.stringify(oversized), "utf8") > 65536);
-  const result = finalizeCardGetOutput({ toolName: "codecks_card_get", structuredContent: oversized, isError: false });
-  assert.equal(result.isError, true); assert.equal(result.structuredContent.ok, false); assert.equal(result.structuredContent.error.code, "output_too_large");
-  assert.equal(JSON.stringify(result).includes("😀"), false);
-});

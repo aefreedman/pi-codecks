@@ -36,7 +36,7 @@ export type CardGetOutput = Static<typeof CARD_GET_OUTPUT_SCHEMA>;
 const record = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 const base = (read: "complete" | "incomplete" | "unknown", projection = true) => ({ schemaVersion: 1 as const, action: "card_get" as const, provenance: { source: "codecks" as const, contentTrust: "external" as const }, completeness: { read, projection } });
 export function cardGetContractError(code: "output_contract_error" | "output_too_large" = "output_contract_error"): CardGetOutput {
-  return { ...base("unknown", false), ok: false, error: { code, message: code === "output_too_large" ? "Card data exceeds the structured output byte budget." : "Card structured output is missing, invalid, or inconsistent with native error status." } } as CardGetOutput;
+  return { ...base("unknown", false), ok: false, error: { code, message: code === "output_too_large" ? "Card data exceeds the structured output byte budget." : "Codecks could not produce valid structured card output." } } as CardGetOutput;
 }
 export function isCardGetOutput(value: unknown): value is CardGetOutput {
   try { return Value.Check(CARD_GET_OUTPUT_SCHEMA, value) && Buffer.byteLength(JSON.stringify(value), "utf8") <= CARD_GET_LIMITS.bytes; }
@@ -101,17 +101,4 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
     if (Buffer.byteLength(JSON.stringify(output), "utf8") > CARD_GET_LIMITS.bytes) return cardGetContractError("output_too_large");
     return isCardGetOutput(output) ? output : cardGetContractError();
   } catch { return cardGetContractError(); }
-}
-
-/** Run after supported output modifiers. Never restore a pre-redaction snapshot. */
-export function finalizeCardGetOutput(event: { toolName: string; structuredContent?: unknown; isError: boolean }) {
-  if (event.toolName !== "codecks_card_get") return undefined;
-  if (isCardGetOutput(event.structuredContent) && event.isError === (event.structuredContent.ok === false)) return undefined;
-  let code: "output_contract_error" | "output_too_large" = "output_contract_error";
-  try {
-    if (Value.Check(CARD_GET_OUTPUT_SCHEMA, event.structuredContent)
-        && Buffer.byteLength(JSON.stringify(event.structuredContent), "utf8") > CARD_GET_LIMITS.bytes) code = "output_too_large";
-  } catch { /* Non-serializable or malformed data remains a contract failure. */ }
-  const structuredContent = cardGetContractError(code);
-  return { content: [{ type: "text" as const, text: code === "output_too_large" ? "Card data exceeds the structured output byte budget." : "Card structured output is missing, invalid, or inconsistent with native error status." }], details: { exportName: "card_get", outputContractError: true }, structuredContent, isError: true };
 }

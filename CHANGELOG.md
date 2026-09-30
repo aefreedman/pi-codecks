@@ -10,13 +10,13 @@ and this project follows semantic versioning for public package releases.
 ### Added
 
 - Pilot a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.
-- Add a card-get-only post-modifier conformance guard, deterministic DTO tests, and an isolated real Pi/codemode/Safety Rails host test. Supported load order requires output modifiers before pi-codecks; later hooks remain outside the guarantee.
+- Add deterministic producer DTO tests and an isolated real Pi/codemode host test that runs Codecks alone. Keep optional Safety Rails compatibility proof separate and test both load orders; neither package depends on the other.
 
 ### Fixed
 
 - Do not establish title-match absence or uniqueness from incomplete card-get scans; preserve incomplete-read evidence without broadening scans, retries, or fallback.
 - Preserve explicit-null and missing observations in card-get DTOs and all error-candidate branches; infer type only from meaningful evidence and derive reusable references only from valid account sequences, without changing legacy renderer interfaces.
-- Report schema-valid post-hook DTO byte overflow as `output_too_large`, matching the documented contract.
+- Bound and validate Codecks-produced DTOs before returning them; report producer byte overflow as `output_too_large`. Do not repair or enforce other extensions' output transformations.
 
 ## [0.14.2] - 2026-09-29
 
