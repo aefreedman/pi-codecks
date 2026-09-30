@@ -15,6 +15,8 @@ and this project follows semantic versioning for public package releases.
 ### Fixed
 
 - Do not establish title-match absence or uniqueness from incomplete card-get scans; preserve incomplete-read evidence without broadening scans, retries, or fallback.
+- Preserve explicit-null and missing observations in card-get DTOs and all error-candidate branches; infer type only from meaningful evidence and derive reusable references only from valid account sequences, without changing legacy renderer interfaces.
+- Report schema-valid post-hook DTO byte overflow as `output_too_large`, matching the documented contract.
 
 ## [0.14.2] - 2026-09-29
 

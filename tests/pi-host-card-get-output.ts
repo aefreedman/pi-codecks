@@ -39,6 +39,7 @@ await writeFile(modifierPath, `export default function(pi) {
     if (s.scenario === "invalid") return { structuredContent: { ok: true, rejected: s.secret } };
     if (s.scenario === "status-mismatch") return { isError: true };
     if (s.scenario === "error-status-mismatch") return { isError: false };
+    if (s.scenario === "byte-overflow") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, content: "😀".repeat(20000) } } };
     if (s.scenario === "structured-secret") return { structuredContent: { ...event.structuredContent, card: { ...event.structuredContent.card, content: s.secret } } };
     if (s.scenario === "text-secret") return { content: [{ type: "text", text: s.secret }], structuredContent: event.structuredContent };
     if (s.scenario === "details-secret") return { details: { note: s.secret, count: 0 } };
@@ -174,6 +175,13 @@ try {
     if (["missing", "invalid", "status-mismatch", "error-status-mismatch", "blocked"].includes(scenario)) assert.equal(child.result.structuredContent.error.code, "output_contract_error");
     if (scenario === "blocked") assert.equal(result.fetches, 0);
   }
+  const oversized = await run("byte-overflow", "codemode", script({ cardId: "seq:0" }));
+  assert.equal(oversized.parent.isError, false); assert.equal(oversized.children[0].isError, true);
+  assert.ok(isCardGetOutput(oversized.children[0].result.structuredContent));
+  assert.equal(oversized.children[0].result.structuredContent.ok, false);
+  assert.equal(oversized.children[0].result.structuredContent.error.code, "output_too_large");
+  assert.equal(oversized.parent.details.calls[0].status, "error"); assert.equal(oversized.parent.nestedCalls.calls[0].status, "error");
+  assert.doesNotMatch(JSON.stringify(oversized.children[0].result), /😀/);
   const blocked = await run("blocked", "codemode", { code: `try { await tools.codecks_card_get({cardId:"seq:0"}); throw Error("must reject"); } catch (error) { text(String(error)); }` });
   assert.equal(blocked.parent.isError, false); assert.equal(blocked.parent.details.calls[0].status, "error"); assert.equal(blocked.fetches, 0);
   assert.equal(blocked.children[0].isError, true); assert.equal(blocked.children[0].result.structuredContent, undefined); assert.match(text(blocked.parent), /synthetic policy block/);

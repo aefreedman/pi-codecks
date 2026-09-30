@@ -7007,10 +7007,16 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
             text: toStructuredResult(format, action, text, data),
             payload: { ok: true, action, data },
         });
-        const failure = (_format: OutputFormat, action: string, category: string, message: string, data: Record<string, unknown> = {}) => ({
+        const failure = (_format: OutputFormat, action: string, category: string, message: string, data: Record<string, unknown> = {}, candidateSources?: CodecksEntity[]) => ({
             text: toStructuredErrorResult(format, action, category as ErrorCategory, message, data),
-            payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data } },
+            payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data,
+                ...(candidateSources ? { candidates: candidateSources.map(observeCandidate) } : {}) } },
         });
+        // Pilot-scoped evidence rules; do not change other tools' legacy type inference.
+        const hasObservedType = (source: CodecksEntity): boolean =>
+            typeof source.isDoc === "boolean"
+            || (typeof source.isDoc === "string" && /^(true|false)$/i.test(source.isDoc))
+            || [source.status, source.derivedStatus].some(value => typeof value === "string" && value.trim().length > 0);
         const observeSummary = (summary: Record<string, unknown>, source: CodecksEntity): Record<string, unknown> =>
         {
             const clean = { ...summary };
@@ -7020,14 +7026,34 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
                 if (!derived.has(field) && source[field] === undefined) delete clean[field];
                 else if (!derived.has(field) && source[field] === null) clean[field] = null;
             }
-            if (source.accountSeq === undefined)
+            if (typeof source.accountSeq !== "number" || !Number.isSafeInteger(source.accountSeq) || source.accountSeq < 0)
             {
                 for (const field of ["shortCode", "cardRef", "accountSeqRef", "url"]) delete clean[field];
             }
-            if ("cardType" in clean && !isCardTypeKnown(source))
+            if ("cardType" in clean && !hasObservedType(source))
             {
                 clean.cardType = "unknown";
                 delete clean.isDoc;
+            }
+            if ("cardType" in clean && (source.isDoc === null || typeof source.isDoc === "boolean")) clean.isDoc = source.isDoc;
+            return clean;
+        };
+        const observeCandidate = (source: CodecksEntity): Record<string, unknown> =>
+        {
+            const clean = observeSummary(normalizeCardCandidate(source), source);
+            if (source.derivedStatus !== undefined) clean.derivedStatus = source.derivedStatus;
+            if (typeof source.isDoc === "boolean") clean.isDoc = source.isDoc;
+            for (const [key, fields] of [["deck", ["title"]], ["milestone", ["name", "title"]], ["assignee", ["name", "fullName"]]] as const)
+            {
+                const relation = source[key];
+                if (relation === null) clean[key] = null;
+                else if (relation && typeof relation === "object")
+                {
+                    const observed = fields.map(field => (relation as CodecksEntity)[field]).find(value => value !== undefined);
+                    if (observed !== undefined) clean[key] = observed;
+                    else delete clean[key];
+                }
+                else delete clean[key];
             }
             return clean;
         };
@@ -7074,7 +7100,7 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
                     return failure(format, "card-get", "incomplete_read", "Title scan is incomplete; absence and uniqueness are not established.", {
                         complete: false,
                         candidates: cards.map(normalizeCardCandidate),
-                    });
+                    }, cards);
                 }
                 if (cards.length === 0)
                 {
@@ -7088,7 +7114,7 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
                     return failure(format, "card-get", "ambiguous_match", "Multiple cards matched the search criteria.", {
                         matches: cards.length,
                         candidates: cards.map(normalizeCardCandidate),
-                    });
+                    }, cards);
                 }
 
                 cardId = (cards[0].cardId as string | number | undefined) ?? cards[0].accountSeq;
@@ -7138,11 +7164,6 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
             }
             if (detail.card.masterTags === undefined) delete observed.tags;
             else if (detail.card.masterTags === null) observed.tags = null;
-            if (!isCardTypeKnown(detail.card))
-            {
-                observed.cardType = "unknown";
-                delete observed.isDoc;
-            }
             // Summary normalizers are renderer-oriented and fill missing values with null.
             // Keep genuinely absent nested fields absent in the programmatic observation.
             for (const key of ["deck", "milestone", "assignee", "creator"])
@@ -7180,7 +7201,7 @@ export async function readCardGet(args: Record<string, any>): Promise<{ text: st
                     candidates: error.scan.cards
                         .filter(card => cardMatchesText(card, createTextSearchMatcher(args.title), "title"))
                         .map(normalizeCardCandidate),
-                });
+                }, error.scan.cards.filter(card => cardMatchesText(card, createTextSearchMatcher(args.title), "title")));
             }
             return failure(format, "card-get", category, toErrorMessage(error), {
                 ...getOperationErrorData(error),

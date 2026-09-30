@@ -107,6 +107,11 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
 export function finalizeCardGetOutput(event: { toolName: string; structuredContent?: unknown; isError: boolean }) {
   if (event.toolName !== "codecks_card_get") return undefined;
   if (isCardGetOutput(event.structuredContent) && event.isError === (event.structuredContent.ok === false)) return undefined;
-  const structuredContent = cardGetContractError();
-  return { content: [{ type: "text" as const, text: "Card structured output is missing, invalid, or inconsistent with native error status." }], details: { exportName: "card_get", outputContractError: true }, structuredContent, isError: true };
+  let code: "output_contract_error" | "output_too_large" = "output_contract_error";
+  try {
+    if (Value.Check(CARD_GET_OUTPUT_SCHEMA, event.structuredContent)
+        && Buffer.byteLength(JSON.stringify(event.structuredContent), "utf8") > CARD_GET_LIMITS.bytes) code = "output_too_large";
+  } catch { /* Non-serializable or malformed data remains a contract failure. */ }
+  const structuredContent = cardGetContractError(code);
+  return { content: [{ type: "text" as const, text: code === "output_too_large" ? "Card data exceeds the structured output byte budget." : "Card structured output is missing, invalid, or inconsistent with native error status." }], details: { exportName: "card_get", outputContractError: true }, structuredContent, isError: true };
 }
