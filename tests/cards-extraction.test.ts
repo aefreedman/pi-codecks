@@ -38,8 +38,10 @@ const normalize = (value: any, workspace: string): any => {
 };
 try {
 const catalog = composeCodecksToolCatalog(CARD_TOOL_DEFINITIONS);
-assert.equal(catalog.size, 19, "the packet's named ownership list contains nineteen tools, plus two native read functions");
-assert.equal(Object.keys(moved).length, 21);
+assert.equal(catalog.size, 19, "nineteen tools, plus two native read functions and one batch payload function");
+assert.equal(Object.keys(moved).length, 22);
+assert.strictEqual(reads.card_get_batch.executePayload, reads.executeCardGetBatchPayload);
+assert.equal(Object.hasOwn(originals, "executeCardGetBatchPayload"), false, "no facade export expansion");
 assert.throws(() => composeCodecksToolCatalog(CARD_TOOL_DEFINITIONS, CARD_TOOL_DEFINITIONS), /Duplicate/);
 const registrations = new Map<string, any>();
 const baselineRegistrations = new Map<string, any>();
@@ -59,6 +61,7 @@ for (const definition of CARD_TOOL_DEFINITIONS) {
   const aliases = { id: 42, card_id: 42, run_id: 91, output_format: "json", location: "backlog", dry_run: true };
   assert.deepEqual(definition.config.prepareArguments?.(aliases), original.config.prepareArguments?.(aliases));
   assert.equal(!!definition.read, ["card_get", "card_search"].includes(definition.exportName));
+  assert.equal(!!definition.executePayload, definition.exportName === "card_get_batch");
   register(definition, registrations); register(original, baselineRegistrations);
   assert.deepEqual(registrations.get(`codecks_${definition.exportName}`).parameters, baselineRegistrations.get(`codecks_${definition.exportName}`).parameters);
 }
