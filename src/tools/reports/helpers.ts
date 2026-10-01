@@ -407,7 +407,8 @@ export const fetchDeliveredEffortEntries = async (args: {
         const runWide = observeDone(isRecord(finish?.progress) ? finish.progress.done : undefined);
         const observedDone = userResult.userId ? observeDone(findRecordById(finish?.assignee, userResult.userId)?.done) : runWide;
         const facts: Record<string, unknown> = {};
-        for (const key of ["accountSeq", "customLabel", "startDate", "endDate", "completedAt"]) if (Object.hasOwn(run, key)) facts[key] = run[key];
+        for (const key of ["accountSeq", "startDate", "endDate", "completedAt"]) if (Object.hasOwn(run, key)) facts[key] = run[key];
+        if (Object.hasOwn(run, "name")) facts.customLabel = run.name;
         if (Object.hasOwn(run, "id")) facts.runId = run.id;
         const container = userResult.userId ? findRecordById(finish?.assignee, userResult.userId) : isRecord(finish?.progress) ? finish.progress : undefined;
         if (container && Object.hasOwn(container, "done")) {

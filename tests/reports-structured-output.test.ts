@@ -21,9 +21,9 @@ const priorFetch = globalThis.fetch;
 const requests: any[] = [];
 let mode = "normal";
 const runs = [
- { id: "run-zero", accountSeq: 0, customLabel: null, completedAt: "2026-02-20T00:00:00Z", startDate: "2026-02-09", endDate: "2026-02-15", stats: { finishStats: { progress: { done: [1, 0, 1] } }, progress: { done: [2, 9, 0] } } },
- { id: "run-positive", accountSeq: 1, completedAt: "2026-02-19T00:00:00Z", startDate: "2026-02-02", endDate: "2026-02-08", stats: { finishStats: { progress: { done: [2, 10, 0] } } } },
- { id: "run-null", accountSeq: 2, completedAt: "2026-02-18T00:00:00Z", stats: { finishStats: null } },
+ { id: "run-zero", accountSeq: 0, name: null, completedAt: "2026-02-20T00:00:00Z", startDate: "2026-02-09", endDate: "2026-02-15", stats: { finishStats: { progress: { done: [1, 0, 1] } }, progress: { done: [2, 9, 0] } } },
+ { id: "run-positive", accountSeq: 1, name: "", completedAt: "2026-02-19T00:00:00Z", startDate: "2026-02-02", endDate: "2026-02-08", stats: { finishStats: { progress: { done: [2, 10, 0] } } } },
+ { id: "run-null", accountSeq: 2, name: "Delivery", completedAt: "2026-02-18T00:00:00Z", stats: { finishStats: null } },
  { id: "run-missing", completedAt: "2026-02-17T00:00:00Z" },
 ];
 globalThis.fetch = (async (_url: any, init: any) => {
@@ -31,6 +31,11 @@ globalThis.fetch = (async (_url: any, init: any) => {
  if (mode === "forbidden") return new Response(JSON.stringify({ error: "Synthetic forbidden" }), { status: 403 });
  const relation = (query._root?.[0]?.account ?? []).flatMap((x: any) => x && typeof x === "object" ? Object.keys(x) : []).find((x: string) => /^(sprints|activities|cards)(\(|$)/.test(x));
  assert.ok(relation, "canonical report query expected");
+ if (relation === "sprints") {
+  const fields = query._root[0].account.find((entry: any) => Object.hasOwn(entry, "sprints")).sprints;
+  assert.ok(fields.includes("name"), "canonical Run query selects name");
+  assert.equal(fields.includes("customLabel"), false, "customLabel is not an upstream field");
+ }
  if (relation.startsWith("cards")) return new Response(JSON.stringify({ data: { user: mode === "ambiguous" ? { a: { id: "user-a", name: "Alex" }, b: { id: "user-b", name: "Alex" } } : {} } }));
  const values = relation === "sprints" ? mode === "empty" ? [] : mode === "raw" ? [{ completedAt: "2026-02-20T00:00:00Z", stats: { finishStats: { progress: { done: { count: null, effort: false, noEffort: 0 } } } } }] : runs : mode === "scan" ? Array.from({ length: 50 }, (_, i) => ({ id: `activity-${i}`, createdAt: "2026-02-03T12:00:00Z", data: { diff: { status: ["started", "done"] } }, card: { cardId: `card-${i}`, accountSeq: i, title: "Synthetic", effort: 0, status: "done" } })) : [];
  return new Response(JSON.stringify({ data: { _root: { account: "account-test" }, account: { "account-test": { id: "account-test", sprintsEnabled: true, [relation]: values } } } }));
@@ -88,6 +93,52 @@ try {
   check(!d.projectOutput!(fail.payload).ok);
  }
  const delivered = REPORT_TOOL_DEFINITIONS[2]; const average = REPORT_TOOL_DEFINITIONS[3]; const report = REPORT_TOOL_DEFINITIONS[1]; const updater = REPORT_TOOL_DEFINITIONS[0];
+ // Real queried name observations must survive independently of legacy label
+ // defaults, including all zero-effort rows in BOTH reports and includedRuns.
+ for (const d of [delivered, average]) for (const format of ["json", "text"]) {
+  const args = { completedRuns: 4, minDeliveredEffort: 0, includeFilteredRuns: true, includeCurrentStats: true, format };
+  requests.length = 0; resetRateGate();
+  const native = await direct(d, args); const dto: any = d.projectOutput!(native.payload);
+  check(dto.ok); check(Value.Check(d.outputSchema!, dto));
+  check(dto.completeness.projection === true);
+  assert.equal(dto.data.visibility, "token_visible_account_runs_snapshot");
+  assert.equal(requests.length, 1); const queryBody = structuredClone(requests[0]);
+  assert.equal(dto.data.returned, 4); assert.equal(dto.data.matchedCompletedRuns, 4);
+  assert.deepEqual(dto.data.runs.map((row: any) => row.runId), runs.map(row => row.id));
+  const assertLabels = (rows: any[]) => {
+   assert.equal(rows.length, 4);
+   for (const [index, row] of rows.entries()) {
+    check(Object.hasOwn(row, "customLabel") === Object.hasOwn(runs[index], "name"));
+    if (Object.hasOwn(runs[index], "name")) assert.strictEqual(row.customLabel, runs[index].name);
+   }
+  };
+  assertLabels(dto.data.runs);
+  assert.deepEqual(dto.data.runs.map((row: any) => row.calculatedDelivered.effort), [0, 10, 0, 0]);
+  assert.deepEqual(dto.data.totals, { count: 3, effort: 10, noEffort: 1 });
+  if (d === average) {
+   assert.equal(dto.data.includedRunCount, 4); assert.equal(dto.data.filteredRunCount, 0);
+   assert.equal(dto.data.averageEffort, 2.5); assert.equal(dto.data.averageDoneCards, 0.75);
+   assertLabels(dto.data.includedRuns); assert.deepEqual(dto.data.filteredRuns, []);
+  }
+  requests.length = 0; resetRateGate();
+  const legacy = await runWithAbortSignal(undefined, () => d.tool.execute(args), root);
+  assert.equal(legacy, native.text, "legacy text/JSON interface unchanged");
+  assert.equal(requests.length, 1); assert.deepEqual(requests[0], queryBody);
+  if (format === "json") {
+   const payload = JSON.parse(String(legacy).match(/```json\s*([\s\S]*?)\s*```/)![1]);
+   assert.deepEqual(payload.data.totals, dto.data.totals);
+   if (d === average) assert.equal(payload.data.averageEffort, 2.5);
+  } else {
+   assert.match(String(legacy), /Total Delivered Effort: 10/);
+   if (d === average) assert.match(String(legacy), /Average Delivered Effort: 2.5/);
+  }
+  requests.length = 0; resetRateGate();
+  const registered = await invoke(d, args);
+  assert.equal(registered.isError, false); assert.deepEqual(registered.structuredContent, dto);
+  assert.equal(registered.content[0].text, legacy);
+  assert.equal(requests.length, 1); assert.deepEqual(requests[0], queryBody);
+ }
+ console.log("reports name observations: both reports x two formats x native/legacy/registered; absent/null/empty/nonempty rows, all four included, one canonical name query and unchanged totals/text passed");
  for (const d of [delivered, average]) {
   mode = "ambiguous"; resetRateGate(); const out = await invoke(d, { user: "Alex" }); check(out.isError); assert.equal(out.structuredContent.error.code, "ambiguous_match");
   mode = "forbidden"; resetRateGate(); const denied = await invoke(d, {}); check(denied.isError); check(!denied.structuredContent.ok);
