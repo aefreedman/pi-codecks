@@ -1,3 +1,7 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { pick } from "./cards-output-primitives";
+import type { DoneTransitionObservation } from "../../shared/done-transitions";
 import { observeCandidate, observeCardGet } from "./card-get-observation";
 import { type DoneTransitionEvent, fetchDoneTransitionEvents } from "../../shared/done-transitions";
 import { getActiveAbortSignal, getOperationContext, runWithAbortSignal } from "../../runtime/operation-context";
@@ -316,8 +320,17 @@ export const card_list_missing_effort = tool({
         includeArchived: tool.schema.boolean().optional().describe("Include archived/deleted cards in the scan (default: false)."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return (await executeCardListMissingEffort(args)).text; },
+    executePayload: executeCardListMissingEffort,
+});
+
+/** Native operation; legacy presentation is produced by the same invocation. */
+export async function executeCardListMissingEffort(args: Record<string, any>): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ let nativeData: Record<string, unknown> = {}; let readComplete: boolean | undefined; let emissionComplete = false;
+ const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>, warnings?: string[], hint?: string): CodecksOperationPayload => ({ text: toStructuredResult(format, action, text, data, warnings, hint), payload: { ok: true, action, data: nativeData, complete: readComplete, emissionComplete, warnings } });
+ const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}): CodecksOperationPayload => ({ text: toStructuredErrorResult(format, action, category, message, data), payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data } } });
+
         const format = args.format ?? "text";
         const outputLimit = args.limit ?? 300;
         const scanLimit = args.scanLimit ?? 3000;
@@ -339,7 +352,7 @@ export const card_list_missing_effort = tool({
         catch (error)
         {
             const cause = error instanceof PagedCardScanFailure ? error.cause : error;
-            return toStructuredErrorResult(format, "card-list-missing-effort", cause instanceof CodecksOperationError ? cause.category : classifyApiErrorCategory(toErrorMessage(cause)), toErrorMessage(cause), {
+            return failure(format, "card-list-missing-effort", cause instanceof CodecksOperationError ? cause.category : classifyApiErrorCategory(toErrorMessage(cause)), toErrorMessage(cause), {
                 ...getOperationErrorData(cause),
                 ...(error instanceof PagedCardScanFailure ? {
                     scannedCards: error.scan.scannedCards, requestsAttempted: error.scan.requestsAttempted,
@@ -356,7 +369,7 @@ export const card_list_missing_effort = tool({
 
         if (result.error)
         {
-            return toStructuredErrorResult(format, "card-list-missing-effort", "validation_error", result.error);
+            return failure(format, "card-list-missing-effort", "validation_error", result.error);
         }
 
         const candidates = buildMissingEffortCandidates(result.matchedCards ?? result.cards ?? [], {
@@ -368,6 +381,21 @@ export const card_list_missing_effort = tool({
         const eligible = allEligible.slice(0, outputLimit);
         const excluded = allExcluded.slice(0, outputLimit);
         const includeExcluded = args.includeExcluded ?? true;
+        const observeRow = (entry: typeof candidates[number]) => {
+            const card = pick(entry.card, ["cardId", "accountSeq", "title", "status", "derivedStatus", "visibility", "effort", "isDoc", "priority"]);
+            if (typeof card.accountSeq === "number" && Number.isSafeInteger(card.accountSeq) && card.accountSeq >= 0)
+                Object.assign(card, { shortCode: formatShortCode(card.accountSeq), ...buildReusableCardRefs(card.accountSeq) });
+            return { card, exclusionReasons: entry.exclusionReasons };
+        };
+        readComplete = result.complete;
+        emissionComplete = eligible.length === allEligible.length && (includeExcluded ? excluded.length === allExcluded.length : allExcluded.length === 0);
+        nativeData = {
+            scanned: candidates.length, visibility: "token_visible_projects_only",
+            ...pick(result as unknown as Record<string, unknown>, ["scannedCards", "scanLimit", "pageSize", "scanLimitReached"]),
+            outputLimit, eligibleCount: allEligible.length, excludedCount: allExcluded.length,
+            returnedEligibleCards: eligible.length, returnedExcludedCards: includeExcluded ? excluded.length : 0,
+            eligibleCards: eligible.map(observeRow), ...(includeExcluded ? { excludedCards: excluded.map(observeRow) } : {}),
+        };
 
         const lines = [
             "## Missing Effort Preview",
@@ -388,7 +416,7 @@ export const card_list_missing_effort = tool({
             }));
         }
 
-        return toStructuredResult(
+        return success(
             format,
             "card-list-missing-effort",
             lines.join("\n"),
@@ -420,9 +448,9 @@ export const card_list_missing_effort = tool({
                 ? "Increase scanLimit or narrow the scope before presenting candidates for approval."
                 : "Present eligibleCards to the user, ask for explicit approval and target effort values, then call codecks_card_update_effort only for approved cards.",
         );
-    },
-});
 
+ });
+}
 export const card_list_done_within_timeframe = tool({
     description: "List cards transitioned to done within a timeframe.",
     args: {
@@ -435,8 +463,17 @@ export const card_list_done_within_timeframe = tool({
         includeArchived: tool.schema.boolean().optional().describe("Include cards whose current visibility is archived/deleted."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return (await executeCardListDoneWithinTimeframe(args)).text; },
+    executePayload: executeCardListDoneWithinTimeframe,
+});
+
+/** Native operation; legacy presentation is produced by the same invocation. */
+export async function executeCardListDoneWithinTimeframe(args: Record<string, any>): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const observations = new Map<DoneTransitionEvent, DoneTransitionObservation>(); let nativeData: Record<string, unknown> = {}; let readComplete: boolean | undefined; let emissionComplete = false;
+ const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>, warnings?: string[], hint?: string): CodecksOperationPayload => ({ text: toStructuredResult(format, action, text, data, warnings, hint), payload: { ok: true, action, data: nativeData, complete: readComplete, emissionComplete, warnings } });
+ const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}): CodecksOperationPayload => ({ text: toStructuredErrorResult(format, action, category, message, data), payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data } } });
+
         const format = args.format ?? "text";
         const mode = args.mode ?? "cards";
         const limit = args.limit ?? 200;
@@ -447,7 +484,7 @@ export const card_list_done_within_timeframe = tool({
         const sinceParsed = parseDateTimeInput(args.since, "since");
         if ("error" in sinceParsed)
         {
-            return toStructuredErrorResult(format, "card-list-done-within-timeframe", "validation_error", sinceParsed.error);
+            return failure(format, "card-list-done-within-timeframe", "validation_error", sinceParsed.error);
         }
 
         const untilParsed = args.until
@@ -455,12 +492,12 @@ export const card_list_done_within_timeframe = tool({
             : { date: new Date(), iso: new Date().toISOString() };
         if ("error" in untilParsed)
         {
-            return toStructuredErrorResult(format, "card-list-done-within-timeframe", "validation_error", untilParsed.error);
+            return failure(format, "card-list-done-within-timeframe", "validation_error", untilParsed.error);
         }
 
         if (sinceParsed.date.getTime() > untilParsed.date.getTime())
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-list-done-within-timeframe",
                 "validation_error",
@@ -476,11 +513,12 @@ export const card_list_done_within_timeframe = tool({
                 until: untilParsed.date,
                 scanLimit,
                 pageSize,
+                observe: observation => observations.set(observation.event, observation),
             });
         }
         catch (error)
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-list-done-within-timeframe",
                 "api_error",
@@ -509,6 +547,14 @@ export const card_list_done_within_timeframe = tool({
             : sourceEvents;
         const rows = deduped.slice(0, limit);
         const truncatedByLimit = deduped.length > limit;
+        readComplete = !fetched.scanLimitReached;
+        emissionComplete = !truncatedByLimit;
+        nativeData = {
+            since: sinceParsed.iso, until: untilParsed.iso, mode, includeArchived,
+            sourceEvents: fetched.events.length, filteredEvents: sourceEvents.length, matches: deduped.length, returned: rows.length,
+            scannedActivities: fetched.scannedActivities, scanLimit, limit, scanLimitReached: fetched.scanLimitReached, truncatedByLimit,
+            items: rows.map(entry => ({ ...pick(entry as unknown as Record<string, unknown>, ["activityId", "cardId", "doneAt", "fromStatus", "toStatus"]), ...pick(observations.get(entry) as unknown as Record<string, unknown>, ["activity", "transition", "card", "changer", "assignee", "deck", "relations"]) })),
+        };
         const warnings: string[] = [];
         if (fetched.scanLimitReached)
         {
@@ -528,7 +574,7 @@ export const card_list_done_within_timeframe = tool({
                 `Mode: ${mode}`,
                 `Scanned activities: ${fetched.scannedActivities}`,
             ];
-            return toStructuredResult(
+            return success(
                 format,
                 "card-list-done-within-timeframe",
                 summary.join("\n"),
@@ -573,7 +619,7 @@ export const card_list_done_within_timeframe = tool({
             }),
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-list-done-within-timeframe",
             lines.join("\n"),
@@ -592,9 +638,9 @@ export const card_list_done_within_timeframe = tool({
             },
             warnings.length > 0 ? warnings : undefined,
         );
-    },
-});
 
+ });
+}
 export const card_get = tool({
     description: "Fetch one Codecks card as structured data for agent reasoning.",
     args: {
@@ -1232,8 +1278,17 @@ export const card_get_vision_board = tool({
         includePayload: tool.schema.boolean().optional().describe("Include raw query/payload content when available. Defaults to false."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return (await executeCardGetVisionBoard(args)).text; },
+    executePayload: executeCardGetVisionBoard,
+});
+
+/** Native operation; legacy presentation is produced by the same invocation. */
+export async function executeCardGetVisionBoard(args: Record<string, any>): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ let nativeBoard: Record<string, unknown> | null | undefined; const queryFacts = new Map<Record<string, unknown>, Record<string, unknown>>(); let readComplete: boolean | undefined; let relationState = "missing"; let referenceObservation: unknown;
+ const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>, warnings?: string[], hint?: string): CodecksOperationPayload => ({ text: toStructuredResult(format, action, text, data, warnings, hint), payload: { ok: true, action, data: { ...pick(data, ["requestedCardRef", "resolvedCardId", "status", "source", "capabilities", "queryCount"]), visionBoard: nativeBoard, relationState, referenceObservation, status: relationState === "missing" || relationState === "invalid" ? "unknown" : data.status, queries: (data.queries as Record<string, unknown>[]).map(query => queryFacts.get(query)) }, complete: readComplete, emissionComplete: true, warnings } });
+ const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}): CodecksOperationPayload => ({ text: toStructuredErrorResult(format, action, category, message, data), payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data } } });
+
         const format = args.format ?? "text";
         const includePayload = args.includePayload ?? false;
 
@@ -1242,7 +1297,7 @@ export const card_get_vision_board = tool({
             const requestedCardRef = String(args.cardId ?? "").trim();
             if (!requestedCardRef)
             {
-                return toStructuredErrorResult(format, "card-get-vision-board", "validation_error", "Card ID is required.");
+                return failure(format, "card-get-vision-board", "validation_error", "Card ID is required.");
             }
 
             const warnings: string[] = [];
@@ -1255,7 +1310,7 @@ export const card_get_vision_board = tool({
 
             if (!current?.cardId)
             {
-                return toStructuredErrorResult(format, "card-get-vision-board", "not_found", "Card not found.", {
+                return failure(format, "card-get-vision-board", "not_found", "Card not found.", {
                     requestedCardRef,
                 });
             }
@@ -1276,12 +1331,16 @@ export const card_get_vision_board = tool({
             }
 
             const rawVisionBoard = current.visionBoard;
+            if (rawVisionBoard === null) nativeBoard = null;
+            if (rawVisionBoard === null || typeof rawVisionBoard !== "object") referenceObservation = rawVisionBoard;
+            relationState = rawVisionBoard === undefined ? "missing" : rawVisionBoard === null ? "null" : "invalid";
             const initialVisionBoardId = typeof rawVisionBoard === "string" || typeof rawVisionBoard === "number"
                 ? String(rawVisionBoard)
                 : (typeof rawVisionBoard === "object" && rawVisionBoard && (rawVisionBoard as CodecksEntity).id)
                     ? String((rawVisionBoard as CodecksEntity).id)
                     : "";
 
+            if (initialVisionBoardId) relationState = "reference";
             let status: "available" | "absent" | "unsupported" = "absent";
             let source = "card.visionBoard";
             let visionBoard: Record<string, unknown> | null = null;
@@ -1299,6 +1358,7 @@ export const card_get_vision_board = tool({
                 visionBoard = {
                     id: initialVisionBoardId,
                 };
+                nativeBoard = { id: initialVisionBoardId };
 
                 try
                 {
@@ -1306,6 +1366,7 @@ export const card_get_vision_board = tool({
                     if (directVisionBoard)
                     {
                         const creator = directVisionBoard.creator as CodecksEntity | undefined;
+                        nativeBoard = { id: initialVisionBoardId, ...pick(directVisionBoard, ["accountSeq", "createdAt", "isDeleted"]), ...(directVisionBoard.creator !== undefined ? { creator: directVisionBoard.creator === null ? null : typeof directVisionBoard.creator === "object" && !Array.isArray(directVisionBoard.creator) ? pick(creator, ["id", "name", "fullName"]) : directVisionBoard.creator } : {}) };
                         visionBoard = {
                             id: initialVisionBoardId,
                             accountSeq: directVisionBoard.accountSeq ?? null,
@@ -1335,6 +1396,7 @@ export const card_get_vision_board = tool({
                         if (matchedVisionBoard)
                         {
                             const creator = matchedVisionBoard.creator as CodecksEntity | undefined;
+                            nativeBoard = { id: initialVisionBoardId, ...pick(matchedVisionBoard, ["accountSeq", "createdAt", "isDeleted"]), ...(matchedVisionBoard.creator !== undefined ? { creator: matchedVisionBoard.creator === null ? null : typeof matchedVisionBoard.creator === "object" && !Array.isArray(matchedVisionBoard.creator) ? pick(creator, ["id", "name", "fullName"]) : matchedVisionBoard.creator } : {}) };
                             visionBoard = {
                                 id: initialVisionBoardId,
                                 accountSeq: matchedVisionBoard.accountSeq ?? null,
@@ -1393,6 +1455,7 @@ export const card_get_vision_board = tool({
                                 normalized.payload = normalizedPayload.value;
                             }
 
+                            queryFacts.set(normalized, pick(entry, ["type", "createdAt", "lastUsedAt", "isStale"]));
                             return normalized;
                         })
                         .sort((left, right) =>
@@ -1430,6 +1493,7 @@ export const card_get_vision_board = tool({
                 warnings.push("Structured vision board query/payload retrieval was not available from the live card-adjacent Codecks API paths we probed.");
             }
 
+            readComplete = warnings.length === 0 && (relationState === "null" || relationState === "reference") ? true : undefined;
             const latestQueryAt = queries[0]
                 ? String(queries[0].lastUsedAt ?? queries[0].createdAt ?? "") || null
                 : null;
@@ -1487,7 +1551,7 @@ export const card_get_vision_board = tool({
                 lines.push("", "Warnings", "--------", ...warnings.map((warning) => `- ${warning}`));
             }
 
-            return toStructuredResult(
+            return success(
                 format,
                 "card-get-vision-board",
                 lines.join("\n"),
@@ -1498,9 +1562,10 @@ export const card_get_vision_board = tool({
         catch (error)
         {
             const message = toErrorMessage(error);
-            return toStructuredErrorResult(format, "card-get-vision-board", classifyApiErrorCategory(message), message, {
+            return failure(format, "card-get-vision-board", classifyApiErrorCategory(message), message, {
                 requestedCardRef: String(args.cardId ?? "").trim() || undefined,
             });
         }
-    },
-});
+
+ });
+}

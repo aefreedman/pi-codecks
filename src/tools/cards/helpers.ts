@@ -14,6 +14,9 @@ import { type LookupResult, normalizeMilestoneSummary, renderLookupMessage, reso
 import { formatPriorityLabel, formatTags } from "../../shared/presentation";
 import { blankToUndefined, formatIdForQuery, getAccount, getRelation, isRecord, normalizeCollection, relationQuery, unwrapData } from "../../shared/query";
 import { normalizeResolvableContextInput } from "../../shared/resolvable-context";
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { createCardWriteProducer } from "./cards-write-output";
 import { classifyApiErrorCategory, getOperationErrorData, toErrorMessage, toStructuredErrorResult, toStructuredResult } from "../../shared/results";
 import { type RunLookupResult, resolveRunForUpdate } from "../../shared/runs";
 import { generateSessionId } from "../../shared/session-id";
@@ -1644,11 +1647,14 @@ export const fetchCompleteNamedHand = async (userId: string | number): Promise<N
 export const equalNamedHand = (left: NamedHandEntry[], right: NamedHandEntry[]): boolean =>
     left.length === right.length && left.every((entry, i) => entry.cardId === right[i]?.cardId && entry.sortIndex === right[i]?.sortIndex);
 
-export const mutateNamedHand = async (
+export const mutateNamedHandPayload = async (
     action: "card-add-to-hand" | "card-remove-from-hand",
     args: { cardId: string | number; userId?: string | number; format?: "text" | "json" },
-): Promise<string> =>
+): Promise<CodecksOperationPayload> =>
 {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer();
+ const hand: Record<string, unknown> = {}; effects.hand = hand;
     const format = args.format ?? "json";
     const adding = action === "card-add-to-hand";
     let card: Awaited<ReturnType<typeof resolveCardForUpdate>>;
@@ -1658,28 +1664,33 @@ export const mutateNamedHand = async (
     try
     {
         if (getBaseConfig().profileKey === "ORG" && args.userId === undefined)
-            return toStructuredErrorResult(format, action, "validation_error", "ORG has no own hand; provide an explicit human userId. No mutation was sent.");
+            return failure(format, action, "validation_error", "ORG has no own hand; provide an explicit human userId. No mutation was sent.");
         targetId = args.userId === undefined ? (await fetchLoggedInUser()).id! : await resolveExplicitHumanHandTarget(args.userId);
         card = await resolveCardForUpdate(args.cardId);
-        if (!card) return toStructuredErrorResult(format, action, "not_found", "Card not found; no hand write was sent.");
+        if (!card) return failure(format, action, "not_found", "Card not found; no hand write was sent.");
+        hand.targetId = targetId; hand.cardId = card.cardId;
         actor = await fetchSharedActor();
+        hand.actorId = actor.id;
         baseline = await fetchCompleteNamedHand(targetId);
+        hand.before = baseline;
         const matches = baseline.filter((entry) => entry.cardId === card!.cardId).length;
-        if (adding && matches !== 0) return toStructuredErrorResult(format, action, "validation_error", "The card is already on the target hand; no write was sent.");
-        if (!adding && matches !== 1) return toStructuredErrorResult(format, action, "validation_error", "The card is not uniquely on the target hand; no write was sent.");
+        if (adding && matches !== 0) return failure(format, action, "validation_error", "The card is already on the target hand; no write was sent.");
+        if (!adding && matches !== 1) return failure(format, action, "validation_error", "The card is not uniquely on the target hand; no write was sent.");
         // There is no atomic conditional dispatch. Refuse a baseline that drifted even once.
         const immediate = await fetchCompleteNamedHand(targetId);
-        if (!equalNamedHand(baseline, immediate))
-            return toStructuredErrorResult(format, action, "validation_error", "The target hand changed between reads; no write was sent. Refresh before retrying.");
+        hand.immediate = immediate;
+        hand.drift = !equalNamedHand(baseline, immediate);
+        if (hand.drift)
+            return failure(format, action, "validation_error", "The target hand changed between reads; no write was sent. Refresh before retrying.");
     }
     catch (error)
     {
-        return toStructuredErrorResult(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+        return failure(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
     }
 
     try
     {
-        await runDispatch(adding ? "handQueue/setCardOrders" : "handQueue/removeCards", {
+        await dispatch(adding ? "handQueue/setCardOrders" : "handQueue/removeCards", {
             sessionId: generateSessionId(),
             cardIds: adding ? [...baseline.map((entry) => entry.cardId), card!.cardId] : [card!.cardId],
             ...(adding ? { draggedCardIds: [card!.cardId] } : {}),
@@ -1688,20 +1699,26 @@ export const mutateNamedHand = async (
     }
     catch (error)
     {
-        return toStructuredErrorResult(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+        return failure(format, action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
     }
     try
     {
         const after = await fetchCompleteNamedHand(targetId);
+        hand.after = after;
         const expected = adding ? [...baseline.map((entry) => entry.cardId), card!.cardId] : baseline.filter((entry) => entry.cardId !== card!.cardId).map((entry) => entry.cardId);
         if (after.length !== expected.length || after.some((entry, i) => entry.cardId !== expected[i]))
             throw new CodecksOperationError("api_error", "Hand write response did not match exact target readback; stop and reconcile before any new write.", { mutationCertainty: "indeterminate", requestsAttempted: 1 });
-        return toStructuredResult(format, action,
+        hand.readbackConfirmed = true; effects.readback = "confirmed";
+        return success(format, action,
             `${adding ? "Added" : "Removed"} ${card!.shortCode || "card"} ${adding ? "to" : "from"} the verified human hand; exact membership and existing relative order confirmed.`,
             { cardCode: card!.shortCode || null, handAction: adding ? "add" : "remove", readbackConfirmed: true, previousEntryCount: baseline.length, resultingEntryCount: after.length });
     }
     catch (error)
     {
-        return toStructuredErrorResult(format, action, "api_error", "Hand write response requires exact target reconciliation; do not retry automatically.", { mutationCertainty: "indeterminate", requestsAttempted: 1 });
+        effects.readback = "unconfirmed"; hand.readbackConfirmed = false;
+        return failure(format, action, "api_error", "Hand write response requires exact target reconciliation; do not retry automatically.", { mutationCertainty: "indeterminate", requestsAttempted: 1 });
     }
+ });
 };
+
+export const mutateNamedHand = async (action: "card-add-to-hand" | "card-remove-from-hand", args: { cardId: string | number; userId?: string | number; format?: "text" | "json" }): Promise<string> => (await mutateNamedHandPayload(action, args)).text;

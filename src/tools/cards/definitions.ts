@@ -1,4 +1,7 @@
 import { Type } from "typebox";
+import { CARD_MISSING_EFFORT_OUTPUT_SCHEMA, CARD_DONE_TIMEFRAME_OUTPUT_SCHEMA, CARD_VISION_BOARD_OUTPUT_SCHEMA, projectCardsReadOutput } from "./cards-read-output";
+import { CARD_WRITE_OUTPUT_SCHEMAS, projectCardsWriteOutput } from "./cards-write-output";
+import { CARD_BULK_CREATE_OUTPUT_SCHEMA, CARD_BULK_UPDATE_OUTPUT_SCHEMA, projectCardsBulkOutput } from "./cards-bulk-output";
 import { CARD_GET_BATCH_OUTPUT_SCHEMA, projectCardGetBatchOutput } from "./card-get-batch-output";
 import type { CodecksToolDefinition } from "../../pi/tool-definition";
 import { outputFormatEnum, cardSearchOutputModeEnum, cardRefSchema, bulkCreateRecordSchema, bulkUpdateRecordSchema, locationEnum, CARD_REFERENCE_WRITE_GUIDELINES, normalizeArgs, normalizeOutputFormatAlias, normalizeCardLocationAliases, applyCardIdAliases, applyRunIdAliases } from "../../pi/input-primitives";
@@ -89,8 +92,8 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Present eligibleCards to the user and ask for explicit approval plus target effort values before calling codecks_card_update_effort; this tool does not apply effort values.",
       "Use skipCodes to exclude cards the user explicitly wants skipped.",
     ],
-  } },
-  { exportName: "card_list_done_within_timeframe", tool: card_list_done_within_timeframe, config: {} },
+  }, executePayload: args => card_list_missing_effort.executePayload(args), outputSchema: CARD_MISSING_EFFORT_OUTPUT_SCHEMA, projectOutput: payload => projectCardsReadOutput(payload, "card_list_missing_effort") },
+  { exportName: "card_list_done_within_timeframe", tool: card_list_done_within_timeframe, config: {}, executePayload: args => card_list_done_within_timeframe.executePayload(args), outputSchema: CARD_DONE_TIMEFRAME_OUTPUT_SCHEMA, projectOutput: payload => projectCardsReadOutput(payload, "card_list_done_within_timeframe") },
   { exportName: "card_get", tool: card_get, config: {
     parameters: Type.Object({
       cardId: Type.Optional(cardRefSchema),
@@ -198,7 +201,7 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Keep includePayload=false unless you specifically need raw vision-board query/payload content.",
       "Valid format values are text or json. If you want a human-readable result, use text; do not invent markdown as a format value.",
     ],
-  } },
+  }, executePayload: args => card_get_vision_board.executePayload(args), outputSchema: CARD_VISION_BOARD_OUTPUT_SCHEMA, projectOutput: payload => projectCardsReadOutput(payload, "card_get_vision_board") },
   { exportName: "card_create", tool: card_create, config: {
     parameters: Type.Object({
       title: Type.Optional(Type.String()),
@@ -227,8 +230,8 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "For ORG, provide a deck or explicit assigneeId. Decked unassigned and assigned deckless are valid; both absent is rejected. Do not infer an author or a hand target from assigneeId.",
       "ORG putOnHand=true is guarded until its explicit human target contract is verified; do not switch to PERSONAL after a rejection.",
     ],
-  } },
-  { exportName: "card_set_parent", tool: card_set_parent, config: {} },
+  }, executePayload: args => card_create.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_create, projectOutput: payload => projectCardsWriteOutput(payload, "card_create") },
+  { exportName: "card_set_parent", tool: card_set_parent, config: {}, executePayload: args => card_set_parent.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_set_parent, projectOutput: payload => projectCardsWriteOutput(payload, "card_set_parent") },
   { exportName: "card_update_run", tool: card_update_run, config: {
     parameters: Type.Object({
       cardId: cardRefSchema,
@@ -251,12 +254,12 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Assigning a card to a Run maps to cards/update sprintId internally.",
       "Set clearRun=true to remove a card from its Run by setting sprintId to null.",
     ],
-  } },
-  { exportName: "card_add_attachment", tool: card_add_attachment, config: {} },
+  }, executePayload: args => card_update_run.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_run, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_run") },
+  { exportName: "card_add_attachment", tool: card_add_attachment, config: {}, executePayload: args => card_add_attachment.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_add_attachment, projectOutput: payload => projectCardsWriteOutput(payload, "card_add_attachment") },
   { exportName: "card_update", tool: card_update, config: {
     promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
-  } },
-  { exportName: "card_update_status", tool: card_update_status, config: {} },
+  }, executePayload: args => card_update.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update, projectOutput: payload => projectCardsWriteOutput(payload, "card_update") },
+  { exportName: "card_update_status", tool: card_update_status, config: {}, executePayload: args => card_update_status.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_status, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_status") },
   { exportName: "card_add_to_hand", tool: card_add_to_hand, config: {
     parameters: Type.Object({ cardId: cardRefSchema, userId: Type.Optional(cardRefSchema), format: Type.Optional(outputFormatEnum) }),
     prepareArguments(args) {
@@ -267,7 +270,7 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
     },
     promptSnippet: "Append one card to an explicitly named human Hand while preserving its complete existing order.",
     promptGuidelines: ["ORG requires a verified human userId; PERSONAL defaults to its own Hand but can target another human subject to backend permission.", "Never supply an arbitrary hand order. This tool reads and rechecks a complete ordered baseline, then verifies exact readback; if the target changes or a mutation is uncertain, stop and reconcile."],
-  } },
+  }, executePayload: args => card_add_to_hand.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_add_to_hand, projectOutput: payload => projectCardsWriteOutput(payload, "card_add_to_hand") },
   { exportName: "card_remove_from_hand", tool: card_remove_from_hand, config: {
     parameters: Type.Object({ cardId: cardRefSchema, userId: Type.Optional(cardRefSchema), format: Type.Optional(outputFormatEnum) }),
     prepareArguments(args) {
@@ -278,9 +281,9 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
     },
     promptSnippet: "Remove one exact card entry from a named human Hand, without touching other entries.",
     promptGuidelines: ["ORG requires an explicit verified human userId; PERSONAL defaults to its own Hand.", "Remove only an exact confirmed membership; if dispatch or readback is uncertain, stop and reconcile without replay."],
-  } },
-  { exportName: "card_update_effort", tool: card_update_effort, config: {} },
-  { exportName: "card_update_priority", tool: card_update_priority, config: {} },
+  }, executePayload: args => card_remove_from_hand.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_remove_from_hand, projectOutput: payload => projectCardsWriteOutput(payload, "card_remove_from_hand") },
+  { exportName: "card_update_effort", tool: card_update_effort, config: {}, executePayload: args => card_update_effort.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_effort, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_effort") },
+  { exportName: "card_update_priority", tool: card_update_priority, config: {}, executePayload: args => card_update_priority.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_priority, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_priority") },
   { exportName: "card_bulk_create", tool: card_bulk_create, config: {
     parameters: Type.Object({
       cards: Type.Array(bulkCreateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card-create records. Use assigneeId (from codecks_user_lookup), never assignee." }),
@@ -302,7 +305,7 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Bulk create records are strict: use assigneeId from codecks_user_lookup; unsupported fields such as assignee are rejected before any request. ORG accepts a deck or explicit assignee (including assigned deckless), but not both absent.",
       "ORG putOnHand=true is guarded because the boolean has no verified explicit target; do not treat assigneeId as the hand target.",
     ],
-  } },
+  }, executePayload: args => card_bulk_create.executePayload(args), outputSchema: CARD_BULK_CREATE_OUTPUT_SCHEMA, projectOutput: payload => projectCardsBulkOutput(payload, "card_bulk_create") },
   { exportName: "card_bulk_update", tool: card_bulk_update, config: {
     parameters: Type.Object({
       updates: Type.Array(bulkUpdateRecordSchema, { minItems: 1, maxItems: 100, description: "Strict card updates. Each item needs cardId and at least one supported update field." }),
@@ -326,5 +329,5 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "The package paces requests at 40 per five seconds and retries only definitely rejected HTTP 429 responses within its bounded recovery budget. It never retries ambiguous writes; continueOnError applies only to definitely rejected non-429 failures.",
       "Compact output includes exceptional records; full sanitized per-record details are written to a returned temporary artifact.",
     ],
-  } },
+  }, executePayload: args => card_bulk_update.executePayload(args), outputSchema: CARD_BULK_UPDATE_OUTPUT_SCHEMA, projectOutput: payload => projectCardsBulkOutput(payload, "card_bulk_update") },
 ];

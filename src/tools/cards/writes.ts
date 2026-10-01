@@ -1,3 +1,6 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { createCardWriteProducer, executeLegacyCardWrite } from "./cards-write-output";
 import { validateMutationText } from "../../shared/mutation-text";
 import { getBaseConfig } from "../../runtime/credentials";
 import { fetchLoggedInUser, fetchSharedActor } from "../../runtime/identity";
@@ -20,7 +23,7 @@ import { resolveAssigneeId } from "../../shared/users";
 import { tool } from "../../pi-tool-compat";
 import { join } from "path";
 import { resolve } from "path";
-import { normalizeCreateTags, buildBodyHashtagTokens, appendBodyHashtagsToCardContent, normalizeCardTypeInput, normalizePriorityInput, normalizeStatusInput, normalizeCardTitleLine, splitCardContent, buildCardContent, removeDuplicateBodyTitle, normalizeCardTitleInput, normalizeCardBodyInput, resolveCardDocument, type SignedUploadInfo, snapshotAttachmentSource, assertUnchangedAttachmentSource, detectContentType, requestSignedUpload, uploadFileToSignedUrl, fetchCardForStatusUpdate, buildCardCreatePayload, actionKeyFor, extractDispatchCardIdentity, classifyMutationOutcome, mutateNamedHand } from "./helpers";
+import { normalizeCreateTags, buildBodyHashtagTokens, appendBodyHashtagsToCardContent, normalizeCardTypeInput, normalizePriorityInput, normalizeStatusInput, normalizeCardTitleLine, splitCardContent, buildCardContent, removeDuplicateBodyTitle, normalizeCardTitleInput, normalizeCardBodyInput, resolveCardDocument, type SignedUploadInfo, snapshotAttachmentSource, assertUnchangedAttachmentSource, detectContentType, requestSignedUpload, uploadFileToSignedUrl, fetchCardForStatusUpdate, buildCardCreatePayload, actionKeyFor, extractDispatchCardIdentity, classifyMutationOutcome, mutateNamedHand, mutateNamedHandPayload } from "./helpers";
 
 export const card_create = tool({
     description: "Create a Codecks card in a deck or milestone.",
@@ -38,8 +41,15 @@ export const card_create = tool({
         tags: tool.schema.array(tool.schema.string()).optional().describe("Optional list of tags. Added to card body as #hashtags."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardCreate, args); },
+    executePayload: executeCardCreate,
+});
+
+export async function executeCardCreate(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const textErrors = validateMutationText([
             ["title", args.title],
@@ -48,7 +58,7 @@ export const card_create = tool({
         ]);
         if (textErrors.length > 0)
         {
-            return toStructuredErrorResult(format, "card-create", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+            return failure(format, "card-create", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
         }
         const document = resolveCardDocument(args.title, args.content);
         const content = buildCardContent(document.titleLine, document.body);
@@ -58,7 +68,7 @@ export const card_create = tool({
 
         if (!content)
         {
-            return toStructuredErrorResult(format, "card-create", "validation_error", "Card content is required (title and/or content).");
+            return failure(format, "card-create", "validation_error", "Card content is required (title and/or content).");
         }
 
         const resolvedTitle = document.titleLine;
@@ -67,9 +77,9 @@ export const card_create = tool({
         const assigneeArg = blankToUndefined(args.assigneeId);
         const parentCardArg = blankToUndefined(args.parentCardId);
         if (getBaseConfig().profileKey === "ORG" && args.putOnHand === true)
-            return toStructuredErrorResult(format, "card-create", "org_actor_unverified", "ORG has no own hand. The target for putOnHand is unverified; no mutation was sent.");
+            return failure(format, "card-create", "org_actor_unverified", "ORG has no own hand. The target for putOnHand is unverified; no mutation was sent.");
         if (getBaseConfig().profileKey === "ORG" && deckArg === undefined && assigneeArg === undefined)
-            return toStructuredErrorResult(format, "card-create", "validation_error", "A card cannot be both unassigned and deckless; provide deck or assigneeId. No mutation was sent.");
+            return failure(format, "card-create", "validation_error", "A card cannot be both unassigned and deckless; provide deck or assigneeId. No mutation was sent.");
 
         let normalizedCardType: { value: CardTypeValue; label: string; isDoc: boolean } | null = null;
         if (args.cardType !== undefined)
@@ -77,7 +87,7 @@ export const card_create = tool({
             normalizedCardType = normalizeCardTypeInput(String(args.cardType));
             if (!normalizedCardType)
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-create",
                     "validation_error",
@@ -92,7 +102,7 @@ export const card_create = tool({
             const deckResult = await resolveDeck(deckArg);
             if (deckResult.kind !== "resolved")
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-create",
                     deckResult.kind === "ambiguous" ? "ambiguous_match" : "not_found",
@@ -108,7 +118,7 @@ export const card_create = tool({
             const milestoneResult = await resolveMilestone(milestoneArg);
             if (milestoneResult.kind !== "resolved")
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-create",
                     milestoneResult.kind === "ambiguous" ? "ambiguous_match" : "not_found",
@@ -126,7 +136,7 @@ export const card_create = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-create", "validation_error", toErrorMessage(error));
+            return failure(format, "card-create", "validation_error", toErrorMessage(error));
         }
 
         let normalizedPriority: { code: string | null; label: string } | null = null;
@@ -135,7 +145,7 @@ export const card_create = tool({
             normalizedPriority = normalizePriorityInput(String(args.priority));
             if (!normalizedPriority)
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-create",
                     "validation_error",
@@ -151,7 +161,7 @@ export const card_create = tool({
             const parentResolved = await resolveCardForUpdate(parentCardArg);
             if (!parentResolved)
             {
-                return toStructuredErrorResult(format, "card-create", "not_found", "Parent card not found.");
+                return failure(format, "card-create", "not_found", "Parent card not found.");
             }
             parentCardId = parentResolved.cardId;
         }
@@ -174,18 +184,19 @@ export const card_create = tool({
         let response: unknown;
         try
         {
-            response = await runDispatch("cards/create", payload);
+            response = await dispatch("cards/create", payload);
         }
         catch (error)
         {
             const category = error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error));
-            return toStructuredErrorResult(format, "card-create", category, toErrorMessage(error), getOperationErrorData(error));
+            return failure(format, "card-create", category, toErrorMessage(error), getOperationErrorData(error));
         }
         const createdData = unwrapData(response) as Record<string, unknown> | undefined;
         const createdCard = createdData?.card && typeof createdData.card === "object"
             ? createdData.card as Record<string, unknown>
             : createdData;
         const dispatchIdentity = extractDispatchCardIdentity(response);
+        effects.identity = Object.fromEntries(Object.entries(dispatchIdentity).filter(([, value]) => value !== undefined && value !== null));
         const createdId = dispatchIdentity.cardId ?? "";
         const createdSeq = dispatchIdentity.accountSeq ?? undefined;
         const createdCardType = normalizedCardType?.value
@@ -208,7 +219,7 @@ export const card_create = tool({
         const warnings = createsPrivateCard
             ? ["Card was created as a Private card because no deck was assigned."]
             : undefined;
-        return toStructuredResult(
+        return success(
             format,
             "card-create",
             lines.join("\n"),
@@ -229,8 +240,13 @@ export const card_create = tool({
             },
             warnings,
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-create", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_set_parent = tool({
     description: "Set or clear a card's Hero parent (sub-card relationship).",
@@ -239,13 +255,20 @@ export const card_set_parent = tool({
         parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Hero card ID, short code, or URL. Omit to clear parent."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardSetParent, args); },
+    executePayload: executeCardSetParent,
+});
+
+export async function executeCardSetParent(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const childResolved = await resolveCardForUpdate(args.cardId);
         if (!childResolved)
         {
-            return toStructuredErrorResult(format, "card-set-parent", "not_found", "Child card not found.");
+            return failure(format, "card-set-parent", "not_found", "Child card not found.");
         }
 
         let parentResolved: { cardId: string; shortCode: string; title: string } | null = null;
@@ -257,14 +280,14 @@ export const card_set_parent = tool({
                 parentResolved = await resolveCardForUpdate(args.parentCardId);
                 if (!parentResolved)
                 {
-                    return toStructuredErrorResult(format, "card-set-parent", "not_found", "Parent card not found.");
+                    return failure(format, "card-set-parent", "not_found", "Parent card not found.");
                 }
             }
         }
 
         if (parentResolved && parentResolved.cardId === childResolved.cardId)
         {
-            return toStructuredErrorResult(format, "card-set-parent", "validation_error", "A card cannot be its own parent.");
+            return failure(format, "card-set-parent", "validation_error", "A card cannot be its own parent.");
         }
 
         const payload: Record<string, unknown> = {
@@ -275,11 +298,11 @@ export const card_set_parent = tool({
 
         try
         {
-            await runDispatch("cards/update", payload);
+            await dispatch("cards/update", payload);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-set-parent", "api_error", toErrorMessage(error));
+            return failure(format, "card-set-parent", "api_error", toErrorMessage(error));
         }
 
         const childUrl = childResolved.shortCode ? formatCardUrl(childResolved.shortCode) : "";
@@ -297,7 +320,7 @@ export const card_set_parent = tool({
                 : "- Parent URL: (none)",
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-set-parent",
             lines.join("\n"),
@@ -320,8 +343,13 @@ export const card_set_parent = tool({
                     : null,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-set-parent", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_update_run = tool({
     description: "Assign a Codecks card to a Run, or remove it from its Run, by updating sprintId.",
@@ -332,19 +360,26 @@ export const card_update_run = tool({
         clearRun: tool.schema.boolean().optional().describe("Remove the card from its current Run by setting sprintId to null."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardUpdateRun, args); },
+    executePayload: executeCardUpdateRun,
+});
+
+export async function executeCardUpdateRun(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const card = await resolveCardForUpdate(args.cardId);
         if (!card)
         {
-            return toStructuredErrorResult(format, "card-update-run", "not_found", "Card not found.");
+            return failure(format, "card-update-run", "not_found", "Card not found.");
         }
 
         const rawRunId = args.runId ?? args.sprintId;
         if (args.clearRun !== true && (rawRunId === undefined || String(rawRunId).trim() === ""))
         {
-            return toStructuredErrorResult(format, "card-update-run", "validation_error", "Provide runId/sprintId or set clearRun=true.");
+            return failure(format, "card-update-run", "validation_error", "Provide runId/sprintId or set clearRun=true.");
         }
 
         let run: RunLookupResult | null = null;
@@ -356,18 +391,18 @@ export const card_update_run = tool({
             }
             catch (error)
             {
-                return toStructuredErrorResult(format, "card-update-run", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+                return failure(format, "card-update-run", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
             }
 
             if (!run)
             {
-                return toStructuredErrorResult(format, "card-update-run", "not_found", "Run not found.");
+                return failure(format, "card-update-run", "not_found", "Run not found.");
             }
         }
 
         try
         {
-            await runDispatch("cards/update", {
+            await dispatch("cards/update", {
                 sessionId: generateSessionId(),
                 id: card.cardId,
                 sprintId: run ? run.runId : null,
@@ -375,7 +410,7 @@ export const card_update_run = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update-run", "api_error", toErrorMessage(error));
+            return failure(format, "card-update-run", "api_error", toErrorMessage(error));
         }
 
         const lines = [
@@ -387,7 +422,7 @@ export const card_update_run = tool({
                 : "- Run: (cleared)",
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-update-run",
             lines.join("\n"),
@@ -400,8 +435,13 @@ export const card_update_run = tool({
                 runAccountSeq: run?.accountSeq ?? null,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-update-run", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_add_attachment = tool({
     description: "Attach a file to a Codecks card.",
@@ -411,8 +451,16 @@ export const card_add_attachment = tool({
         contentType: tool.schema.string().optional().describe("Optional MIME type override."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardAddAttachment, args); },
+    executePayload: executeCardAddAttachment,
+});
+
+export async function executeCardAddAttachment(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ let fileAccessPending = false;
+ try {
+
         const format = args.format ?? "text";
         const parsed = parseCardIdentifier(args.cardId);
         let accountSeq = parsed.accountSeq;
@@ -425,7 +473,7 @@ export const card_add_attachment = tool({
             const cardMeta = await fetchCardByAccountSeq(accountSeq);
             if (!cardMeta?.cardId)
             {
-                return toStructuredErrorResult(format, "card-add-attachment", "not_found", "Card not found.");
+                return failure(format, "card-add-attachment", "not_found", "Card not found.");
             }
             cardId = cardMeta.cardId as string;
             title = String(cardMeta.title ?? "");
@@ -435,29 +483,36 @@ export const card_add_attachment = tool({
 
         if (!cardId)
         {
-            return toStructuredErrorResult(format, "card-add-attachment", "validation_error", "Card ID is required.");
+            return failure(format, "card-add-attachment", "validation_error", "Card ID is required.");
         }
 
         const workspaceRoot = getActiveWorkspaceRoot();
+        fileAccessPending = true;
         const source = await snapshotAttachmentSource(args.filePath, workspaceRoot);
+        fileAccessPending = false;
         let actor: { id: string | number; verifiedOrg: boolean };
         try { actor = await fetchSharedActor(); }
-        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        catch (error) { return failure(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         const contentType = detectContentType(source.canonicalPath, args.contentType);
+        const upload: Record<string, unknown> = { signing: "requested", storage: "not_attempted", registration: "not_attempted" };
+        effects.upload = upload;
         let signed: SignedUploadInfo;
-        try { signed = await requestSignedUpload(source); }
-        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", error instanceof CodecksOperationError ? toErrorMessage(error) : "Codecks upload signing failed; no storage upload or card registration was attempted.", { uploadStage: "sign", ...getOperationErrorData(error) }); }
+        try { signed = await requestSignedUpload(source); upload.signing = "returned"; }
+        catch (error) { upload.signing = "failed"; return failure(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", error instanceof CodecksOperationError ? toErrorMessage(error) : "Codecks upload signing failed; no storage upload or card registration was attempted.", { uploadStage: "sign", ...getOperationErrorData(error) }); }
         // Re-resolve and re-hash immediately before the upload attempt. The bytes
         // uploaded are exactly the bytes from this second, validated snapshot.
+        fileAccessPending = true;
         const uploadSource = await snapshotAttachmentSource(args.filePath, workspaceRoot);
         assertUnchangedAttachmentSource(source, uploadSource);
+        fileAccessPending = false;
         let uploaded: { fileName: string; size: number; type: string; url: string };
-        try { uploaded = await uploadFileToSignedUrl(signed, uploadSource, contentType); }
-        catch (error) { return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", "Signed storage upload outcome is uncertain; inspect the exact card before any further write.", { uploadStage: "storage", mutationCertainty: "indeterminate", ...getOperationErrorData(error) }); }
+        upload.storage = "possibly_uploaded";
+        try { uploaded = await uploadFileToSignedUrl(signed, uploadSource, contentType); upload.storage = "uploaded"; Object.assign(upload, { fileName: uploaded.fileName, size: uploaded.size, type: uploaded.type }); }
+        catch (error) { return failure(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : "api_error", "Signed storage upload outcome is uncertain; inspect the exact card before any further write.", { uploadStage: "storage", mutationCertainty: "indeterminate", ...getOperationErrorData(error) }); }
 
         try
         {
-            await runDispatch("cards/addFile", {
+            await dispatch("cards/addFile", {
                 cardId,
                 userId: actor.id,
                 fileData: {
@@ -470,7 +525,7 @@ export const card_add_attachment = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+            return failure(format, "card-add-attachment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const url = shortCode ? formatCardUrl(shortCode) : "";
@@ -487,7 +542,7 @@ export const card_add_attachment = tool({
             `- File URL: ${uploaded.url}`,
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-add-attachment",
             lines.join("\n"),
@@ -501,8 +556,13 @@ export const card_add_attachment = tool({
                 fileUrl: uploaded.url,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-add-attachment", fileAccessPending ? "file_error" : error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_update = tool({
     description: "Update Codecks card title/body content (including markdown/code blocks) or metadata.",
@@ -518,8 +578,15 @@ export const card_update = tool({
         mode: tool.schema.enum(["replace", "append", "prepend"]).optional().describe("How to apply content updates."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardUpdate, args); },
+    executePayload: executeCardUpdate,
+});
+
+export async function executeCardUpdate(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const textErrors = validateMutationText([
             ["title", args.title],
@@ -528,7 +595,7 @@ export const card_update = tool({
         ]);
         if (textErrors.length > 0)
         {
-            return toStructuredErrorResult(format, "card-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
+            return failure(format, "card-update", "validation_error", textErrors.join(" "), { indexedErrors: textErrors, requestsAttempted: 0 });
         }
         if (
             args.title === undefined
@@ -540,7 +607,7 @@ export const card_update = tool({
             && args.tags === undefined
         )
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-update",
                 "validation_error",
@@ -561,7 +628,7 @@ export const card_update = tool({
 
         if (!current?.cardId)
         {
-            return toStructuredErrorResult(format, "card-update", "not_found", "Card not found.");
+            return failure(format, "card-update", "not_found", "Card not found.");
         }
 
         cardId = current.cardId as string;
@@ -570,7 +637,7 @@ export const card_update = tool({
 
         if (!cardId)
         {
-            return toStructuredErrorResult(format, "card-update", "validation_error", "Card ID is required.");
+            return failure(format, "card-update", "validation_error", "Card ID is required.");
         }
 
         let normalizedCardType: { value: CardTypeValue; label: string; isDoc: boolean } | null = null;
@@ -579,7 +646,7 @@ export const card_update = tool({
             normalizedCardType = normalizeCardTypeInput(String(args.cardType));
             if (!normalizedCardType)
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-update",
                     "validation_error",
@@ -636,7 +703,7 @@ export const card_update = tool({
             const deckResult = await resolveDeck(args.deck);
             if (deckResult.kind !== "resolved")
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-update",
                     deckResult.kind === "ambiguous" ? "ambiguous_match" : "not_found",
@@ -651,7 +718,7 @@ export const card_update = tool({
             const milestoneResult = await resolveMilestone(args.milestone);
             if (milestoneResult.kind !== "resolved")
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-update",
                     milestoneResult.kind === "ambiguous" ? "ambiguous_match" : "not_found",
@@ -669,7 +736,7 @@ export const card_update = tool({
             }
             catch (error)
             {
-                return toStructuredErrorResult(format, "card-update", "validation_error", toErrorMessage(error));
+                return failure(format, "card-update", "validation_error", toErrorMessage(error));
             }
         }
 
@@ -695,7 +762,7 @@ export const card_update = tool({
 
         if (Object.keys(payload).length <= 2)
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-update",
                 "validation_error",
@@ -703,15 +770,16 @@ export const card_update = tool({
             );
         }
 
+        effects.actionKey = actionKeyFor("update", 0, payload);
         let dispatchReturned: unknown;
         try
         {
-            dispatchReturned = unwrapData(await runDispatch("cards/update", payload));
+            dispatchReturned = unwrapData(await dispatch("cards/update", payload));
         }
         catch (error)
         {
             const outcome = classifyMutationOutcome(error);
-            return toStructuredErrorResult(format, "card-update", outcome === "indeterminate" ? "request_timeout" : "api_error", toErrorMessage(error), {
+            return failure(format, "card-update", outcome === "indeterminate" ? "request_timeout" : "api_error", toErrorMessage(error), {
                 status: outcome,
                 certainty: outcome === "indeterminate" ? "possibly_applied" : "definitely_rejected",
                 actionKey: actionKeyFor("update", 0, payload),
@@ -748,7 +816,7 @@ export const card_update = tool({
             lines.push(`- Content Mode: ${mode}`);
         }
 
-        return toStructuredResult(
+        return success(
             format,
             "card-update",
             lines.join("\n"),
@@ -778,8 +846,13 @@ export const card_update = tool({
                 contentMode: args.content !== undefined ? mode : null,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-update", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_update_status = tool({
     description: "Update a Codecks card status. Fails fast for unsupported operations such as documentation-card status writes and starting hero cards directly.",
@@ -788,13 +861,20 @@ export const card_update_status = tool({
         status: tool.schema.string().min(1).describe("New status (e.g. not_started, started, done). Documentation cards cannot change status, and hero cards cannot be started directly."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardUpdateStatus, args); },
+    executePayload: executeCardUpdateStatus,
+});
+
+export async function executeCardUpdateStatus(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const normalizedStatus = normalizeStatusInput(String(args.status));
         if (!normalizedStatus)
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-update-status",
                 "validation_error",
@@ -815,7 +895,7 @@ export const card_update_status = tool({
 
         if (!current?.cardId)
         {
-            return toStructuredErrorResult(format, "card-update-status", "not_found", "Card not found.");
+            return failure(format, "card-update-status", "not_found", "Card not found.");
         }
 
         cardId = current.cardId as string;
@@ -824,13 +904,13 @@ export const card_update_status = tool({
 
         if (!cardId)
         {
-            return toStructuredErrorResult(format, "card-update-status", "validation_error", "Card ID is required.");
+            return failure(format, "card-update-status", "validation_error", "Card ID is required.");
         }
 
         const title = current.title ? String(current.title) : "";
         if (isIntrinsicDocumentationCard(current))
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-update-status",
                 "validation_error",
@@ -866,12 +946,12 @@ export const card_update_status = tool({
             }
             catch (error)
             {
-                return toStructuredErrorResult(format, "card-update-status", "api_error", toErrorMessage(error));
+                return failure(format, "card-update-status", "api_error", toErrorMessage(error));
             }
 
             if (childCount > 0)
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-update-status",
                     "validation_error",
@@ -890,7 +970,7 @@ export const card_update_status = tool({
         {
             if (statusTarget.openContexts.has("review"))
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "card-update-status",
                     "validation_error",
@@ -904,7 +984,7 @@ export const card_update_status = tool({
                 );
             }
 
-            await runDispatch("cards/update", {
+            await dispatch("cards/update", {
                 sessionId: generateSessionId(),
                 id: cardId,
                 status: normalizedStatus.code,
@@ -912,7 +992,7 @@ export const card_update_status = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update-status", "api_error", toErrorMessage(error));
+            return failure(format, "card-update-status", "api_error", toErrorMessage(error));
         }
 
         const url = shortCode ? formatCardUrl(shortCode) : "";
@@ -926,7 +1006,7 @@ export const card_update_status = tool({
             `- Status: ${normalizedStatus.code}`,
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-update-status",
             lines.join("\n"),
@@ -937,11 +1017,13 @@ export const card_update_status = tool({
                 status: normalizedStatus.code,
             },
         );
-    },
-});
 
-// Hand writes must start from the complete target queue, not a search preview:
-// setCardOrders replaces an ordered list, and a truncated page could drop existing cards.
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-update-status", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_add_to_hand = tool({
     description: "Append exactly one existing card to a named human's complete current Hand order. ORG needs an explicit human userId; PERSONAL defaults to own Hand. Refuses incomplete/changed order and verifies readback.",
@@ -951,6 +1033,7 @@ export const card_add_to_hand = tool({
         format: outputFormatArg,
     },
     execute: (args) => mutateNamedHand("card-add-to-hand", args),
+    executePayload: (args: Record<string, any>) => mutateNamedHandPayload("card-add-to-hand", args as any),
 });
 
 export const card_remove_from_hand = tool({
@@ -961,6 +1044,7 @@ export const card_remove_from_hand = tool({
         format: outputFormatArg,
     },
     execute: (args) => mutateNamedHand("card-remove-from-hand", args),
+    executePayload: (args: Record<string, any>) => mutateNamedHandPayload("card-remove-from-hand", args as any),
 });
 
 export const card_update_effort = tool({
@@ -970,18 +1054,25 @@ export const card_update_effort = tool({
         effort: tool.schema.number().describe("Effort value."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardUpdateEffort, args); },
+    executePayload: executeCardUpdateEffort,
+});
+
+export async function executeCardUpdateEffort(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const resolved = await resolveCardForUpdate(args.cardId);
         if (!resolved)
         {
-            return toStructuredErrorResult(format, "card-update-effort", "not_found", "Card not found.");
+            return failure(format, "card-update-effort", "not_found", "Card not found.");
         }
 
         try
         {
-            await runDispatch("cards/update", {
+            await dispatch("cards/update", {
                 sessionId: generateSessionId(),
                 id: resolved.cardId,
                 effort: args.effort,
@@ -989,7 +1080,7 @@ export const card_update_effort = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update-effort", "api_error", toErrorMessage(error));
+            return failure(format, "card-update-effort", "api_error", toErrorMessage(error));
         }
 
         const url = resolved.shortCode ? formatCardUrl(resolved.shortCode) : "";
@@ -1003,7 +1094,7 @@ export const card_update_effort = tool({
             `- Effort: ${args.effort}`,
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-update-effort",
             lines.join("\n"),
@@ -1014,8 +1105,13 @@ export const card_update_effort = tool({
                 effort: args.effort,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-update-effort", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}
 
 export const card_update_priority = tool({
     description: "Update a Codecks card priority value.",
@@ -1024,13 +1120,20 @@ export const card_update_priority = tool({
         priority: tool.schema.string().min(1).describe("Priority label (none, low, medium, high) or code (a, b, c)."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return executeLegacyCardWrite(executeCardUpdatePriority, args); },
+    executePayload: executeCardUpdatePriority,
+});
+
+export async function executeCardUpdatePriority(args: Record<string, any>, onLegacyError?: (error: unknown) => void): Promise<CodecksOperationPayload> {
+ return withOperationContextIfMissing(async () => {
+ const { effects, dispatch, success, failure } = createCardWriteProducer(onLegacyError);
+ try {
+
         const format = args.format ?? "text";
         const normalized = normalizePriorityInput(String(args.priority ?? ""));
         if (!normalized)
         {
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-update-priority",
                 "validation_error",
@@ -1041,12 +1144,12 @@ export const card_update_priority = tool({
         const resolved = await resolveCardForUpdate(args.cardId);
         if (!resolved)
         {
-            return toStructuredErrorResult(format, "card-update-priority", "not_found", "Card not found.");
+            return failure(format, "card-update-priority", "not_found", "Card not found.");
         }
 
         try
         {
-            await runDispatch("cards/update", {
+            await dispatch("cards/update", {
                 sessionId: generateSessionId(),
                 id: resolved.cardId,
                 priority: normalized.code,
@@ -1054,7 +1157,7 @@ export const card_update_priority = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "card-update-priority", "api_error", toErrorMessage(error));
+            return failure(format, "card-update-priority", "api_error", toErrorMessage(error));
         }
 
         const url = resolved.shortCode ? formatCardUrl(resolved.shortCode) : "";
@@ -1068,7 +1171,7 @@ export const card_update_priority = tool({
             `- Priority: ${normalized.label}`,
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "card-update-priority",
             lines.join("\n"),
@@ -1080,5 +1183,10 @@ export const card_update_priority = tool({
                 priorityCode: normalized.code,
             },
         );
-    },
-});
+
+ } catch (error) {
+   onLegacyError?.(error);
+   return failure(args.format ?? "text", "card-update-priority", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error));
+ }
+ });
+}

@@ -1,3 +1,6 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { type OutputFormat, type ErrorCategory, sanitizeValue } from "../../shared/results";
+import { observeBulkResult } from "./cards-bulk-output";
 import { getBaseConfig } from "../../runtime/credentials";
 import { fetchLoggedInUser } from "../../runtime/identity";
 import { emitBulkMutationProgress, getOperationContext, withOperationContextIfMissing } from "../../runtime/operation-context";
@@ -18,17 +21,24 @@ export const card_bulk_create = tool({
         cards: tool.schema.array(tool.schema.object({ correlationKey: tool.schema.string().min(1).max(200).optional(), title: tool.schema.string().optional(), content: tool.schema.string().optional(), cardType: tool.schema.string().optional(), deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), effort: tool.schema.number().optional(), priority: tool.schema.string().optional(), assigneeId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), putOnHand: tool.schema.boolean().optional().describe("PERSONAL own hand only; ORG target unverified."), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), tags: tool.schema.array(tool.schema.string()).optional() })).min(1).max(100).describe("Strict card-create records. Use assigneeId, not assignee."),
         deck: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), milestone: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), parentCardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional(), dryRun: tool.schema.boolean().optional().describe("Preview only. Defaults to true."), expectedPreviewFingerprint: tool.schema.string().optional().describe("Required for apply: the previewFingerprint returned by the matching dry run."), format: outputFormatArg,
     },
-    async execute(args) {
+    async execute(args) { return (await executeCardBulkCreate(args)).text; },
+    executePayload: executeCardBulkCreate,
+});
+
+export async function executeCardBulkCreate(args: Record<string, any>): Promise<CodecksOperationPayload> {
         return withOperationContextIfMissing(async () => {
+ const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>): CodecksOperationPayload => ({ text: toStructuredResult(format, action, text, data), payload: { ok: true, action, data: { ...data, results: nativeResults } } });
+ const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}): CodecksOperationPayload => ({ text: toStructuredErrorResult(format, action, category, message, data), payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data, requestsAttempted: getOperationContext()?.requestsAttempted, dispatchRequests: 0, results: Array.isArray(data.results) ? (data.results as Record<string, unknown>[]).map(value => observeBulkResult(value)) : preflightOutcomeRecords(rawRecords, "create").map(value => observeBulkResult(value)) } } });
+ let nativeResults: Record<string, unknown>[] = [];
         const format = args.format ?? "text"; const dryRun = args.dryRun !== false; const rawRecords = Array.isArray(args.cards) ? args.cards as unknown[] : []; const startedAt = Date.now();
         emitBulkMutationProgress(startedAt, "validating", 0);
         const allowedArguments = new Set(["cards", "deck", "milestone", "parentCardId", "dryRun", "expectedPreviewFingerprint", "format"]);
         const topLevelErrors = Object.keys(args).filter((field) => !allowedArguments.has(field)).map((field) => `bulk create argument ${field} is unsupported.`);
         const structuralErrors = [...topLevelErrors, ...validateStrictBulkRecords(rawRecords, "create")];
-        if (structuralErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), { indexedErrors: structuralErrors, results: preflightOutcomeRecords(rawRecords, structuralErrors.map(message => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }))), requestsAttempted: 0 });
+        if (structuralErrors.length) return failure(format, "card-bulk-create", "validation_error", structuralErrors.join(" "), { indexedErrors: structuralErrors, results: preflightOutcomeRecords(rawRecords, structuralErrors.map(message => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }))), requestsAttempted: 0 });
         const defaults: BulkCreateRecord = { deck: blankToUndefined(args.deck), milestone: blankToUndefined(args.milestone), parentCardId: blankToUndefined(args.parentCardId) };
         let user: CodecksUser;
-        try { user = getBaseConfig().profileKey === "ORG" ? {} : await fetchLoggedInUser(); } catch (error) { return toStructuredErrorResult(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        try { user = getBaseConfig().profileKey === "ORG" ? {} : await fetchLoggedInUser(); } catch (error) { return failure(format, "card-bulk-create", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         const normalized: NormalizedBulkCreateRecord[] = []; const normalizationErrors: Array<{ index: number; message: string }> = [];
         const normalizationContext: BulkCreateNormalizationContext = { decks: new Map(), milestones: new Map(), assignees: new Map(), parents: new Map() };
         for (let index = 0; index < rawRecords.length; index++) {
@@ -42,12 +52,12 @@ export const card_bulk_create = tool({
                     const category = error.category;
                     const results = preflightOutcomeRecords(rawRecords, [{ index, message: toErrorMessage(error) }]);
                     for (const entry of results) if (Number(entry.index) !== index && entry.status === "definitely_unsent") (entry as Record<string, unknown>).recovery = "No dispatch attempt was made; this record is safe to submit later.";
-                    return toStructuredErrorResult(format, "card-bulk-create", category, toErrorMessage(error), { ...getOperationErrorData(error), results });
+                    return failure(format, "card-bulk-create", category, toErrorMessage(error), { ...getOperationErrorData(error), results });
                 }
                 normalizationErrors.push({ index, message: toErrorMessage(error) });
             }
         }
-        if (normalizationErrors.length) return toStructuredErrorResult(format, "card-bulk-create", "validation_error", normalizationErrors.map(x => x.message).join(" "), { indexedErrors: normalizationErrors, results: preflightOutcomeRecords(rawRecords, normalizationErrors), requestsAttempted: 0 });
+        if (normalizationErrors.length) return failure(format, "card-bulk-create", "validation_error", normalizationErrors.map(x => x.message).join(" "), { indexedErrors: normalizationErrors, results: preflightOutcomeRecords(rawRecords, normalizationErrors), requestsAttempted: 0 });
         const previewFingerprint = await bulkPreviewFingerprint("card_bulk_create", normalized);
         if (!dryRun) {
             const expectedPreviewFingerprint = args.expectedPreviewFingerprint;
@@ -62,7 +72,7 @@ export const card_bulk_create = tool({
                     status: "definitely_unsent",
                     certainty: "definitely_unsent",
                 }));
-                return toStructuredErrorResult(format, "card-bulk-create", "validation_error", message, {
+                return failure(format, "card-bulk-create", "validation_error", message, {
                     actualPreviewFingerprint: previewFingerprint,
                     recordCount: normalized.length,
                     requestsAttempted: getOperationContext()?.requestsAttempted ?? 0,
@@ -152,10 +162,12 @@ export const card_bulk_create = tool({
         const data = { ...totals, metrics, ...(dryRun ? { previewFingerprint } : {}), results: exceptionalResults, artifact };
         const lines = ["## Bulk Card Create", "", `Mode: ${dryRun ? "dry-run" : "apply"}`, ...(dryRun ? [`Preview Fingerprint: ${previewFingerprint}`] : []), `Records: ${rawRecords.length}`, `Created: ${data.created}`, `Failed: ${data.failed}`, `Indeterminate: ${data.indeterminate}`, `Definitely Unsent: ${data.definitelyUnsent}`, `Physical Requests: ${metrics.physicalRequests}`, `Local Gate Wait: ${metrics.localGateWaitMs}ms`, `Server Cooldown Wait: ${metrics.serverCooldownWaitMs}ms`, `429 Recovery: ${metrics.retryEvents.length} retry event(s), ${metrics.consecutive429}/${metrics.maxConsecutive429} final consecutive`, `Detailed Results: ${"path" in artifact ? artifact.path : "unavailable"}`, ...(exceptionalResults.length ? ["", ...exceptionalResults.map(x => `- #${Number(x.index) + 1}${x.correlationKey ? ` [${x.correlationKey}]` : ""} ${x.status}/${x.certainty}${x.error && isRecord(x.error) ? ` — ${String(x.error.message)}` : ""}`)] : [])];
         emitBulkMutationProgress(startedAt, "completed", rawRecords.length, results);
-        return toStructuredResult(format, "card-bulk-create", lines.join("\n"), data);
+        nativeResults = results.map(value => { const input = normalized[Number(value.index)]; return observeBulkResult(value, input?.payload, input ? actionKeyFor("create", input.index, input.payload) : undefined); });
+        return success(format, "card-bulk-create", lines.join("\n"), data);
         });
-    },
-});
+
+}
+
 
 export const card_bulk_update = tool({
     description: "Preview or apply strict bounded updates including milestone, deck, assignee, effort, priority, tags, Run, and parent changes. Use clearMilestone, clearAssignee, clearEffort, clearRun, or clearParent to remove values. Deck removal (clearDeck) is unavailable and rejected before requests.",
@@ -177,9 +189,15 @@ export const card_bulk_update = tool({
         continueOnError: tool.schema.boolean().optional(),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return (await executeCardBulkUpdate(args)).text; },
+    executePayload: executeCardBulkUpdate,
+});
+
+export async function executeCardBulkUpdate(args: Record<string, any>): Promise<CodecksOperationPayload> {
         return withOperationContextIfMissing(async () => {
+ const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>): CodecksOperationPayload => ({ text: toStructuredResult(format, action, text, data), payload: { ok: true, action, data: { ...data, results: nativeResults } } });
+ const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}): CodecksOperationPayload => ({ text: toStructuredErrorResult(format, action, category, message, data), payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data, requestsAttempted: getOperationContext()?.requestsAttempted, dispatchRequests: 0, results: Array.isArray(data.results) ? (data.results as Record<string, unknown>[]).map(value => observeBulkResult(value)) : preflightOutcomeRecords(rawRecords, "update").map(value => observeBulkResult(value)) } } });
+ let nativeResults: Record<string, unknown>[] = [];
         const format = args.format ?? "text";
         const dryRun = args.dryRun !== false;
         const continueOnError = args.continueOnError !== false;
@@ -190,7 +208,7 @@ export const card_bulk_update = tool({
         if (structuralErrors.length > 0)
         {
             const indexedErrors = structuralErrors.map((message) => ({ index: Number(message.match(/\[(\d+)\]/)?.[1]), message }));
-            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", structuralErrors.join(" "), {
+            return failure(format, "card-bulk-update", "validation_error", structuralErrors.join(" "), {
                 indexedErrors: structuralErrors,
                 invalidRecordCount: new Set(structuralErrors.map((error) => error.match(/\[(\d+)\]/)?.[1])).size,
                 requestsAttempted: 0,
@@ -255,7 +273,7 @@ export const card_bulk_update = tool({
                     entry.certainty = "definitely_rejected";
                 }
             }
-            return toStructuredErrorResult(format, "card-bulk-update", "validation_error", "Batch normalization failed; no mutations were dispatched.", {
+            return failure(format, "card-bulk-update", "validation_error", "Batch normalization failed; no mutations were dispatched.", {
                 invalidRecordCount,
                 applied: 0,
                 failed: invalidRecordCount,
@@ -272,7 +290,7 @@ export const card_bulk_update = tool({
             const malformed = typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected);
             if (malformed || expected !== previewFingerprint)
             {
-                return toStructuredErrorResult(format, "card-bulk-update", "validation_error", malformed
+                return failure(format, "card-bulk-update", "validation_error", malformed
                     ? "expectedPreviewFingerprint is required for apply and must be a SHA-256 fingerprint returned by the matching dry run."
                     : "expectedPreviewFingerprint does not match the normalized bulk-update preview; no cards were dispatched.", {
                     actualPreviewFingerprint: previewFingerprint, recordCount: normalized.length, requestsAttempted: normalizationRequests, dispatchRequests: 0,
@@ -333,7 +351,8 @@ export const card_bulk_update = tool({
         const exceptionalResults = results.filter(entry => entry.status !== "updated" && entry.status !== "preview");
         const lines = ["## Bulk Card Update", "", `Mode: ${dryRun ? "dry-run" : "apply"}`, ...(dryRun ? [`Preview Fingerprint: ${previewFingerprint}`] : []), `Records: ${rawRecords.length}`, `Updated: ${updated}`, `Failed/Invalid: ${failed}`, `Indeterminate: ${indeterminate}`, `Definitely Unsent: ${definitelyUnsent}`, `Physical Requests: ${metrics.physicalRequests}`, `Local Gate Wait: ${metrics.localGateWaitMs}ms`, `Server Cooldown Wait: ${metrics.serverCooldownWaitMs}ms`, `429 Recovery: ${metrics.retryEvents.length} retry event(s), ${metrics.consecutive429}/${metrics.maxConsecutive429} final consecutive`, `Detailed Results: ${"path" in artifact ? artifact.path : "unavailable"}`, ...exceptionalResults.map(entry => `- #${Number(entry.index) + 1} ${entry.status}/${entry.certainty}`)];
         emitBulkMutationProgress(startedAt, "completed", rawRecords.length, results);
-        return toStructuredResult(format, "card-bulk-update", lines.join("\n"), {
+        nativeResults = results.map(value => { const input = normalized.find(record => record.index === value.index); return observeBulkResult(value, input?.payload); });
+        return success(format, "card-bulk-update", lines.join("\n"), {
             responseSchemaVersion: 1,
             dryRun,
             count: rawRecords.length,
@@ -355,5 +374,4 @@ export const card_bulk_update = tool({
             artifact,
         });
         });
-    },
-});
+}
