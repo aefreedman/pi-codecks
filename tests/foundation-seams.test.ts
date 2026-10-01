@@ -18,7 +18,7 @@ import { validateMutationText } from "../src/shared/mutation-text.ts";
 import * as common from "../src/contracts/common.ts";
 import * as getOutput from "../src/card-get-output.ts";
 import { CARD_SEARCH_OUTPUT_SCHEMA } from "../src/card-search-output.ts";
-import { CODECKS_EXPORTS, DEFAULT_CODECKS_EXPORTS, TOOL_CONFIG } from "../src/pi/tool-metadata.ts";
+import { CODECKS_EXPORTS, DEFAULT_CODECKS_EXPORTS } from "../src/pi/tool-metadata.ts";
 import { getCodecksToolDefinition } from "../src/pi/tool-catalog.ts";
 import { composeCodecksToolCatalog, type CodecksToolDefinition } from "../src/pi/tool-definition.ts";
 import { registerCodecksTool } from "../src/pi/register-tools.ts";
@@ -26,7 +26,10 @@ import { PiToolHarness } from "./pi-tool-harness.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 // Captured independently from 3e59ea8, not generated from the refactored catalog.
-assert.equal(hash(CODECKS_EXPORTS.map(name => [name, TOOL_CONFIG[name]?.parameters, TOOL_CONFIG[name]?.promptSnippet, TOOL_CONFIG[name]?.promptGuidelines])), "bc0b165237dfac09ff222892edcf09ae920f276d0cf3f3ead2ee984e4ebd2404");
+assert.equal(hash(CODECKS_EXPORTS.map(name => {
+  const config = getCodecksToolDefinition(name).config;
+  return [name, config.parameters, config.promptSnippet, config.promptGuidelines];
+})),  "bc0b165237dfac09ff222892edcf09ae920f276d0cf3f3ead2ee984e4ebd2404");
 assert.equal(hash(getOutput.CARD_GET_OUTPUT_SCHEMA), "cba7b98f84efc597635e17da6c7ed0e7942360131543cb197a361db5ef2bbf37");
 assert.equal(hash(CARD_SEARCH_OUTPUT_SCHEMA), "c53a26fbba4ac9dcd8e718301ed4547c8d4ac398376c36ed7d2d62a7cf92fe71");
 assert.strictEqual(core.runWithAbortSignal, context.runWithAbortSignal);
@@ -37,6 +40,9 @@ assert.strictEqual(core.__test.validateMutationText, validateMutationText);
 assert.strictEqual(getOutput.projectBoundedValue, common.projectBoundedValue);
 assert.strictEqual(getOutput.CODECKS_READ_ERROR_CODES, common.CODECKS_READ_ERROR_CODES);
 assert.strictEqual((await import("../src/runtime/pacing.ts")).withAccountScanSlot, pacing.withAccountScanSlot);
+for (const name of CODECKS_EXPORTS) {
+  assert.strictEqual(getCodecksToolDefinition(name).tool, core[name], `${name}: catalog must use the canonical facade tool`);
+}
 const state = { complete: true };
 const projection = common.projectBoundedValue(Type.Object({ absent: Type.Optional(Type.String()), zero: Type.Number(), no: Type.Boolean(), nil: Type.Null(), text: Type.String({ maxLength: 1 }) }), { zero: 0, no: false, nil: null, text: "😀x", secret: "never emitted" }, state);
 assert.deepEqual(projection, { zero: 0, no: false, nil: null, text: "😀" });
