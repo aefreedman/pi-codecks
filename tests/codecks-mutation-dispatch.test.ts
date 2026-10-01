@@ -41,6 +41,7 @@ function assertAttachmentFailure(result: any, diagnostic: RegExp, signing: strin
   assert.equal(result.structuredContent.ok, false);
   assert.equal(Value.Check(CARD_WRITE_OUTPUT_SCHEMAS.card_add_attachment, result.structuredContent), true);
   assert.match(result.content[0].text, diagnostic);
+  assert.match(result.structuredContent.error.message, diagnostic);
   assert.equal(result.structuredContent.effects.certainty, "definitely_unsent");
   assert.equal(result.structuredContent.effects.dispatchInvoked, false);
   assert.equal(result.structuredContent.effects.readback, "not_performed");
