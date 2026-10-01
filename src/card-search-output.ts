@@ -1,8 +1,8 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { projectBoundedValue, CODECKS_READ_ERROR_CODES } from "./card-get-output";
+import { CODECKS_READ_LIMITS, projectBoundedValue, CODECKS_READ_ERROR_CODES } from "./contracts/common";
 
-export const CARD_SEARCH_LIMITS = { bytes: 65536, string: 2048, rows: 3000, facets: 3000, tags: 3000 } as const;
+export const CARD_SEARCH_LIMITS = { ...CODECKS_READ_LIMITS, rows: 3000, facets: 3000, tags: 3000 } as const;
 const obj = <T extends Record<string, TSchema>>(properties: T) => Type.Object(properties, { additionalProperties: false });
 const str = () => Type.String({ maxLength: CARD_SEARCH_LIMITS.string });
 const opt = (s: TSchema) => Type.Optional(Type.Union([s, Type.Null()]));

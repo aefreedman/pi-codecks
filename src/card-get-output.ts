@@ -1,8 +1,9 @@
+import { CODECKS_READ_LIMITS, projectBoundedValue as project, CODECKS_READ_ERROR_CODES as codes, type ProjectionSchema } from "./contracts/common";
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 /** Public v1 pilot limits: UTF-8 JSON bytes, Unicode code points, and array items. */
-export const CARD_GET_LIMITS = { bytes: 65536, string: 2048, content: 32768, array: 25, candidates: 5 } as const;
+export const CARD_GET_LIMITS = { ...CODECKS_READ_LIMITS, content: 32768, array: 25, candidates: 5 } as const;
 const object = <T extends Record<string, TSchema>>(properties: T) => Type.Object(properties, { additionalProperties: false });
 const nullable = <T extends TSchema>(schema: T) => Type.Union([schema, Type.Null()]);
 const str = (maxLength: number = CARD_GET_LIMITS.string) => Type.String({ maxLength });
@@ -21,7 +22,6 @@ const cardSchema = object({
   parentCard: optional(related), childCards: optional(Type.Array(related, { maxItems: CARD_GET_LIMITS.array })),
 });
 const candidate = object({ ...identity, ...strings(["deck", "milestone", "assignee"]) });
-const codes = ["validation_error", "not_found", "ambiguous_match", "incomplete_read", "conflict", "out_of_scope", "forbidden", "disabled_by_org", "caller_aborted", "rate_limit_queue_aborted", "request_timeout", "rate_limited", "scan_queue_full", "credential_rate_limited", "response_too_large", "invalid_response_stream", "file_error", "unsupported_token", "credential_profile_mismatch", "personal_token_required", "org_actor_unverified", "authentication_rejected", "account_mismatch", "missing_scope", "api_error", "output_contract_error", "output_too_large"] as const;
 const common = {
   schemaVersion: Type.Literal(1), action: Type.Literal("card_get"),
   provenance: object({ source: Type.Literal("codecks"), contentTrust: Type.Literal("external") }),
@@ -44,45 +44,6 @@ export function isCardGetOutput(value: unknown): value is CardGetOutput {
 }
 
 /** Schema-directed allowlist projection, never a spread of renderer details or transport data. */
-type ProjectionSchema = TSchema & { anyOf?: ProjectionSchema[]; const?: unknown; type?: string; properties?: Record<string, ProjectionSchema>; items?: ProjectionSchema; maxItems?: number; maxLength?: number };
-function project(schema: ProjectionSchema, value: unknown, state: { complete: boolean }): unknown {
-  if (value === undefined) return undefined;
-  if (schema.anyOf) {
-    if (value === null && schema.anyOf.some(s => s.type === "null")) return null;
-    const selected = schema.anyOf.some(s => s.type === "null")
-      ? schema.anyOf.find(s => s.type !== "null")
-      : schema.anyOf.find(s => (s.const === undefined && s.type === typeof value) || Value.Check(s, value));
-    if (!selected) throw Error("Invalid union");
-    return project(selected, value, state);
-  }
-  if (schema.const !== undefined) {
-    if (value !== schema.const) throw Error("Invalid literal");
-    return value;
-  }
-  if (schema.type === "object") {
-    const source = record(value);
-    if (!source) throw Error("Invalid object");
-    const output: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(schema.properties as Record<string, TSchema>)) {
-      const item = project(child, source[key], state);
-      if (item !== undefined) output[key] = item;
-    }
-    return output;
-  }
-  if (schema.type === "array") {
-    if (!Array.isArray(value)) throw Error("Invalid array");
-    if (value.length > schema.maxItems) state.complete = false;
-    return value.slice(0, schema.maxItems).map(item => project(schema.items, item, state));
-  }
-  if (schema.type === "string") {
-    if (typeof value !== "string") throw Error("Invalid string");
-    const points = Array.from(value);
-    if (points.length > schema.maxLength) state.complete = false;
-    return points.slice(0, schema.maxLength).join("");
-  }
-  if (!Value.Check(schema, value)) throw Error("Invalid scalar");
-  return value;
-}
 export function projectCardGetOutput(payload: unknown): CardGetOutput {
   try {
     const source = record(payload);
@@ -107,4 +68,4 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
 }
 
 // Shared bounded allowlist primitive; card-get schema and projection are unchanged.
-export { project as projectBoundedValue, codes as CODECKS_READ_ERROR_CODES };
+export { projectBoundedValue, CODECKS_READ_ERROR_CODES } from "./contracts/common";

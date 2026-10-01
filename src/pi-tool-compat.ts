@@ -55,3 +55,6 @@ export const tool = Object.assign(
     },
   },
 );
+
+/** Canonical legacy text/json argument shared by all retained core tools. */
+export const outputFormatArg = tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to text.");

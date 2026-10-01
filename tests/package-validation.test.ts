@@ -144,6 +144,9 @@ const packageFacingDocs = [
 const mutationRuntimeSurface = [
   read("index.ts"),
   read("src/codecks-core.ts"),
+  read("src/pi/tool-metadata.ts"),
+  read("src/pi/register-tools.ts"),
+  read("src/runtime/transport.ts"),
   read("src/codecks-tool-loading.ts"),
   readme,
   read("skills/using-codecks/SKILL.md"),
@@ -155,7 +158,7 @@ assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authori
 // Keep this scoped to its public/runtime guidance surfaces so ordinary Codecks milestone
 // metadata and Hero parent support elsewhere in the package remain valid.
 const bulkCreateCore = read("src/codecks-core.ts").match(/export const card_bulk_create[\s\S]*?(?=export const card_bulk_update)/)?.[0] ?? "";
-const bulkCreateRegistration = read("index.ts").match(/card_bulk_create:\s*\{[\s\S]*?(?=\n\s*card_bulk_update:)/)?.[0] ?? "";
+const bulkCreateRegistration = read("src/pi/tool-metadata.ts").match(/card_bulk_create:\s*\{[\s\S]*?(?=\n\s*card_bulk_update:)/)?.[0] ?? "";
 const bulkCreateLoader = read("src/codecks-tool-loading.ts").match(/\{ name: "codecks_card_bulk_create",[\s\S]*?(?=\n\s*\{ name:)/)?.[0] ?? "";
 const bulkCreateContractSurfaces = [
   bulkCreateCore,
