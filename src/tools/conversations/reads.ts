@@ -1,3 +1,6 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { type ConversationArguments, createConversationReadResult, observeCard, observeThread, observeEntry, relationEvidence, relationReferenceCount } from "./conversations-dto-helpers";
 import { fetchLoggedInUser } from "../../runtime/identity";
 import { runQuery } from "../../runtime/transport";
 import { fetchCardByAccountSeq, fetchCardById, hydrateCard } from "../../shared/card-queries";
@@ -6,7 +9,7 @@ import { extractRelationEntities, getEntityMap, resolveFromMap } from "../../sha
 import { formatDateTime, formatResolvableContextLabel } from "../../shared/presentation";
 import { formatIdForQuery, getAccount, relationQuery, unwrapData } from "../../shared/query";
 import { normalizeResolvableContextInput } from "../../shared/resolvable-context";
-import { toErrorMessage, toStructuredErrorResult, toStructuredResult } from "../../shared/results";
+import { toErrorMessage } from "../../shared/results";
 import { outputFormatArg, tool } from "../../pi-tool-compat";
 import { type CodecksEntity, type CodecksUser } from "../../shared/types";
 import { formatCardUrl } from "../../shared/urls";
@@ -23,6 +26,45 @@ export const card_list_resolvables = tool({
     },
     async execute(args)
     {
+        return (await executeCardListResolvablesPayload(args)).text;
+    },
+});
+
+export const list_open_resolvable_cards = tool({
+    description: "List cards across the account that currently have open resolvables, grouped by context.",
+    args: {
+        contexts: tool.schema.array(tool.schema.string()).optional().describe("Optional list of contexts to include (comment, review, block/blocker)."),
+        limit: tool.schema.number().min(1).max(500).optional().describe("Maximum number of matching cards to return."),
+        scanLimit: tool.schema.number().min(1).max(5000).optional().describe("Maximum number of recent cards to scan."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeListOpenResolvableCardsPayload(args)).text;
+    },
+});
+
+export const list_logged_in_user_actionable_resolvables = tool({
+    description: "List open resolvables that are heuristically attention-worthy for the logged-in user.",
+    args: {
+        contexts: tool.schema.array(tool.schema.string()).optional().describe("Optional list of contexts to include (comment, review, block/blocker)."),
+        limit: tool.schema.number().min(1).max(500).optional().describe("Maximum number of matching cards to return per context."),
+        scanLimit: tool.schema.number().min(1).max(1000).optional().describe("Maximum number of recent cards to scan for open resolvables."),
+        staleAfterHours: tool.schema.number().min(1).max(24 * 30).optional().describe("Treat self-authored still-open threads older than this as resurfaced/actionable."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeListLoggedInUserActionableResolvablesPayload(args)).text;
+    },
+});
+
+// Optional probes must not send $limit without $order, or paginate unknown/single/fkAsArray relations.
+// Only these schema-confirmed hasMany relations have a known sortable field and safe selection.
+
+export const executeCardListResolvablesPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationReadResult("card_list_resolvables");
+        const { success: toStructuredResult, failure: toStructuredErrorResult } = native;
         const format = args.format ?? "text";
         const parsed = parseCardIdentifier(args.cardId);
         let cardId = parsed.cardId ?? args.cardId;
@@ -116,6 +158,7 @@ export const card_list_resolvables = tool({
             requestedContexts = Array.from(new Set(normalized));
         }
 
+        native.facts.card = observeCard(rawCard);
         const resolvables = extractRelationEntities(card, "resolvables", resolvableMap);
         const filtered = resolvables.filter((resolvable) =>
         {
@@ -135,12 +178,15 @@ export const card_list_resolvables = tool({
 
         const limit = args.limit ?? 50;
         const limited = filtered.slice(0, limit);
+        Object.assign(native.facts, { sourceThreadReferences: relationReferenceCount(rawCard, "resolvables"), sourceThreads: resolvables.length, matchedThreads: filtered.length, emittedThreads: limited.length, limit, includeClosed, threads: [] });
+        native.setRead(relationEvidence(rawCard, "resolvables", resolvableMap) ? "complete" : "incomplete");
         const resolvableIds = limited
             .map((entry) => String(entry.id ?? "").trim())
             .filter((value) => value.length > 0);
 
         if (limited.length === 0 || resolvableIds.length === 0)
         {
+            if (limited.length > 0) { native.facts.threads = limited.map(thread => ({ ...observeThread(thread), detailObserved: false, observedEntries: 0, entries: [] })); native.setRead("incomplete"); }
             const url = shortCode ? formatCardUrl(shortCode) : "";
             const emptyText = [
                 "## Resolvables",
@@ -294,6 +340,8 @@ export const card_list_resolvables = tool({
                 const resolvableId = String(resolvable.id ?? "");
                 const detail = resolvableId ? detailResolvableMap[resolvableId] : undefined;
                 const entryList = detail ? extractRelationEntities(detail, "entries", entryMap) : [];
+                (native.facts.threads as unknown[]).push({ ...observeThread(resolvable), detailObserved: !!detail, sourceEntries: detail && relationEvidence(detail, "entries", entryMap) ? entryList.length : undefined, observedEntries: entryList.length, entries: entryList.map(entry => observeEntry(entry, detailUserMap)) });
+                if (!detail || !relationEvidence(detail, "entries", entryMap)) native.setRead("incomplete");
                 const sortedEntries = entryList
                     .slice()
                     .sort((left, right) => toTimestamp(right.createdAt) - toTimestamp(left.createdAt));
@@ -346,19 +394,10 @@ export const card_list_resolvables = tool({
                 threads: threadItems,
             },
         );
-    },
 });
-
-export const list_open_resolvable_cards = tool({
-    description: "List cards across the account that currently have open resolvables, grouped by context.",
-    args: {
-        contexts: tool.schema.array(tool.schema.string()).optional().describe("Optional list of contexts to include (comment, review, block/blocker)."),
-        limit: tool.schema.number().min(1).max(500).optional().describe("Maximum number of matching cards to return."),
-        scanLimit: tool.schema.number().min(1).max(5000).optional().describe("Maximum number of recent cards to scan."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeListOpenResolvableCardsPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationReadResult("list_open_resolvable_cards");
+        const { success: toStructuredResult, failure: toStructuredErrorResult } = native;
         const format = args.format ?? "text";
         let requestedContexts: string[] | undefined;
 
@@ -412,6 +451,9 @@ export const list_open_resolvable_cards = tool({
         const cardMap = getEntityMap(data, "card");
         const resolvableMap = getEntityMap(data, "resolvable");
         const cards = extractRelationEntities(account, "cards", cardMap);
+        const sourceCardReferences = relationReferenceCount(account, "cards");
+        Object.assign(native.facts, { scanLimit, scannedCards: cards.length, sourceCardReferences, relationResolutionComplete: relationEvidence(account, "cards", cardMap), scanLimitReached: sourceCardReferences === undefined ? undefined : sourceCardReferences >= scanLimit, cards: [], groups: [] });
+        native.setRead("incomplete");
 
         const grouped = new Map<string, Array<Record<string, unknown>>>();
         const matchedCards: Array<Record<string, unknown>> = [];
@@ -483,6 +525,7 @@ export const list_open_resolvable_cards = tool({
                 contexts: contextCounts,
             };
             matchedCards.push(cardItem);
+            (native.facts.cards as unknown[]).push({ ...observeCard(card), sourceThreads: totalOpenResolvables, threads: Array.from(resolvablesByContext.values()).flat().map(observeThread) });
 
             for (const contextEntry of contextCounts)
             {
@@ -502,6 +545,7 @@ export const list_open_resolvable_cards = tool({
 
         if (matchedCards.length === 0)
         {
+            Object.assign(native.facts, { matchedCards: 0, openResolvables: 0, emittedCards: 0 });
             return toStructuredErrorResult(
                 format,
                 "list-open-resolvable-cards",
@@ -543,6 +587,8 @@ export const list_open_resolvable_cards = tool({
             };
         }).filter((entry) => entry.cards.length > 0);
 
+        Object.assign(native.facts, { matchedCards: matchedCards.length, openResolvables: openResolvableCount, emittedCards: Math.min(matchedCards.length, limit), groups: limitedGroups.map(group => ({ context: group.context, sourceCards: group.total, emittedCards: group.cards.length, cardIds: group.cards.map(card => card.cardId) })) });
+        native.facts.cards = (native.facts.cards as unknown[]).slice(0, limit);
         const totalReturnedCards = limitedGroups.reduce((sum, entry) => sum + entry.cards.length, 0);
         const lines = [
             "## Open Resolvable Cards",
@@ -587,20 +633,10 @@ export const list_open_resolvable_cards = tool({
                 cards: matchedCards.slice(0, limit),
             },
         );
-    },
 });
-
-export const list_logged_in_user_actionable_resolvables = tool({
-    description: "List open resolvables that are heuristically attention-worthy for the logged-in user.",
-    args: {
-        contexts: tool.schema.array(tool.schema.string()).optional().describe("Optional list of contexts to include (comment, review, block/blocker)."),
-        limit: tool.schema.number().min(1).max(500).optional().describe("Maximum number of matching cards to return per context."),
-        scanLimit: tool.schema.number().min(1).max(1000).optional().describe("Maximum number of recent cards to scan for open resolvables."),
-        staleAfterHours: tool.schema.number().min(1).max(24 * 30).optional().describe("Treat self-authored still-open threads older than this as resurfaced/actionable."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeListLoggedInUserActionableResolvablesPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationReadResult("list_logged_in_user_actionable_resolvables");
+        const { success: toStructuredResult, failure: toStructuredErrorResult } = native;
         const format = args.format ?? "text";
         let requestedContexts: string[] | undefined;
 
@@ -686,7 +722,11 @@ export const list_logged_in_user_actionable_resolvables = tool({
         const resolvableMap = getEntityMap(data, "resolvable");
         const entryMap = getEntityMap(data, "resolvableEntry");
         const cards = extractRelationEntities(account, "cards", cardMap);
+        const sourceCardReferences = relationReferenceCount(account, "cards");
+        Object.assign(native.facts, { scanLimit, scannedCards: cards.length, sourceCardReferences, relationResolutionComplete: relationEvidence(account, "cards", cardMap), scanLimitReached: sourceCardReferences === undefined ? undefined : sourceCardReferences >= scanLimit, groups: [] });
+        native.setRead("incomplete");
 
+        Object.assign(native.facts, { userId: loggedInUserId, staleAfterHours, items: [] });
         const resolveUserEntity = (value: unknown): CodecksEntity | undefined =>
         {
             return resolveFromMap(value, userMap);
@@ -875,6 +915,7 @@ export const list_logged_in_user_actionable_resolvables = tool({
                     resolvableCreatedByLoggedInUser: resolvableCreatorIsLoggedInUser,
                 };
                 actionableItems.push(item);
+                (native.facts.items as unknown[]).push({ card: observeCard(card), thread: observeThread(resolvable), latestEntry: latestEntry ? observeEntry(latestEntry, userMap) : undefined, bucket, reason, bubbleHeuristic, latestActivityAt, latestEntryByLoggedInUser: latestByLoggedInUser, latestEntryByOtherUser: latestByOtherUser, latestEntryMentionsLoggedInUser: latestMentionsLoggedInUser, participantSampleIncludesLoggedInUser: userAppearsInSampleParticipants });
 
                 const groupedByContext = grouped.get(context) ?? new Map<string, Record<string, unknown>>();
                 const existing = groupedByContext.get(String(card.cardId ?? ""));
@@ -936,6 +977,7 @@ export const list_logged_in_user_actionable_resolvables = tool({
 
         if (actionableItems.length === 0)
         {
+            Object.assign(native.facts, { actionableResolvableCount: 0, waitingOnUserCount: 0, resurfacedCount: 0, bubbleSummary: { unread: 0, read: 0, stale_review: 0 } });
             return toStructuredErrorResult(
                 format,
                 "list-logged-in-user-actionable-resolvables",
@@ -978,6 +1020,7 @@ export const list_logged_in_user_actionable_resolvables = tool({
             };
         }).filter((entry) => entry.cards.length > 0);
 
+        Object.assign(native.facts, { actionableResolvableCount: actionableItems.length, waitingOnUserCount, resurfacedCount, bubbleSummary: { unread: unreadCount, read: readCount, stale_review: staleReviewCount }, groups: groups.map(group => ({ context: group.context, sourceCards: group.total, emittedCards: group.cards.length, cardIds: group.cards.map(card => card.cardId) })) });
         const warnings = [
             "Heuristic result only: exact per-user unread/snooze/inbox state is not currently exposed by the stable query surfaces this tool can access.",
             `Resurfaced threads are approximated as self-authored still-open threads with no sampled updates for at least ${staleAfterHours} hour(s).`,
@@ -1050,8 +1093,4 @@ export const list_logged_in_user_actionable_resolvables = tool({
             },
             warnings,
         );
-    },
 });
-
-// Optional probes must not send $limit without $order, or paginate unknown/single/fkAsArray relations.
-// Only these schema-confirmed hasMany relations have a known sortable field and safe selection.

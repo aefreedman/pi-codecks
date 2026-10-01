@@ -1,19 +1,21 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { type ConversationArguments, createConversationWriteResult } from "./conversations-dto-helpers";
 import { getBaseConfig } from "../../runtime/credentials";
 import { fetchSharedActor } from "../../runtime/identity";
 import { CodecksOperationError } from "../../runtime/operation-error";
-import { runDispatch } from "../../runtime/transport";
 import { isIntrinsicDocumentationCard } from "../../shared/card-observation";
 import { fetchCardByAccountSeq, fetchCardById } from "../../shared/card-queries";
 import { formatShortCode, normalizeCardReferencesForUserText, parseCardIdentifier } from "../../shared/card-reference";
 import { formatDateTime, formatResolvableContextLabel } from "../../shared/presentation";
 import { fetchOpenResolvableContexts, fetchResolvableById, fetchResolvableEntryById } from "../../shared/resolvable-queries";
-import { classifyApiErrorCategory, getOperationErrorData, toErrorMessage, toStructuredErrorResult, toStructuredResult } from "../../shared/results";
+import { classifyApiErrorCategory, getOperationErrorData, toErrorMessage } from "../../shared/results";
 import { generateSessionId } from "../../shared/session-id";
 import { outputFormatArg, tool } from "../../pi-tool-compat";
 import { type CodecksEntity } from "../../shared/types";
 import { formatCardUrl } from "../../shared/urls";
 import { normalizeUserId } from "../../shared/users";
-import { resolveResolvableTarget, addBlockerResolvable } from "./helpers";
+import { resolveResolvableTarget, executeAddBlockerResolvablePayload } from "./helpers";
 
 export const card_add_comment = tool({
     description: "Open a general comment thread on a Codecks card when explicitly requested.",
@@ -24,6 +26,107 @@ export const card_add_comment = tool({
     },
     async execute(args)
     {
+        return (await executeCardAddCommentPayload(args)).text;
+    },
+});
+
+export const card_add_review = tool({
+    description: "Open a review conversation thread on a Codecks card.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
+        content: tool.schema.string().min(1).describe("Initial review content."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardAddReviewPayload(args)).text;
+    },
+});
+
+export const card_add_blocker = tool({
+    description: "Open a blocker conversation thread on a Codecks card (not a content/markdown edit).",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
+        content: tool.schema.string().min(1).describe("Blocker reason content."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardAddBlockerPayload(args)).text;
+    },
+});
+
+export const card_add_block = tool({
+    description: "Deprecated alias for adding a blocker thread. Prefer codecks_card_add_blocker.",
+    args: {
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
+        content: tool.schema.string().min(1).describe("Blocker reason content."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardAddBlockPayload(args)).text;
+    },
+});
+
+export const card_reply_resolvable = tool({
+    description: "Reply to an existing Codecks conversation thread (resolvable).",
+    args: {
+        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Resolvable ID."),
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID or short code if resolvableId is not provided."),
+        context: tool.schema.enum(["comment", "review", "block", "blocker"]).optional().describe("Optional context filter when selecting an open card resolvable."),
+        content: tool.schema.string().min(1).describe("Reply content."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardReplyResolvablePayload(args)).text;
+    },
+});
+
+export const card_edit_resolvable_entry = tool({
+    description: "Edit an existing Codecks conversation entry authored by the current user.",
+    args: {
+        entryId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Resolvable entry ID."),
+        content: tool.schema.string().min(1).describe("Updated entry content."),
+        expectedVersion: tool.schema.number().optional().describe("Optional optimistic concurrency version check."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardEditResolvableEntryPayload(args)).text;
+    },
+});
+
+export const card_close_resolvable = tool({
+    description: "Close a Codecks conversation thread (resolvable).",
+    args: {
+        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Resolvable ID."),
+        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID or short code if resolvableId is not provided."),
+        context: tool.schema.enum(["comment", "review", "block", "blocker"]).optional().describe("Optional context filter when selecting an open card resolvable."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardCloseResolvablePayload(args)).text;
+    },
+});
+
+export const card_reopen_resolvable = tool({
+    description: "Reopen a closed Codecks conversation thread (resolvable).",
+    args: {
+        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Resolvable ID."),
+        format: outputFormatArg,
+    },
+    async execute(args)
+    {
+        return (await executeCardReopenResolvablePayload(args)).text;
+    },
+});
+
+export const executeCardAddCommentPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_add_comment");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
         const parsed = parseCardIdentifier(args.cardId);
         let cardId = parsed.cardId ?? args.cardId;
@@ -40,6 +143,8 @@ export const card_add_comment = tool({
             return toStructuredErrorResult(format, "card-add-comment", "not_found", "Card not found.");
         }
 
+        native.facts.cardId = current.cardId;
+        native.facts.context = "comment";
         cardId = current.cardId as string;
         accountSeq = current.accountSeq as number | undefined;
         shortCode = formatShortCode(accountSeq);
@@ -51,7 +156,7 @@ export const card_add_comment = tool({
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchSharedActor(); }
+        try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
         catch (error) { return toStructuredErrorResult(format, "card-add-comment", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
         try
@@ -97,18 +202,10 @@ export const card_add_comment = tool({
                 preview,
             },
         );
-    },
 });
-
-export const card_add_review = tool({
-    description: "Open a review conversation thread on a Codecks card.",
-    args: {
-        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
-        content: tool.schema.string().min(1).describe("Initial review content."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeCardAddReviewPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_add_review");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
         const parsed = parseCardIdentifier(args.cardId);
         let cardId = parsed.cardId ?? args.cardId;
@@ -125,6 +222,8 @@ export const card_add_review = tool({
             return toStructuredErrorResult(format, "card-add-review", "not_found", "Card not found.");
         }
 
+        native.facts.cardId = current.cardId;
+        native.facts.context = "review";
         cardId = current.cardId as string;
         accountSeq = current.accountSeq as number | undefined;
         shortCode = formatShortCode(accountSeq);
@@ -167,7 +266,7 @@ export const card_add_review = tool({
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchSharedActor(); }
+        try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
         catch (error) { return toStructuredErrorResult(format, "card-add-review", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
         try
@@ -213,58 +312,28 @@ export const card_add_review = tool({
                 preview,
             },
         );
-    },
 });
-
-export const card_add_blocker = tool({
-    description: "Open a blocker conversation thread on a Codecks card (not a content/markdown edit).",
-    args: {
-        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
-        content: tool.schema.string().min(1).describe("Blocker reason content."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
-        return addBlockerResolvable({
+export const executeCardAddBlockerPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        return executeAddBlockerResolvablePayload({
             cardId: args.cardId,
             content: args.content,
             format: args.format,
             action: "card-add-blocker",
             includeAliasWarning: false,
         });
-    },
 });
-
-export const card_add_block = tool({
-    description: "Deprecated alias for adding a blocker thread. Prefer codecks_card_add_blocker.",
-    args: {
-        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Card ID, short code, or URL."),
-        content: tool.schema.string().min(1).describe("Blocker reason content."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
-        return addBlockerResolvable({
+export const executeCardAddBlockPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        return executeAddBlockerResolvablePayload({
             cardId: args.cardId,
             content: args.content,
             format: args.format,
             action: "card-add-block",
             includeAliasWarning: true,
         });
-    },
 });
-
-export const card_reply_resolvable = tool({
-    description: "Reply to an existing Codecks conversation thread (resolvable).",
-    args: {
-        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Resolvable ID."),
-        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID or short code if resolvableId is not provided."),
-        context: tool.schema.enum(["comment", "review", "block", "blocker"]).optional().describe("Optional context filter when selecting an open card resolvable."),
-        content: tool.schema.string().min(1).describe("Reply content."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeCardReplyResolvablePayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_reply_resolvable");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
         const target = await resolveResolvableTarget({
             resolvableId: args.resolvableId,
@@ -276,6 +345,7 @@ export const card_reply_resolvable = tool({
             return toStructuredErrorResult(format, "card-reply-resolvable", "validation_error", target.error);
         }
 
+        Object.assign(native.facts, { resolvableId: target.resolvable.id, context: target.resolvable.context, isClosedBefore: target.resolvable.isClosed });
         const resolvableId = String(target.resolvable.id ?? "").trim();
         if (!resolvableId)
         {
@@ -295,7 +365,7 @@ export const card_reply_resolvable = tool({
 
         const normalizedContent = normalizeCardReferencesForUserText(args.content);
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchSharedActor(); }
+        try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
         catch (error) { return toStructuredErrorResult(format, "card-reply-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         try
         {
@@ -345,20 +415,13 @@ export const card_reply_resolvable = tool({
                 preview,
             },
         );
-    },
 });
-
-export const card_edit_resolvable_entry = tool({
-    description: "Edit an existing Codecks conversation entry authored by the current user.",
-    args: {
-        entryId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Resolvable entry ID."),
-        content: tool.schema.string().min(1).describe("Updated entry content."),
-        expectedVersion: tool.schema.number().optional().describe("Optional optimistic concurrency version check."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeCardEditResolvableEntryPayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_edit_resolvable_entry");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
+        native.facts.entryId = args.entryId === undefined ? undefined : String(args.entryId).trim();
+        native.facts.expectedVersion = args.expectedVersion;
         const entryId = String(args.entryId).trim();
         if (!entryId)
         {
@@ -390,8 +453,9 @@ export const card_edit_resolvable_entry = tool({
         }
 
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchSharedActor(); }
+        try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
         catch (error) { return toStructuredErrorResult(format, "card-edit-resolvable-entry", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
+        native.facts.versionBefore = before.version;
         const currentUserId = String(actor.id ?? "").trim();
         const authorValue = before.author;
         const authorId = typeof authorValue === "object" && authorValue
@@ -449,6 +513,7 @@ export const card_edit_resolvable_entry = tool({
         const contentBefore = String(before.content ?? "");
         if (contentBefore === normalizedContent)
         {
+            native.facts.contentDiffersBefore = false;
             const resolvable = typeof before.resolvable === "object" && before.resolvable
                 ? before.resolvable as CodecksEntity
                 : undefined;
@@ -485,6 +550,7 @@ export const card_edit_resolvable_entry = tool({
             );
         }
 
+        native.facts.contentDiffersBefore = true;
         try
         {
             await runDispatch("resolvables/updateComment", {
@@ -545,19 +611,10 @@ export const card_edit_resolvable_entry = tool({
                 preview,
             },
         );
-    },
 });
-
-export const card_close_resolvable = tool({
-    description: "Close a Codecks conversation thread (resolvable).",
-    args: {
-        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Resolvable ID."),
-        cardId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Card ID or short code if resolvableId is not provided."),
-        context: tool.schema.enum(["comment", "review", "block", "blocker"]).optional().describe("Optional context filter when selecting an open card resolvable."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeCardCloseResolvablePayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_close_resolvable");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
         const target = await resolveResolvableTarget({
             resolvableId: args.resolvableId,
@@ -569,6 +626,7 @@ export const card_close_resolvable = tool({
             return toStructuredErrorResult(format, "card-close-resolvable", "validation_error", target.error);
         }
 
+        Object.assign(native.facts, { resolvableId: target.resolvable.id, context: target.resolvable.context, isClosedBefore: target.resolvable.isClosed });
         const resolvableId = String(target.resolvable.id ?? "").trim();
         if (!resolvableId)
         {
@@ -587,7 +645,7 @@ export const card_close_resolvable = tool({
         }
 
         let actor: { id: string | number; verifiedOrg: boolean };
-        try { actor = await fetchSharedActor(); }
+        try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
         catch (error) { return toStructuredErrorResult(format, "card-close-resolvable", error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
         try
         {
@@ -631,17 +689,10 @@ export const card_close_resolvable = tool({
                 contextLabel,
             },
         );
-    },
 });
-
-export const card_reopen_resolvable = tool({
-    description: "Reopen a closed Codecks conversation thread (resolvable).",
-    args: {
-        resolvableId: tool.schema.union([tool.schema.string(), tool.schema.number()]).describe("Resolvable ID."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export const executeCardReopenResolvablePayload = (args: ConversationArguments): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () => {
+        const native = createConversationWriteResult("card_reopen_resolvable");
+        const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
         const format = args.format ?? "text";
         const resolvableId = String(args.resolvableId).trim();
         if (!resolvableId)
@@ -668,6 +719,7 @@ export const card_reopen_resolvable = tool({
             });
         }
 
+        Object.assign(native.facts, { resolvableId: before.id, context: before.context, isClosedBefore: before.isClosed });
         if (!before.isClosed)
         {
             return toStructuredErrorResult(
@@ -725,5 +777,4 @@ export const card_reopen_resolvable = tool({
                 contextLabel,
             },
         );
-    },
 });

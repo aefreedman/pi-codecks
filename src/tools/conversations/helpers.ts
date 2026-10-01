@@ -1,13 +1,15 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { createConversationWriteResult } from "./conversations-dto-helpers";
 import { fetchSharedActor } from "../../runtime/identity";
 import { CodecksOperationError } from "../../runtime/operation-error";
-import { runDispatch } from "../../runtime/transport";
 import { isIntrinsicDocumentationCard } from "../../shared/card-observation";
 import { fetchCardByAccountSeq, fetchCardById, resolveCardForUpdate } from "../../shared/card-queries";
 import { formatShortCode, normalizeCardReferencesForUserText, parseCardIdentifier } from "../../shared/card-reference";
 import { formatResolvableContextLabel } from "../../shared/presentation";
 import { normalizeResolvableContextInput } from "../../shared/resolvable-context";
 import { fetchOpenResolvableContexts, fetchOpenResolvablesForCard, fetchResolvableById } from "../../shared/resolvable-queries";
-import { type OutputFormat, classifyApiErrorCategory, getOperationErrorData, toErrorMessage, toStructuredErrorResult, toStructuredResult } from "../../shared/results";
+import { type OutputFormat, classifyApiErrorCategory, getOperationErrorData, toErrorMessage } from "../../shared/results";
 import { generateSessionId } from "../../shared/session-id";
 import { type CodecksEntity } from "../../shared/types";
 import { formatCardUrl } from "../../shared/urls";
@@ -149,14 +151,16 @@ export const looksLikeContentEditIntent = (value: string): boolean =>
     return hints.some((hint) => text.includes(hint));
 };
 
-export const addBlockerResolvable = async (args: {
+export const executeAddBlockerResolvablePayload = (args: {
     cardId: string | number;
     content: string;
     format?: OutputFormat;
     action: "card-add-block" | "card-add-blocker";
     includeAliasWarning?: boolean;
-}): Promise<string> =>
+}): Promise<CodecksOperationPayload> => withOperationContextIfMissing(async () =>
 {
+    const native = createConversationWriteResult(args.action.replaceAll("-", "_"));
+    const { success: toStructuredResult, failure: toStructuredErrorResult, dispatch: runDispatch } = native;
     const format = args.format ?? "text";
     const parsed = parseCardIdentifier(args.cardId);
     let cardId = parsed.cardId ?? args.cardId;
@@ -173,6 +177,9 @@ export const addBlockerResolvable = async (args: {
         return toStructuredErrorResult(format, args.action, "not_found", "Card not found.");
     }
 
+    native.facts.cardId = current.cardId;
+    native.facts.context = "block";
+    native.facts.isAlias = args.includeAliasWarning ?? false;
     cardId = current.cardId as string;
     accountSeq = current.accountSeq as number | undefined;
     shortCode = formatShortCode(accountSeq);
@@ -215,7 +222,7 @@ export const addBlockerResolvable = async (args: {
 
     const normalizedContent = normalizeCardReferencesForUserText(args.content);
     let actor: { id: string | number; verifiedOrg: boolean };
-    try { actor = await fetchSharedActor(); }
+    try { actor = await fetchSharedActor(); native.facts.actorId = actor.id; }
     catch (error) { return toStructuredErrorResult(format, args.action, error instanceof CodecksOperationError ? error.category : classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error)); }
 
     try
@@ -282,7 +289,9 @@ export const addBlockerResolvable = async (args: {
         },
         warningList,
     );
-};
+});
+
+export const addBlockerResolvable = async (args: Parameters<typeof executeAddBlockerResolvablePayload>[0]): Promise<string> => (await executeAddBlockerResolvablePayload(args)).text;
 
 export const resolvableDebugRelations: Record<string, { order: string; fields: string[] }> = {
     participants: { order: "-firstJoinedAt", fields: ["userId", "resolvableId", "firstJoinedAt"] },
