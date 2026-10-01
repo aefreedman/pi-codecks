@@ -150,6 +150,10 @@ const mutationRuntimeSurface = [
   read("src/tools/cards/bulk.ts"),
   read("src/tools/cards/helpers.ts"),
   read("src/tools/cards/definitions.ts"),
+  read("src/tools/reports/tools.ts"),
+  read("src/tools/reports/helpers.ts"),
+  read("src/tools/reports/definitions.ts"),
+
 
   read("src/tools/entities/reads.ts"),
   read("src/tools/entities/writes.ts"),
