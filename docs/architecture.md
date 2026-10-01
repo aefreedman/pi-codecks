@@ -19,7 +19,15 @@ Composition imports domain definitions; definitions import operations; operation
 
 `runtime/operation-context.ts` owns operation-scoped abort/profile/workspace, credential memoization and request/progress accounting. `runtime/pacing.ts` owns one process-level physical request gate, server cooldown and bounded account-scan queue. `runtime/credentials.ts` coordinates provider selection using the existing credential caches. `runtime/transport.ts` owns bounded HTTP, pacing, read retry and write uncertainty. Importing a tool creates no request and no per-tool copy of these controls.
 
-Extraction does not change retry policy, API concurrency, authentication, activation or schemas. Only card-get and card-search have native structured contracts. Other tools retain their legacy text/JSON/native behavior. Bulk certainty and fingerprints, Hand readback/drift, conversation restrictions and absent/null/false/zero observations remain operation-owned behavior, not adapter policy.
+Extraction does not change retry policy, API concurrency, authentication, activation or schemas. Card-get, card-search and card-get-batch have native structured contracts. Other tools retain their legacy text/JSON/native behavior. Bulk certainty and fingerprints, Hand readback/drift, conversation restrictions and absent/null/false/zero observations remain operation-owned behavior, not adapter policy.
+
+## Native operation payload foundation
+
+`CodecksOperationPayload` in `src/pi/tool-definition.ts` is `{ text: string; payload: Record<string, unknown> }`. A definition supplies either the accepted `read(args)` or neutral `executePayload(args)`, never both, and a domain-owned `outputSchema`/`projectOutput(payload)`. The adapter invokes exactly one seam inside the canonical operation scope instead of invoking legacy `execute` as well. `CodecksStructuredOutput` describes the neutral ok/error envelope; `CodecksStructuredReadOutput` remains a compatibility alias. The seam name does not imply read-only behavior, authorization, mutation certainty or replay policy. Mutation producers must preserve dispatched/indeterminate effects even when projection fails.
+
+Batch owns `src/tools/cards/card-get-batch-output.ts`; the narrow `card-get-observation.ts` helper shares existing single-card native observations without changing pilot schemas or legacy normalizers. Found batch items embed the accepted single-card success envelope and its byte/completeness rules. Projection errors are explicit items with single-card errors and a top-level native failure; source counts are not rewritten as missing. The common projector selects object-union literal discriminators before clipping. See [batch contract](../references/codecks/card-get-batch-output.md).
+
+These interfaces add no runtime state, credential owner, request, retry or host-hook enforcement. Existing pilot output modules remain at `src/card-get-output.ts` and `src/card-search-output.ts`. Domain writers own only their operation/definition/output files, dedicated tests and public references; shared interfaces, manifests, common harnesses and existing pilot/batch owners remain integrator-owned.
 
 ## Validation and packaging
 

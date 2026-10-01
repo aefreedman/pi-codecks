@@ -62,7 +62,9 @@ function formatCardGetText(payload: Record<string, unknown>): string | undefined
 }
 
 export function registerCodecksTool(pi: ExtensionAPI, definition: CodecksToolDefinition, description: string, legacyPromptMetadata: boolean, getProfile: () => string) {
+    if (definition.read && definition.executePayload) throw new Error(`Ambiguous native execution seams for '${definition.exportName}'.`);
     const { exportName, tool: coreTool, config } = definition;
+    const executeNative = definition.executePayload ?? definition.read;
     const toolName = `codecks_${exportName}`;
     pi.registerTool({
       name: toolName,
@@ -85,7 +87,7 @@ export function registerCodecksTool(pi: ExtensionAPI, definition: CodecksToolDef
         const executionParams = cardGetTextFormat ? { ...normalizedParams, format: "json" } : normalizedParams;
         const result = await runWithAbortSignal(
           signal,
-          async () => definition.read ? definition.read(executionParams) : coreTool.execute(executionParams),
+          async () => executeNative ? executeNative(executionParams) : coreTool.execute(executionParams),
           ctx.cwd ?? process.cwd(),
           onUpdate ? (progress) => {
             const prefix = exportName === "card_bulk_create" ? "Bulk create" : exportName === "card_bulk_update" ? "Bulk update" : "Codecks request";
@@ -105,7 +107,7 @@ export function registerCodecksTool(pi: ExtensionAPI, definition: CodecksToolDef
           } : undefined,
           getProfile(),
         );
-        const cardRead = definition.read ? result as { text: string; payload: Record<string, unknown> } : undefined;
+        const cardRead = executeNative ? result as { text: string; payload: Record<string, unknown> } | undefined : undefined;
         const structuredContent = definition.projectOutput?.(cardRead?.payload);
         if (structuredContent?.ok === false && (structuredContent.error.code === "output_contract_error" || structuredContent.error.code === "output_too_large")) {
           return { content: [{ type: "text", text: structuredContent.error.message }], details: { exportName, outputContractError: true }, structuredContent, isError: true };

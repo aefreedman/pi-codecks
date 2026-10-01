@@ -13,9 +13,18 @@ export function projectBoundedValue(schema: ProjectionSchema, value: unknown, st
   if (value === undefined) return undefined;
   if (schema.anyOf) {
     if (value === null && schema.anyOf.some(s => s.type === "null")) return null;
-    const selected = schema.anyOf.some(s => s.type === "null")
-      ? schema.anyOf.find(s => s.type !== "null")
-      : schema.anyOf.find(s => (s.const === undefined && s.type === typeof value) || Value.Check(s, value));
+    const objects = schema.anyOf.filter(s => s.type === "object");
+    const source = record(value);
+    // Object variants must select their literal discriminators BEFORE bounded clipping.
+    // Full Value.Check would incorrectly reject otherwise projectable long fields.
+    const selected = objects.length > 1 && source
+      ? objects.find(s => {
+          const literals = Object.entries(s.properties ?? {}).filter(([, child]) => child.const !== undefined);
+          return literals.length > 0 && literals.every(([key, child]) => source[key] === child.const);
+        })
+      : schema.anyOf.some(s => s.type === "null")
+        ? schema.anyOf.find(s => s.type !== "null")
+        : schema.anyOf.find(s => (s.const === undefined && s.type === typeof value) || Value.Check(s, value));
     if (!selected) throw Error("Invalid union");
     return projectBoundedValue(selected, value, state);
   }

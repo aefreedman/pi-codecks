@@ -7,6 +7,9 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Add a bounded v1 `codecks_card_get_batch` native DTO with ordered duplicate-preserving results, source versus projected counts, factual missing/failed/unqueried evidence, explicit per-card projection errors and independent per-card/batch UTF-8 budgets. Preserve existing direct-core presentation and deduplicated requests.
+- Add a neutral single-execution native payload seam for domain reads and writes; retain accepted read adapters and fix discriminated object-union projection before clipping. Add standalone offline Pi/codemode and non-codemode nested batch evidence.
+
 - Refactor internal runtime, shared contracts, domain operations and Pi definition ownership while preserving existing exports, activation, request safety and card-get/search contracts. Add architecture/dependency characterization and public ownership documentation.
 
 - Add a strict bounded `codecks_card_search` structured DTO and native error status while preserving legacy text, requests, modes and metrics. Distinguish source counts, emitted samples, scan/projection completeness and inferred facet buckets.

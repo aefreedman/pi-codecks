@@ -11,6 +11,7 @@ import { RAW_TOOL_DEFINITIONS } from "../src/tools/raw-definitions.ts";
 import { CODECKS_EXPORTS } from "../src/pi/tool-metadata.ts";
 import { getCodecksToolDefinition } from "../src/pi/tool-catalog.ts";
 import { composeCodecksToolCatalog } from "../src/pi/tool-definition.ts";
+import { CARD_GET_BATCH_OUTPUT_SCHEMA } from "../src/tools/cards/card-get-batch-output.ts";
 import { CARD_GET_OUTPUT_SCHEMA } from "../src/card-get-output.ts";
 import { CARD_SEARCH_OUTPUT_SCHEMA } from "../src/card-search-output.ts";
 import { readCardGet, readCardSearch } from "../src/tools/cards/reads.ts";
@@ -27,12 +28,15 @@ for (const [name, definition] of catalog) {
   assert.strictEqual(getCodecksToolDefinition(name), definition);
   assert.strictEqual(core[name], definition.tool, `${name}: one canonical operation`);
   assert.equal(typeof definition.tool.execute, "function");
-  if (name !== "card_get" && name !== "card_search") {
+  if (name !== "card_get" && name !== "card_search" && name !== "card_get_batch") {
+    assert.equal(definition.executePayload, undefined);
     assert.equal(definition.read, undefined);
     assert.equal(definition.outputSchema, undefined);
     assert.equal(definition.projectOutput, undefined);
   }
 }
+assert.strictEqual(getCodecksToolDefinition("card_get_batch").outputSchema, CARD_GET_BATCH_OUTPUT_SCHEMA);
+assert.equal(typeof getCodecksToolDefinition("card_get_batch").executePayload, "function");
 assert.strictEqual(getCodecksToolDefinition("card_get").outputSchema, CARD_GET_OUTPUT_SCHEMA);
 assert.strictEqual(getCodecksToolDefinition("card_search").outputSchema, CARD_SEARCH_OUTPUT_SCHEMA);
 assert.strictEqual(core.readCardGet, readCardGet);
@@ -96,4 +100,4 @@ const visit = (file: string, stack: string[]) => {
 for (const file of files) visit(file, []);
 assert.deepEqual([...readFileSync(resolve(root, "src/codecks-core.ts"), "utf8").matchAll(/^export const (\w+)/gm)].map(match => match[1]), ["__test"], "facade contains only established test-hook composition");
 assert.doesNotMatch(readFileSync(resolve(root, "src/pi/tool-catalog.ts"), "utf8"), /retainedDefinitions|TOOL_CONFIG|codecks-core/);
-console.log(`Modular architecture: ${catalog.size} canonical tools, exact established exports, two native contracts, raw local failures, singleton identities and ${files.length}-module acyclic graph passed.`);
+console.log(`Modular architecture: ${catalog.size} canonical tools, exact established exports, three native contracts, raw local failures, singleton identities and ${files.length}-module acyclic graph passed.`);

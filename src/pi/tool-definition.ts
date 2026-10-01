@@ -15,19 +15,25 @@ export type CoreTool = {
   execute: (args: Record<string, unknown>) => Promise<unknown> | unknown;
 };
 
-export type CodecksStructuredReadOutput = (
+/** Neutral native operation result; writes retain domain-owned certainty semantics. */
+export type CodecksOperationPayload = { text: string; payload: Record<string, unknown> };
+export type CodecksStructuredOutput = (
   | { ok: true }
   | { ok: false; error: { code: string; message: string } }
 ) & Record<string, unknown>;
+
+/** Compatibility name for accepted read adapters. */
+export type CodecksStructuredReadOutput = CodecksStructuredOutput;
 
 /** Internal domain contribution; lifecycle and request context stay in the Pi adapter. */
 export type CodecksToolDefinition = {
   exportName: string;
   tool: CoreTool;
   config: ToolConfig;
-  read?: (args: Record<string, unknown>) => Promise<{ text: string; payload: Record<string, unknown> }>;
+  read?: (args: Record<string, unknown>) => Promise<CodecksOperationPayload>;
+  executePayload?: (args: Record<string, unknown>) => Promise<CodecksOperationPayload>;
   outputSchema?: TSchema;
-  projectOutput?: (payload: unknown) => CodecksStructuredReadOutput;
+  projectOutput?: (payload: unknown) => CodecksStructuredOutput;
   cardTextPresentation?: boolean;
 };
 
