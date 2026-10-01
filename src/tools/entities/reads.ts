@@ -1,3 +1,7 @@
+import type { CodecksOperationPayload } from "../../pi/tool-definition";
+import { withOperationContextIfMissing } from "../../runtime/operation-context";
+import { observeEntity } from "./entities-output-helpers";
+import { entityReadSuccess, entityReadError } from "./entities-read-output";
 import { runQuery } from "../../runtime/transport";
 import { formatShortCode } from "../../shared/card-reference";
 import { extractRelationEntities, getEntityMap } from "../../shared/entity-maps";
@@ -18,22 +22,100 @@ export const deck_get = tool({
         title: tool.schema.string().optional().describe("Alias for deckId when matching an exact visible Deck title."),
         format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
     },
-    async execute(args)
+    async execute(args): Promise<string>
     {
+        return (await executeDeckGetPayload(args)).text;
+    },
+});
+
+export const milestone_list = tool({
+    description: "List Codecks Milestones with optional text filtering.",
+    args: {
+        search: tool.schema.string().optional().describe("Optional text filter for milestone name, description, account sequence, or ID."),
+        includeDeleted: tool.schema.boolean().optional().describe("Include deleted milestones. Defaults to false."),
+        limit: tool.schema.number().int().min(1).max(500).optional().describe("Maximum milestones to return. Defaults to 100."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args): Promise<string>
+    {
+        return (await executeMilestoneListPayload(args)).text;
+    },
+});
+
+export const milestone_get = tool({
+    description: "Fetch one Codecks Milestone by ID, account sequence, or name search.",
+    args: {
+        milestoneId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone ID, account sequence, or name search."),
+        title: tool.schema.string().optional().describe("Alias for milestoneId when searching by visible milestone name."),
+        includeDeleted: tool.schema.boolean().optional().describe("Allow deleted milestones in lookup results. Defaults to false."),
+        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
+    },
+    async execute(args): Promise<string>
+    {
+        return (await executeMilestoneGetPayload(args)).text;
+    },
+});
+
+export const run_list = tool({
+    description: "List Codecks Runs (Sprint API model) for the account.",
+    args: {
+        title: tool.schema.string().optional().describe("Optional partial custom label/date filter."),
+        includeDeleted: tool.schema.boolean().optional().describe("Include deleted runs."),
+        includeCompleted: tool.schema.boolean().optional().describe("Include completed runs."),
+        limit: tool.schema.number().optional().describe("Maximum runs to return."),
+        format: outputFormatArg,
+    },
+    async execute(args): Promise<string>
+    {
+        return (await executeRunListPayload(args)).text;
+    },
+});
+
+export const run_get = tool({
+    description: "Fetch one Codecks Run using the Sprint API model.",
+    args: {
+        runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Run/Sprint ID, account sequence, or label search."),
+        title: tool.schema.string().optional().describe("Partial custom label/date search if runId is not provided."),
+        format: outputFormatArg,
+    },
+    async execute(args): Promise<string>
+    {
+        return (await executeRunGetPayload(args)).text;
+    },
+});
+
+export const user_lookup = tool({
+    description: "Lookup Codecks user IDs by name (assignees/creators from recent cards).",
+    args: {
+        name: tool.schema.string().min(1).describe("User name to search for (partial, case-insensitive)."),
+        limit: tool.schema.number().min(1).max(5000).optional().describe("Maximum number of recent cards to scan."),
+    },
+    async execute(args): Promise<string>
+    {
+        return (await executeUserLookupPayload(args)).text;
+    },
+});
+
+export async function executeDeckGetPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
+        const success = (...values: Parameters<typeof toStructuredResult>): CodecksOperationPayload => ({ text: toStructuredResult(...values), payload: entityReadSuccess("deck-get", facts) });
+        const failure = (...values: Parameters<typeof toStructuredErrorResult>): CodecksOperationPayload => ({ text: toStructuredErrorResult(...values), payload: entityReadError("deck-get", values[2], values[3]) });
         const format = args.format ?? "json";
         const lookupValue = blankToUndefined(args.deckId) ?? blankToUndefined(args.title);
         if (lookupValue === undefined)
         {
-            return toStructuredErrorResult(format, "deck-get", "validation_error", "Provide deckId, account sequence, or exact title.");
+            return failure(format, "deck-get", "validation_error", "Provide deckId, account sequence, or exact title.");
         }
         try
         {
             const result = await resolveDeckForGet(lookupValue);
             if (result.kind !== "resolved")
             {
-                return toStructuredErrorResult(format, "deck-get", result.kind === "ambiguous" ? "ambiguous_match" : "not_found", renderLookupMessage(result, String(lookupValue)));
+                return failure(format, "deck-get", result.kind === "ambiguous" ? "ambiguous_match" : "not_found", renderLookupMessage(result, String(lookupValue)));
             }
             const deck = result.deck;
+            facts = { deck: observeEntity(deck, "deck") };
             const data = {
                 deckId: result.id,
                 accountSeq: result.accountSeq ?? null,
@@ -53,25 +135,20 @@ export const deck_get = tool({
                 "-----------",
                 data.description || "(empty)",
             ].join("\n");
-            return toStructuredResult(format, "deck-get", text, data);
+            return success(format, "deck-get", text, data);
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+            return failure(format, "deck-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
-    },
-});
+    });
+}
 
-export const milestone_list = tool({
-    description: "List Codecks Milestones with optional text filtering.",
-    args: {
-        search: tool.schema.string().optional().describe("Optional text filter for milestone name, description, account sequence, or ID."),
-        includeDeleted: tool.schema.boolean().optional().describe("Include deleted milestones. Defaults to false."),
-        limit: tool.schema.number().int().min(1).max(500).optional().describe("Maximum milestones to return. Defaults to 100."),
-        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
-    },
-    async execute(args)
-    {
+export async function executeMilestoneListPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
+        const success = (...values: Parameters<typeof toStructuredResult>): CodecksOperationPayload => ({ text: toStructuredResult(...values), payload: entityReadSuccess("milestone-list", facts) });
+        const failure = (...values: Parameters<typeof toStructuredErrorResult>): CodecksOperationPayload => ({ text: toStructuredErrorResult(...values), payload: entityReadError("milestone-list", values[2], values[3]) });
         const format = args.format ?? "json";
         const includeDeleted = args.includeDeleted ?? false;
         const limit = args.limit ?? 100;
@@ -79,15 +156,17 @@ export const milestone_list = tool({
         try
         {
             const allMilestones = await fetchAccountMilestones();
-            const filtered = filterMilestonesBySearch(
+            const matching = filterMilestonesBySearch(
                 allMilestones.filter((milestone) => includeDeleted || milestone.isDeleted !== true),
                 args.search,
-            ).slice(0, limit);
+            );
+            const filtered = matching.slice(0, limit);
+            facts = { sourceCount: allMilestones.length, filteredCount: matching.length, emittedCount: filtered.length, truncated: matching.length > limit, milestones: filtered.map(m => observeEntity(m, "milestone")) };
             const dataMilestones = filtered
                 .map((milestone) => normalizeMilestoneSummary(milestone))
                 .filter((milestone): milestone is Record<string, unknown> => milestone !== null);
 
-            return toStructuredResult(
+            return success(
                 format,
                 "milestone-list",
                 renderMilestoneListText(filtered, "Codecks Milestones"),
@@ -105,26 +184,21 @@ export const milestone_list = tool({
         catch (error)
         {
             const message = toErrorMessage(error);
-            return toStructuredErrorResult(format, "milestone-list", classifyApiErrorCategory(message), message, getOperationErrorData(error));
+            return failure(format, "milestone-list", classifyApiErrorCategory(message), message, getOperationErrorData(error));
         }
-    },
-});
+    });
+}
 
-export const milestone_get = tool({
-    description: "Fetch one Codecks Milestone by ID, account sequence, or name search.",
-    args: {
-        milestoneId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Milestone ID, account sequence, or name search."),
-        title: tool.schema.string().optional().describe("Alias for milestoneId when searching by visible milestone name."),
-        includeDeleted: tool.schema.boolean().optional().describe("Allow deleted milestones in lookup results. Defaults to false."),
-        format: tool.schema.enum(["text", "json"]).optional().describe("Output format. Defaults to json."),
-    },
-    async execute(args)
-    {
+export async function executeMilestoneGetPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
+        const success = (...values: Parameters<typeof toStructuredResult>): CodecksOperationPayload => ({ text: toStructuredResult(...values), payload: entityReadSuccess("milestone-get", facts) });
+        const failure = (...values: Parameters<typeof toStructuredErrorResult>): CodecksOperationPayload => ({ text: toStructuredErrorResult(...values), payload: entityReadError("milestone-get", values[2], values[3]) });
         const format = args.format ?? "json";
         const lookupValue = blankToUndefined(args.milestoneId) ?? blankToUndefined(args.title);
         if (lookupValue === undefined)
         {
-            return toStructuredErrorResult(format, "milestone-get", "validation_error", "Provide milestoneId, account sequence, or title.");
+            return failure(format, "milestone-get", "validation_error", "Provide milestoneId, account sequence, or title.");
         }
 
         try
@@ -132,7 +206,7 @@ export const milestone_get = tool({
             const milestone = await resolveMilestoneForUpdate(lookupValue);
             if (milestone.kind !== "resolved")
             {
-                return toStructuredErrorResult(
+                return failure(
                     format,
                     "milestone-get",
                     milestone.kind === "ambiguous" ? "ambiguous_match" : "not_found",
@@ -141,9 +215,10 @@ export const milestone_get = tool({
             }
             if (milestone.milestone.isDeleted === true && args.includeDeleted !== true)
             {
-                return toStructuredErrorResult(format, "milestone-get", "not_found", "Matched milestone is deleted. Pass includeDeleted=true to return deleted milestones.");
+                return failure(format, "milestone-get", "not_found", "Matched milestone is deleted. Pass includeDeleted=true to return deleted milestones.");
             }
 
+            facts = { milestone: observeEntity(milestone.milestone, "milestone") };
             const accountSeq = milestone.accountSeq;
             const url = accountSeq !== undefined ? formatMilestoneUrl(accountSeq) : "";
             const text = [
@@ -158,7 +233,7 @@ export const milestone_get = tool({
                 String(milestone.milestone.description ?? ""),
             ].join("\n");
 
-            return toStructuredResult(
+            return success(
                 format,
                 "milestone-get",
                 text,
@@ -170,22 +245,16 @@ export const milestone_get = tool({
         catch (error)
         {
             const message = toErrorMessage(error);
-            return toStructuredErrorResult(format, "milestone-get", classifyApiErrorCategory(message), message, getOperationErrorData(error));
+            return failure(format, "milestone-get", classifyApiErrorCategory(message), message, getOperationErrorData(error));
         }
-    },
-});
+    });
+}
 
-export const run_list = tool({
-    description: "List Codecks Runs (Sprint API model) for the account.",
-    args: {
-        title: tool.schema.string().optional().describe("Optional partial custom label/date filter."),
-        includeDeleted: tool.schema.boolean().optional().describe("Include deleted runs."),
-        includeCompleted: tool.schema.boolean().optional().describe("Include completed runs."),
-        limit: tool.schema.number().optional().describe("Maximum runs to return."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export async function executeRunListPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
+        const success = (...values: Parameters<typeof toStructuredResult>): CodecksOperationPayload => ({ text: toStructuredResult(...values), payload: entityReadSuccess("run-list", facts) });
+        const failure = (...values: Parameters<typeof toStructuredErrorResult>): CodecksOperationPayload => ({ text: toStructuredErrorResult(...values), payload: entityReadError("run-list", values[2], values[3]) });
         const format = args.format ?? "text";
         const limit = Math.max(1, Math.min(500, Math.floor(Number(args.limit ?? 50))));
         let runs: CodecksEntity[];
@@ -195,7 +264,7 @@ export const run_list = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-list", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+            return failure(format, "run-list", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         const titleFilter = String(args.title ?? "").trim().toLowerCase();
@@ -215,6 +284,7 @@ export const run_list = tool({
             .sort((left, right) => String(right.startDate ?? "").localeCompare(String(left.startDate ?? "")));
         const truncated = filtered.length > limit;
         const selected = filtered.slice(0, limit);
+        facts = { sourceCount: runs.length, filteredCount: filtered.length, emittedCount: selected.length, truncated, runs: selected.map(r => observeEntity(r, "run")) };
         const summaries = selected.map(normalizeRunSummary);
         const lines = [
             "## Codecks Runs",
@@ -226,7 +296,7 @@ export const run_list = tool({
             ...summaries.map((run) => `- #${run.accountSeq ?? "?"} ${run.label} (${run.startDate ?? "?"} â†’ ${run.endDate ?? "?"})`),
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "run-list",
             lines.join("\n"),
@@ -237,23 +307,19 @@ export const run_list = tool({
                 runs: summaries,
             },
         );
-    },
-});
+    });
+}
 
-export const run_get = tool({
-    description: "Fetch one Codecks Run using the Sprint API model.",
-    args: {
-        runId: tool.schema.union([tool.schema.string(), tool.schema.number()]).optional().describe("Run/Sprint ID, account sequence, or label search."),
-        title: tool.schema.string().optional().describe("Partial custom label/date search if runId is not provided."),
-        format: outputFormatArg,
-    },
-    async execute(args)
-    {
+export async function executeRunGetPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
+        const success = (...values: Parameters<typeof toStructuredResult>): CodecksOperationPayload => ({ text: toStructuredResult(...values), payload: entityReadSuccess("run-get", facts) });
+        const failure = (...values: Parameters<typeof toStructuredErrorResult>): CodecksOperationPayload => ({ text: toStructuredErrorResult(...values), payload: entityReadError("run-get", values[2], values[3]) });
         const format = args.format ?? "text";
         const rawTarget = args.runId ?? args.title;
         if (rawTarget === undefined || String(rawTarget).trim() === "")
         {
-            return toStructuredErrorResult(format, "run-get", "validation_error", "Provide runId or title.");
+            return failure(format, "run-get", "validation_error", "Provide runId or title.");
         }
 
         let run: RunLookupResult | null;
@@ -263,16 +329,17 @@ export const run_get = tool({
         }
         catch (error)
         {
-            return toStructuredErrorResult(format, "run-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
+            return failure(format, "run-get", classifyApiErrorCategory(toErrorMessage(error)), toErrorMessage(error), getOperationErrorData(error));
         }
 
         if (!run)
         {
-            return toStructuredErrorResult(format, "run-get", "not_found", "Run not found.", { target: String(rawTarget) });
+            return failure(format, "run-get", "not_found", "Run not found.", { target: String(rawTarget) });
         }
 
         const summary = normalizeRunSummary(run.run);
         const cards = extractRelationEntities(run.run, "cards", {});
+        facts = { run: observeEntity(run.run, "run"), cards: cards.map(c => observeEntity(c, "card")), ...(run.run.cards !== undefined ? { sourceCardCount: cards.length } : {}), cardRelation: run.run.cards !== undefined ? "observed" : "unavailable" };
         const cardSummaries = cards.map((card) => ({
             cardId: card.cardId ?? null,
             shortCode: typeof card.accountSeq === "number" ? formatShortCode(card.accountSeq) : null,
@@ -291,7 +358,7 @@ export const run_get = tool({
             `- Cards: ${cardSummaries.length}`,
         ];
 
-        return toStructuredResult(
+        return success(
             format,
             "run-get",
             lines.join("\n"),
@@ -302,21 +369,16 @@ export const run_get = tool({
                 },
             },
         );
-    },
-});
+    });
+}
 
-export const user_lookup = tool({
-    description: "Lookup Codecks user IDs by name (assignees/creators from recent cards).",
-    args: {
-        name: tool.schema.string().min(1).describe("User name to search for (partial, case-insensitive)."),
-        limit: tool.schema.number().min(1).max(5000).optional().describe("Maximum number of recent cards to scan."),
-    },
-    async execute(args)
-    {
+export async function executeUserLookupPayload(args: Record<string, any>): Promise<CodecksOperationPayload> {
+    return withOperationContextIfMissing(async () => {
+        let facts: Record<string, unknown> = {};
         const queryText = String(args.name ?? "").trim();
         if (!queryText)
         {
-            return "Provide a name to search for.";
+            return { text: "Provide a name to search for.", payload: entityReadError("user-lookup", "validation_error", "Provide a name to search for.") };
         }
 
         const limit = args.limit ?? 200;
@@ -365,9 +427,10 @@ export const user_lookup = tool({
                 return leftName.localeCompare(rightName);
             });
 
+        facts = { query: queryText, requestedScanLimit: limit, candidateCount: candidates.length, matchedCount: matches.length, emittedCount: matches.length, users: matches.map(u => observeEntity(u, "user")) };
         if (matches.length === 0)
         {
-            return `No users matched "${queryText}" in recent card assignees/creators.`;
+            return { text: `No users matched "${queryText}" in recent card assignees/creators.`, payload: entityReadSuccess("user-lookup", facts) };
         }
 
         const lines = [
@@ -390,6 +453,6 @@ export const user_lookup = tool({
             "_Results are derived from recent card assignees/creators._",
         ];
 
-        return lines.join("\n");
-    },
-});
+        return { text: lines.join("\n"), payload: entityReadSuccess("user-lookup", facts) };
+    });
+}
