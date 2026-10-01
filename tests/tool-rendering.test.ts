@@ -4,6 +4,9 @@ import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import * as core from "../src/codecks-core.ts";
 import { renderCodecksCall, renderCodecksResult } from "../src/codecks-renderers.ts";
 import { loadRegisteredTools } from "./pi-tool-harness.ts";
+import { CONTRACTS } from "./structured-contract-inventory.ts";
+import { getCodecksToolDefinition } from "../src/pi/tool-catalog.ts";
+import { registerCodecksTool } from "../src/pi/register-tools.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 const ansiTheme = { fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[0m`, bold: (text: string) => `\x1b[1m${text}\x1b[22m` };
@@ -163,6 +166,35 @@ try {
     if (tool.name === "codecks_tool_search" || tool.name === "codecks_profile_select") continue;
     const name = tool.name.replace(/^codecks_/, "");
     const coreTool = (core as unknown as Record<string, Record<string, (args: unknown) => Promise<unknown>>>)[name];
+    if (Object.hasOwn(CONTRACTS, name) && !["card_get", "card_search", "card_get_batch"].includes(name)) {
+      const definition = getCodecksToolDefinition(name);
+      let received: unknown;
+      let calls = 0;
+      let fixtureTool: any;
+      // Presentation-only malformed-producer fixture; use the REAL schema and
+      // action-bound projector, while never invoking transports/credentials.
+      registerCodecksTool({ registerTool: (entry: any) => { fixtureTool = entry; } } as any, {
+        ...definition,
+        executePayload: async args => { calls++; received = args; return { text: cardRaw, payload: undefined as any }; },
+      }, definition.tool.description, true, () => "PERSONAL");
+      for (const format of ["json", "text"]) {
+        const args = freeze({ format });
+        const before = calls;
+        const executed = await fixtureTool.execute("render-native-error", args, undefined, undefined, { cwd: process.cwd() });
+        assert.equal(calls, before + 1);
+        assert.deepEqual(received, args);
+        assert.equal(executed.isError, true);
+        assert.equal(executed.structuredContent.ok, false);
+        assert.deepEqual(executed.structuredContent, CONTRACTS[name].project(undefined));
+        assert.deepEqual(executed.content, [{ type: "text", text: executed.structuredContent.error.message }]);
+        const snapshot = JSON.stringify(executed);
+        freeze(executed);
+        fixtureTool.renderCall(args, theme, { args });
+        for (const expanded of [false, true]) for (const width of [24, 80, 120]) fixtureTool.renderResult(executed, { expanded }, theme, { args }).render(width);
+        assert.equal(JSON.stringify(executed), snapshot);
+      }
+      continue;
+    }
     const method = name === "card_get_batch" ? "executePayload" : name === "card_get" || name === "card_search" ? "read" : "execute";
     const original = coreTool[method];
     let received: unknown;

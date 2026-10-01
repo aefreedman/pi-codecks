@@ -7,6 +7,10 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Add closed, versioned producer-native outputs for the remaining 39 cards, entities, conversations and reports tools, including the deprecated blocker alias. Preserve legacy text/JSON interfaces, activation, input aliases, transport/pacing and credential scopes.
+- Preserve sampled/partial read observations and valid-only references; add effect-aware mutation/bulk/file receipts with bounded reconciliation evidence, fingerprints, genuine artifacts and no replay authorization. Publish the explicit 42-migrated/seven-excluded contract roster.
+- Wire all domain fixtures and standalone synthetic Pi direct/codemode/non-codemode consumers; migrate native error assertions without weakening attachment containment, snapshot drift, zero-upload/dispatch or legacy rejection identity checks.
+
 - Add a bounded v1 `codecks_card_get_batch` native DTO with ordered duplicate-preserving results, source versus projected counts, factual missing/failed/unqueried evidence, explicit per-card projection errors and independent per-card/batch UTF-8 budgets. Preserve existing direct-core presentation and deduplicated requests.
 - Add a neutral single-execution native payload seam for domain reads and writes; retain accepted read adapters and fix discriminated object-union projection before clipping. Add standalone offline Pi/codemode and non-codemode nested batch evidence.
 

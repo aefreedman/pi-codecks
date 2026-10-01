@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertContractIdentity } from "./structured-contract-inventory.ts";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +38,8 @@ for (const definition of REPORT_TOOL_DEFINITIONS) {
   assert.deepEqual(definition.config.parameters, original.config.parameters);
   assert.deepEqual(definition.config.promptSnippet, original.config.promptSnippet);
   assert.deepEqual(definition.config.promptGuidelines, original.config.promptGuidelines);
-  for (const key of ["read", "outputSchema", "projectOutput", "cardTextPresentation"] as const) assert.equal(definition[key], undefined);
+  await assertContractIdentity(definition);
+  assert.equal(definition.cardTextPresentation, undefined);
   const aliases = { output_format: "json", observations_path: "cache.json", refresh_mode: "full", overlap_days: 0, completed_runs: 3, sprint_config: "Delivery", include_current_stats: false, min_delivered_effort: 0, include_filtered_runs: false, exclude_labels: [], csv_path: "report.csv" };
   assert.deepEqual(definition.config.prepareArguments?.(aliases), original.config.prepareArguments?.(aliases));
   for (const [entry, registry] of [[definition, nativeMoved], [original, nativeOriginal]] as const) {
@@ -47,7 +49,7 @@ for (const definition of REPORT_TOOL_DEFINITIONS) {
   const expected = nativeOriginal.get(`codecks_${definition.exportName}`);
   assert.deepEqual(actual.parameters, expected.parameters);
   assert.deepEqual(actual.promptGuidelines, expected.promptGuidelines);
-  assert.equal(actual.outputSchema, undefined);
+  assert.strictEqual(actual.outputSchema, definition.outputSchema);
 }
 const runs = [
   { id: "run-one", accountSeq: 1, startDate: "2026-02-02", endDate: "2026-02-08", completedAt: "2026-02-09T00:00:00Z", sprintConfig: { id: "config-a", name: "Delivery" }, stats: { finishStats: { progress: { done: [2, 10, 1] }, assignee: { "user-a": { done: { count: 1, effort: 6, noEffort: 0 } } } }, progress: { done: [3, 20, 0] } } },
@@ -147,12 +149,13 @@ try {
       : name === "velocity_observations_update" ? { observationsPath: "native.json", refreshMode: "full", fromDate: "2026-02-02", toDate: "2026-03-01", format: "json" }
       : { format: "json" };
     const native = await compare(name, args, "normal", true);
-    assert.equal((native.result as any).structuredContent, undefined, "No new structured-tool rollout");
-    assert.equal((native.result as any).isError, undefined, "Legacy native status remains unchanged");
+    assert.equal((native.result as any).structuredContent.ok, true, "Native success DTO");
+    assert.equal((native.result as any).isError, false);
     if (name !== "velocity_report") {
       const failure = await compare(name, { ...args, observationsPath: "forbidden.json" }, "forbidden", true);
       assert.equal(failure.payload!.ok, false);
-      assert.equal((failure.result as any).isError, undefined);
+      assert.equal((failure.result as any).structuredContent.ok, false);
+      assert.equal((failure.result as any).isError, true);
     }
   }
   for (const name of ["run_delivered_effort", "run_average_effort"] as const) {

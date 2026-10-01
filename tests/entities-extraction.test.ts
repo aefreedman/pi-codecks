@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertContractIdentity } from "./structured-contract-inventory.ts";
 import * as originals from "../src/codecks-core.ts";
 import * as reads from "../src/tools/entities/reads.ts";
 import * as writes from "../src/tools/entities/writes.ts";
@@ -73,9 +74,7 @@ for (const definition of ENTITY_TOOL_DEFINITIONS) {
   assert.deepEqual(definition.config.parameters, original.config.parameters);
   assert.deepEqual(definition.config.promptSnippet, original.config.promptSnippet);
   assert.deepEqual(definition.config.promptGuidelines, original.config.promptGuidelines);
-  assert.equal(definition.outputSchema, undefined);
-  assert.equal(definition.read, undefined);
-  assert.equal(definition.projectOutput, undefined);
+  await assertContractIdentity(definition);
   const aliases = { id: 12, deck_id: 12, milestone_id: 84, run_id: 91, output_format: "json", clear_description: true };
   assert.deepEqual(definition.config.prepareArguments?.(aliases), original.config.prepareArguments?.(aliases));
   register(definition, registrations);
@@ -107,8 +106,8 @@ try {
     if (name !== "user_lookup") {
       const forbidden = await compare(name, { ...targets[name], format: "json" }, "forbidden", {}, true);
       assert.equal(parse((forbidden.result as any).details.rawResult).ok, false);
-      assert.equal((forbidden.result as any).structuredContent, undefined);
-      assert.equal((forbidden.result as any).isError, undefined);
+      assert.equal((forbidden.result as any).structuredContent.ok, false);
+      assert.equal((forbidden.result as any).isError, true);
     }
   }
   for (const name of ["deck_get", "milestone_get", "run_get", "deck_update", "milestone_update", "run_update"] as const) {
@@ -147,7 +146,8 @@ try {
   for (const name of ["deck_get", "milestone_get", "run_get"] as const) {
     const validation = await compare(name, { format: "json" }, "normal", {}, true);
     assert.equal(parse((validation.result as any).details.rawResult).ok, false);
-    assert.equal((validation.result as any).structuredContent, undefined);
+    assert.equal((validation.result as any).structuredContent.ok, false);
+    assert.equal((validation.result as any).isError, true);
     assert.equal(validation.requests.length, 0);
   }
   await compare("milestone_get", { milestoneId: 84, format: "json" }, "normal", { isDeleted: true });

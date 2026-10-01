@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertContractIdentity } from "./structured-contract-inventory.ts";
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,7 +40,7 @@ const normalize = (value: any, workspace: string): any => {
 try {
 const catalog = composeCodecksToolCatalog(CARD_TOOL_DEFINITIONS);
 assert.equal(catalog.size, 19, "nineteen tools, plus two native read functions and one batch payload function");
-assert.equal(Object.keys(moved).length, 22);
+assert.deepEqual(Object.keys(moved).sort(), ["card_search", "card_list_missing_effort", "card_list_done_within_timeframe", "card_get", "card_get_batch", "card_get_formatted", "card_get_vision_board", "card_create", "card_set_parent", "card_update_run", "card_add_attachment", "card_update", "card_update_status", "card_add_to_hand", "card_remove_from_hand", "card_update_effort", "card_update_priority", "card_bulk_create", "card_bulk_update", "readCardGet", "readCardSearch", "executeCardGetBatchPayload", "executeCardListMissingEffort", "executeCardListDoneWithinTimeframe", "executeCardGetVisionBoard", "executeCardCreate", "executeCardSetParent", "executeCardUpdateRun", "executeCardAddAttachment", "executeCardUpdate", "executeCardUpdateStatus", "executeCardUpdateEffort", "executeCardUpdatePriority", "executeCardBulkCreate", "executeCardBulkUpdate"].sort());
 assert.strictEqual(reads.card_get_batch.executePayload, reads.executeCardGetBatchPayload);
 assert.equal(Object.hasOwn(originals, "executeCardGetBatchPayload"), false, "no facade export expansion");
 assert.throws(() => composeCodecksToolCatalog(CARD_TOOL_DEFINITIONS, CARD_TOOL_DEFINITIONS), /Duplicate/);
@@ -61,7 +62,7 @@ for (const definition of CARD_TOOL_DEFINITIONS) {
   const aliases = { id: 42, card_id: 42, run_id: 91, output_format: "json", location: "backlog", dry_run: true };
   assert.deepEqual(definition.config.prepareArguments?.(aliases), original.config.prepareArguments?.(aliases));
   assert.equal(!!definition.read, ["card_get", "card_search"].includes(definition.exportName));
-  assert.equal(!!definition.executePayload, definition.exportName === "card_get_batch");
+  await assertContractIdentity(definition);
   register(definition, registrations); register(original, baselineRegistrations);
   assert.deepEqual(registrations.get(`codecks_${definition.exportName}`).parameters, baselineRegistrations.get(`codecks_${definition.exportName}`).parameters);
 }
@@ -179,7 +180,7 @@ async function compare(name: string, args: any, mode: "normal" | "forbidden" = "
     assert.equal(result.status, 0, `${suite} against extracted tools:\n${result.stdout}\n${result.stderr}\n${result.error ?? ""}`);
     console.log(`direct extracted fixture suite passed: ${suite}`);
   }
-  console.log(`cards extraction passed: ${comparisons} side-by-side comparisons, 19 definitions, 22 direct exports, 14 extracted fixture suites`);
+  console.log(`cards extraction passed: ${comparisons} side-by-side comparisons, 19 definitions, 35 explicit direct exports, 14 extracted fixture suites`);
 } finally {
   globalThis.fetch = originalFetch;
   resetRateGate();

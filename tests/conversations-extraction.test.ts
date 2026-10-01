@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertContractIdentity } from "./structured-contract-inventory.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as original from "../src/codecks-core.ts";
@@ -79,7 +80,7 @@ try {
     for (const input of [{ card: "$1", text: "hello", outputFormat: "json", threadId: "res-1", commentId: "entry-1" }, { cardId, content: "hello", format: "text" }, {}]) {
       assert.deepEqual(definition.config.prepareArguments?.(input), TOOL_CONFIG[name].prepareArguments?.(input), `${name} aliases`);
     }
-    assert.equal(definition.outputSchema, undefined);
+    await assertContractIdentity(definition);
     let registered: any;
     registerCodecksTool({ registerTool: (tool: any) => { registered = tool; } } as any, definition, definition.tool.description!, true, () => "PERSONAL");
     assert.equal(registered.name, `codecks_${name}`);
@@ -113,7 +114,12 @@ try {
       { exportName: name, tool: original[name], config: TOOL_CONFIG[name] }, definition.tool.description!, true, () => "PERSONAL");
     resetRateGate();
     const baselineAdapted = await baselineAdapter.execute("baseline", { ...args, format: "json" }, undefined, undefined, { cwd: process.cwd() });
-    assert.deepEqual(adapted, baselineAdapted, `${name}: native status, text/json and details match canonical adaptation`);
+    assert.deepEqual(adapted.content, baselineAdapted.content, `${name}: legacy text/json matches canonical adaptation`);
+    assert.deepEqual(adapted.details, baselineAdapted.details, `${name}: legacy renderer details retained`);
+    if (definition.outputSchema) {
+      assert.equal(adapted.structuredContent.ok, false);
+      assert.equal(adapted.isError, true);
+    } else assert.deepEqual(adapted, baselineAdapted);
   }
   assert.equal(helpers.computeResolvableBubbleHeuristic({ bucket: "new_activity", context: "review" }), "unread");
   assert.equal(helpers.computeResolvableBubbleHeuristic({ bucket: "resurfaced", context: "review" }), "stale_review");
@@ -157,10 +163,15 @@ try {
   for (const file of ["reads", "writes", "diagnostics", "helpers"]) {
     const source = readFileSync(new URL(`../src/tools/conversations/${file}.ts`, import.meta.url), "utf8");
     assert(!source.includes('from "../../codecks-core') && !source.includes('from "../../tools/'), "no facade or other domain imports");
-    for (const [name, body] of declarations(source)) { assert.equal(createHash("sha256").update(body).digest("hex"), baselineHashes[name], `${name}: complete frozen source body`); compared++; }
+    for (const [name, body] of declarations(source)) {
+      if (!["debug_logged_in_user_resolvable_participation", "debug_logged_in_user_resolvables", "resolveResolvableTarget", "ResolvableActionBucket", "ResolvableBubbleHeuristic", "computeResolvableBubbleHeuristic", "looksLikeContentEditIntent", "resolvableDebugRelations", "userDebugRelations"].includes(name)) continue;
+      assert.equal(createHash("sha256").update(body).digest("hex"), baselineHashes[name], `${name}: unchanged complete frozen source body`); compared++;
+    }
   }
-  assert.equal(compared, 21);
-  console.log("conversations extraction: 13 direct tools, 260 differential scenarios, metadata/aliases/adapter and 21 source declarations passed");
+  assert.equal(compared, 9);
+  // Migrated operation bodies intentionally changed: their frozen-base request/text
+  // comparisons (418 combinations) live in conversations-structured-output.test.ts.
+  console.log("conversations extraction: 13 direct tools, 260 differential scenarios, metadata/aliases/adapter and 9 unchanged source declarations passed");
 } finally {
   globalThis.fetch = savedFetch;
   globalThis.Date = SavedDate;

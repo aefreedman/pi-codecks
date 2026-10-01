@@ -19,21 +19,21 @@ import { snapshotAttachmentSource, assertUnchangedAttachmentSource } from "../sr
 import { runWithAbortSignal } from "../src/runtime/operation-context.ts";
 import { resetRateGate } from "../src/runtime/pacing.ts";
 
+import { CONTRACTS, EXCLUSIONS, assertContractIdentity } from "./structured-contract-inventory.ts";
+
 const groups = [RAW_TOOL_DEFINITIONS, ENTITY_TOOL_DEFINITIONS, CONVERSATION_TOOL_DEFINITIONS, CARD_TOOL_DEFINITIONS, REPORT_TOOL_DEFINITIONS];
 const catalog = composeCodecksToolCatalog(...groups);
 assert.equal(catalog.size, 47);
+assert.equal(Object.keys(CONTRACTS).length, 42);
+assert.equal(Object.keys(EXCLUSIONS).length, 7);
+assert.deepEqual([...catalog.keys(), "profile_select", "tool_search"].sort(), [...Object.keys(CONTRACTS), ...Object.keys(EXCLUSIONS)].sort());
 assert.deepEqual([...catalog.keys()].sort(), [...CODECKS_EXPORTS].sort());
 assert.deepEqual(Object.keys(core).sort(), [...CODECKS_EXPORTS, "__test", "readCardGet", "readCardSearch", "runWithAbortSignal", "runExternalProviderIdentityCheck"].sort());
 for (const [name, definition] of catalog) {
   assert.strictEqual(getCodecksToolDefinition(name), definition);
   assert.strictEqual(core[name], definition.tool, `${name}: one canonical operation`);
   assert.equal(typeof definition.tool.execute, "function");
-  if (name !== "card_get" && name !== "card_search" && name !== "card_get_batch") {
-    assert.equal(definition.executePayload, undefined);
-    assert.equal(definition.read, undefined);
-    assert.equal(definition.outputSchema, undefined);
-    assert.equal(definition.projectOutput, undefined);
-  }
+  await assertContractIdentity(definition);
 }
 assert.strictEqual(getCodecksToolDefinition("card_get_batch").outputSchema, CARD_GET_BATCH_OUTPUT_SCHEMA);
 assert.equal(typeof getCodecksToolDefinition("card_get_batch").executePayload, "function");
@@ -100,4 +100,4 @@ const visit = (file: string, stack: string[]) => {
 for (const file of files) visit(file, []);
 assert.deepEqual([...readFileSync(resolve(root, "src/codecks-core.ts"), "utf8").matchAll(/^export const (\w+)/gm)].map(match => match[1]), ["__test"], "facade contains only established test-hook composition");
 assert.doesNotMatch(readFileSync(resolve(root, "src/pi/tool-catalog.ts"), "utf8"), /retainedDefinitions|TOOL_CONFIG|codecks-core/);
-console.log(`Modular architecture: ${catalog.size} canonical tools, exact established exports, three native contracts, raw local failures, singleton identities and ${files.length}-module acyclic graph passed.`);
+console.log(`Modular architecture: ${catalog.size} canonical tools, exact established exports, 42 explicit native contracts, raw local failures, singleton identities and ${files.length}-module acyclic graph passed.`);
