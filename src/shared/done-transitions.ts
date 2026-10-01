@@ -67,11 +67,31 @@ export const parseDoneTransitionFromDiff = (diff: unknown): { fromStatus: string
     return { fromStatus: fromStatus || "unknown", toStatus };
 };
 
+/** Opt-in operation-local facts captured before legacy presentation defaults.
+ * Snapshots contain only requested scalar observations and resolved relation fields.
+ * A missing resolved relation is distinct from an explicitly null relation.
+ */
+export type DoneTransitionObservation = {
+    event: DoneTransitionEvent;
+    activity: Record<string, unknown>;
+    transition: Record<string, unknown>;
+    card?: Record<string, unknown> | null;
+    changer?: Record<string, unknown> | null;
+    assignee?: Record<string, unknown> | null;
+    deck?: Record<string, unknown> | null;
+    relations: { card: "missing" | "null" | "resolved" | "unresolved"; changer: "missing" | "null" | "resolved" | "unresolved"; assignee: "missing" | "null" | "resolved" | "unresolved"; deck: "missing" | "null" | "resolved" | "unresolved" };
+};
+const observedFields = (source: CodecksEntity, fields: string[]): Record<string, unknown> =>
+    Object.fromEntries(fields.filter(key => source[key] !== undefined).map(key => [key, source[key]]));
+const observedRelationState = (raw: unknown, resolved: unknown): "missing" | "null" | "resolved" | "unresolved" =>
+    raw === undefined ? "missing" : raw === null ? "null" : resolved ? "resolved" : "unresolved";
+
 export const fetchDoneTransitionEvents = async (args: {
     sinceIso: string;
     until: Date;
     scanLimit: number;
     pageSize: number;
+    observe?: (observation: DoneTransitionObservation) => void;
 }): Promise<{ events: DoneTransitionEvent[]; scannedActivities: number; scanLimitReached: boolean }> =>
 {
     const events: DoneTransitionEvent[] = [];
@@ -216,6 +236,32 @@ export const fetchDoneTransitionEvents = async (args: {
                 currentDerivedStatus: resolvedCard?.derivedStatus ? String(resolvedCard.derivedStatus) : undefined,
                 currentVisibility: resolvedCard?.visibility ? String(resolvedCard.visibility) : undefined,
             });
+            if (args.observe)
+            {
+                const statusDiff = dataValue?.diff && typeof dataValue.diff === "object"
+                    ? (dataValue.diff as Record<string, unknown>).status : undefined;
+                const rawTransition = Array.isArray(statusDiff)
+                    ? { from: statusDiff[0], to: statusDiff[1] }
+                    : statusDiff && typeof statusDiff === "object"
+                        ? observedFields(statusDiff as CodecksEntity, ["from", "old", "previous", "to", "new", "next"]) : {};
+                const relation = (raw: unknown, resolved: CodecksEntity | undefined, fields: string[]) =>
+                    raw === null ? null : resolved ? observedFields(resolved, fields) : undefined;
+                args.observe({
+                    event: events[events.length - 1],
+                    activity: observedFields(activity, ["id", "createdAt", "type"]),
+                    transition: rawTransition,
+                    card: relation(activity.card, resolvedCard, ["cardId", "accountSeq", "title", "status", "derivedStatus", "visibility", "effort", "sprintId"]),
+                    changer: relation(activity.changer, resolvedChanger, ["id", "name", "fullName"]),
+                    assignee: relation(resolvedCard?.assignee, resolvedAssignee, ["id", "name", "fullName"]),
+                    deck: relation(resolvedCard?.deck, resolvedDeck, ["id", "title", "accountSeq"]),
+                    relations: {
+                        card: observedRelationState(activity.card, resolvedCard),
+                        changer: observedRelationState(activity.changer, resolvedChanger),
+                        assignee: observedRelationState(resolvedCard?.assignee, resolvedAssignee),
+                        deck: observedRelationState(resolvedCard?.deck, resolvedDeck),
+                    },
+                });
+            }
         }
 
         if (activities.length < pageLimit)
