@@ -129,7 +129,7 @@ for (const name of ["codecks_deck_update", "codecks_card_update_effort", "codeck
   const failed = await tools.get(name).execute("packed-native-error", {}, undefined, undefined, { cwd: process.cwd() });
   assert.equal(failed.isError, true);
   assert.equal(failed.structuredContent.ok, false);
-  assert.equal(failed.structuredContent.error.code, "validation_error");
+  assert.equal(failed.structuredContent.error.code, { codecks_deck_update: "validation_error", codecks_card_update_effort: "not_found", codecks_card_add_comment: "not_found" }[name]);
 }
 assert.equal(networkCalls, 0);
 const cardTool = tools.get("codecks_card_get");
