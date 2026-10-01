@@ -1,10 +1,13 @@
 import { Type } from "typebox";
 import type { CodecksToolDefinition } from "../../pi/tool-definition";
 import { outputFormatEnum, normalizeArgs, normalizeOutputFormatAlias, applyRunStatsAliases } from "../../pi/input-primitives";
-import { velocity_observations_update, velocity_report, run_delivered_effort, run_average_effort } from "./tools";
+import { executeVelocityObservationsUpdatePayload, executeVelocityReportPayload, executeRunDeliveredEffortPayload, executeRunAverageEffortPayload, velocity_observations_update, velocity_report, run_delivered_effort, run_average_effort } from "./tools";
+
+import { RUN_DELIVERED_OUTPUT_SCHEMA, RUN_AVERAGE_OUTPUT_SCHEMA, projectRunDeliveredOutput, projectRunAverageOutput } from "./reports-read-output";
+import { VELOCITY_UPDATE_OUTPUT_SCHEMA, VELOCITY_REPORT_OUTPUT_SCHEMA, projectVelocityUpdateOutput, projectVelocityReportOutput } from "./reports-file-output";
 
 export const REPORT_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
-  { exportName: "velocity_observations_update", tool: velocity_observations_update, config: {
+  { exportName: "velocity_observations_update", tool: velocity_observations_update, executePayload: executeVelocityObservationsUpdatePayload, outputSchema: VELOCITY_UPDATE_OUTPUT_SCHEMA, projectOutput: projectVelocityUpdateOutput, config: {
     parameters: Type.Object({
       observationsPath: Type.String({ minLength: 1, description: "Caller-owned JSON cache path inside the active workspace." }),
       refreshMode: Type.Optional(Type.Union([Type.Literal("incremental"), Type.Literal("date_window"), Type.Literal("full")])),
@@ -32,7 +35,7 @@ export const REPORT_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Keep observationsPath caller-owned and inside the active workspace; incremental refresh uses a 10-day overlap by default.",
     ],
   } },
-  { exportName: "velocity_report", tool: velocity_report, config: {
+  { exportName: "velocity_report", tool: velocity_report, executePayload: executeVelocityReportPayload, outputSchema: VELOCITY_REPORT_OUTPUT_SCHEMA, projectOutput: projectVelocityReportOutput, config: {
     parameters: Type.Object({
       observationsPath: Type.String({ minLength: 1, description: "Existing caller-owned observation cache path." }),
       preset: Type.Optional(Type.Union([Type.Literal("standard_velocity"), Type.Literal("none")])),
@@ -73,7 +76,7 @@ export const REPORT_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "csvPath and summaryMarkdownPath are independent workspace-contained outputs.",
     ],
   } },
-  { exportName: "run_delivered_effort", tool: run_delivered_effort, config: {
+  { exportName: "run_delivered_effort", tool: run_delivered_effort, executePayload: executeRunDeliveredEffortPayload, outputSchema: RUN_DELIVERED_OUTPUT_SCHEMA, projectOutput: projectRunDeliveredOutput, config: {
     parameters: Type.Object({
       sprintConfig: Type.Optional(Type.String({ description: "Optional Run/Sprint config name/id filter, for example 'dive'." })),
       user: Type.Optional(Type.String({ description: "Optional user name to resolve from recent card assignees/creators. Use 'me' for the logged-in user." })),
@@ -95,7 +98,7 @@ export const REPORT_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       "Use userId when known; user name lookup is derived from recent card assignees/creators.",
     ],
   } },
-  { exportName: "run_average_effort", tool: run_average_effort, config: {
+  { exportName: "run_average_effort", tool: run_average_effort, executePayload: executeRunAverageEffortPayload, outputSchema: RUN_AVERAGE_OUTPUT_SCHEMA, projectOutput: projectRunAverageOutput, config: {
     parameters: Type.Object({
       sprintConfig: Type.Optional(Type.String({ description: "Optional Run/Sprint config name/id filter, for example 'dive'." })),
       user: Type.Optional(Type.String({ description: "Optional user name to resolve from recent card assignees/creators. Use 'me' for the logged-in user." })),

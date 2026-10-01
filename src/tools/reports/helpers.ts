@@ -357,6 +357,7 @@ export const fetchDeliveredEffortEntries = async (args: {
     includeCurrentStats?: unknown;
 }): Promise<{
     entries: RunDeliveredEffortEntry[];
+    nativeEntries: Array<Record<string, unknown>>;
     warnings: string[];
     userId?: string;
     userLabel?: string;
@@ -393,8 +394,40 @@ export const fetchDeliveredEffortEntries = async (args: {
         ...entries.flatMap((entry) => entry.warnings.map((warning) => `Run #${entry.accountSeq ?? "?"}: ${warning}`)),
     ];
 
+    // Capture source facts before renderer summary defaults; calculations remain unchanged.
+    const nativeEntries = selected.map((run, index) => {
+        const stats = isRecord(run.stats) ? run.stats : undefined;
+        const finish = isRecord(stats?.finishStats) ? stats.finishStats : undefined;
+        // Factual bucket observations are independent of the legacy zero/priority fallback calculation.
+        const observeDone = (value: unknown) => {
+            const scalar = (v: unknown) => typeof v === "number" && Number.isFinite(v) ? v : null;
+            const fields = Array.isArray(value) ? { count: value[0], effort: value[1], noEffort: value[2] } : isRecord(value) ? value : {};
+            return { count: scalar(fields.count), effort: scalar(fields.effort), noEffort: scalar(fields.noEffort), effortStatus: !finish ? "missing_finish_stats" : scalar(fields.effort) === null ? "missing_done_bucket" : "observed" };
+        };
+        const runWide = observeDone(isRecord(finish?.progress) ? finish.progress.done : undefined);
+        const observedDone = userResult.userId ? observeDone(findRecordById(finish?.assignee, userResult.userId)?.done) : runWide;
+        const facts: Record<string, unknown> = {};
+        for (const key of ["accountSeq", "customLabel", "startDate", "endDate", "completedAt"]) if (Object.hasOwn(run, key)) facts[key] = run[key];
+        if (Object.hasOwn(run, "id")) facts.runId = run.id;
+        const container = userResult.userId ? findRecordById(finish?.assignee, userResult.userId) : isRecord(finish?.progress) ? finish.progress : undefined;
+        if (container && Object.hasOwn(container, "done")) {
+            const done = container.done;
+            if (done === null) facts.rawDone = null;
+            else if (Array.isArray(done)) {
+                const raw: Record<string, unknown> = {};
+                for (const [index, key] of ["count", "effort", "noEffort"].entries()) if (Object.hasOwn(done, index)) raw[key] = done[index];
+                facts.rawDone = raw;
+            } else if (isRecord(done)) {
+                const raw: Record<string, unknown> = {};
+                for (const key of ["count", "effort", "noEffort"]) if (Object.hasOwn(done, key)) raw[key] = done[key];
+                facts.rawDone = raw;
+            } else facts.rawDone = done;
+        }
+        return { ...facts, finishStatsPresence: stats && Object.hasOwn(stats, "finishStats") ? stats.finishStats === null ? "null" : "present" : "missing", observedDone, runWide, calculatedDelivered: entries[index].delivered, source: entries[index].source, ...(args.includeCurrentStats === true ? { current: entries[index].current } : {}) };
+    });
     return {
         entries,
+        nativeEntries,
         warnings,
         userId: userResult.userId,
         userLabel: userResult.userLabel,
