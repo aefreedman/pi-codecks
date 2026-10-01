@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Refactor internal runtime, shared contracts, domain operations and Pi definition ownership while preserving existing exports, activation, request safety and card-get/search contracts. Add architecture/dependency characterization and public ownership documentation.
+
 - Add a strict bounded `codecks_card_search` structured DTO and native error status while preserving legacy text, requests, modes and metrics. Distinguish source counts, emitted samples, scan/projection completeness and inferred facet buckets.
 - Align package-local Pi validation with stable 0.99.2; extend offline real-host direct/codemode search evidence.
 

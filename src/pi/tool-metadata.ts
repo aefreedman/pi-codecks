@@ -1,7 +1,3 @@
-import { Type } from "typebox";
-import type { ToolConfig } from "./tool-definition";
-import { outputFormatEnum } from "./input-primitives";
-
 export const DEFAULT_CODECKS_EXPORTS = [
   "query",
   "dispatch",
@@ -60,19 +56,3 @@ export type CodecksExportName = (typeof CODECKS_EXPORTS)[number];
 export const ENABLE_DEBUG_TOOLS = /^(1|true|yes)$/i.test(
   process.env.CODECKS_ENABLE_DEBUG_TOOLS ?? process.env.PI_CODECKS_ENABLE_DEBUG_TOOLS ?? "",
 );
-
-export const TOOL_CONFIG: Partial<Record<CodecksExportName, ToolConfig>> = {
-  query: {
-    parameters: Type.Object({
-      query: Type.Any({ description: "Query object or JSON string." }),
-    }),
-  },
-  dispatch: {
-    parameters: Type.Object({
-      path: Type.String({ description: "Dispatch path without /dispatch/, e.g. cards/create." }),
-      payload: Type.Any({ description: "Payload object or JSON string." }),
-      format: Type.Optional(outputFormatEnum),
-    }),
-  },
-
-};

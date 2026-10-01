@@ -30,6 +30,7 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
 
 const expectedFiles = [
   "index.ts", "src/", "skills/", "prompts/",
+  "docs/architecture.md",
   "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md",
   "references/", "README.md", "CHANGELOG.md", "LICENSE",
 ];
@@ -145,6 +146,8 @@ const mutationRuntimeSurface = [
   read("index.ts"),
   read("src/codecks-core.ts"),
   read("src/pi/tool-metadata.ts"),
+  read("src/tools/raw.ts"),
+  read("src/tools/raw-definitions.ts"),
   read("src/tools/cards/reads.ts"),
   read("src/tools/cards/writes.ts"),
   read("src/tools/cards/bulk.ts"),
