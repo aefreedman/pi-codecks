@@ -6137,8 +6137,61 @@ export const card_search = tool({
         outputMode: tool.schema.enum(["compact", "detailed", "counts"]).optional().describe("Response size/detail. compact is default and caps returned card summaries, detailed returns all matched summaries, counts returns aggregate facets and samples only."),
         format: outputFormatArg,
     },
-    async execute(args)
-    {
+    async execute(args) { return (await readCardSearch(args)).text; },
+    read: readCardSearch,
+});
+
+/** Internal native-payload read seam; never reconstruct data from rendered text. */
+export async function readCardSearch(args: Record<string, any>): Promise<{ text: string; payload: Record<string, unknown> }>
+{
+    let observedRows: CodecksEntity[] = [];
+    let scanObservations: CardSearchResult | undefined;
+    const success = (format: OutputFormat, action: string, text: string, data: Record<string, unknown>, warnings?: string[], recoveryHint?: string) => {
+        const mode = data.outputMode;
+        const rows = mode === "counts" ? observedRows.slice(0, 10) : mode === "detailed" ? observedRows : observedRows.slice(0, 25);
+        const native = { ...data, criteria: observeSearchCriteria(args),
+            ...(data.cards ? { cards: rows.map(observeSearchCard) } : {}),
+            ...(data.sampleCards ? { sampleCards: rows.map(observeSearchCard) } : {}),
+        };
+        for (const key of ["scannedCards", "scanLimit", "pageSize", "requestsAttempted", "queueWaitMs", "elapsedMs", "scanLimitReached"]) {
+            if (scanObservations?.[key] === undefined) delete native[key];
+            else native[key] = scanObservations[key];
+        }
+        return { text: toStructuredResult(format, action, text, data, warnings, recoveryHint), payload: { ok: true, action, data: native } };
+    };
+    const failure = (format: OutputFormat, action: string, category: ErrorCategory, message: string, data: Record<string, unknown> = {}) => ({
+        text: toStructuredErrorResult(format, action, category, message, data),
+        payload: { ok: false, action, error: { category, message: sanitizeValue(message), ...data, ...(data.criteria ? { criteria: observeSearchCriteria(args) } : {}) } },
+    });
+    function observeSearchCriteria(source: Record<string, any>): Record<string, unknown> {
+        return Object.fromEntries(["title", "text", "searchIn", "cardCode", "location", "deck", "milestone", "userId", "includeArchived", "includeDone", "limit", "scanLimit", "pageSize", "outputMode"].filter(key => source[key] !== undefined).map(key => [key, source[key]]));
+    }
+    function observeSearchCard(card: CodecksEntity): Record<string, unknown> {
+        const fields = ["cardId", "accountSeq", "title", "status", "derivedStatus", "visibility", "isDoc", "effort", "priority", "lastUpdatedAt", "dueDate"];
+        const out = Object.fromEntries(fields.filter(key => card[key] !== undefined).map(key => [key, card[key]]));
+        if (typeof card.accountSeq === "number" && Number.isSafeInteger(card.accountSeq) && card.accountSeq >= 0) {
+            Object.assign(out, { shortCode: formatShortCode(card.accountSeq), ...buildReusableCardRefs(card.accountSeq) });
+        }
+        for (const key of ["deck", "milestone", "assignee", "parentCard"]) {
+            if (card[key] === null) out[key] = null;
+            else if (card[key] && typeof card[key] === "object" && !Array.isArray(card[key])) out[key] = card[key];
+        }
+        if (card.masterTags === null) out.tags = null;
+        else if (Array.isArray(card.masterTags)) {
+            const labels = card.masterTags.map(entry => {
+                if (typeof entry === "string") return entry;
+                if (entry && typeof entry === "object") {
+                    return [entry.name, entry.title, entry.tag, entry.label, entry.id].find(value => typeof value === "string");
+                }
+                return undefined;
+            });
+            // Unresolved/malformed tag entries are unknown, not an observed empty tag set.
+            if (labels.every(value => typeof value === "string")) out.tags = labels;
+        }
+        const count = getCardChildCountInfo(card);
+        if (count.known) out.childCount = count.count;
+        return out;
+    }
         const format = args.format ?? "text";
         const inferredCode = args.title ? extractCardCode(args.title) : null;
         let result: CardSearchResult;
@@ -6164,7 +6217,7 @@ export const card_search = tool({
         catch (error)
         {
             const cause = error instanceof PagedCardScanFailure ? error.cause : error;
-            return toStructuredErrorResult(
+            return failure(
                 format,
                 "card-search",
                 cause instanceof CodecksOperationError ? cause.category : classifyApiErrorCategory(toErrorMessage(cause)),
@@ -6181,7 +6234,7 @@ export const card_search = tool({
 
         if (result.error)
         {
-            return toStructuredErrorResult(format, "card-search", "validation_error", result.error, {
+            return failure(format, "card-search", "validation_error", result.error, {
                 criteria: {
                     title: args.title ?? null,
                     text: args.text ?? null,
@@ -6200,8 +6253,10 @@ export const card_search = tool({
             });
         }
 
+        scanObservations = result;
         const matchedCards = result.matchedCards ?? result.cards ?? [];
         const cards = matchedCards.slice(0, args.limit ?? 20);
+        observedRows = cards;
         const outputMode: CardSearchOutputMode = args.outputMode ?? "compact";
         const compactCardLimit = 25;
         const detailCards = outputMode === "detailed" ? cards : cards.slice(0, compactCardLimit);
@@ -6236,7 +6291,7 @@ export const card_search = tool({
                 "No cards matched within this token's visible projects (not necessarily the whole organization).", "No cards matched the search criteria.",
                 "Tip: prefer bare partial text like `idf` over shell-style globs like `*idf*` unless you need wildcard matching.",
             ];
-            return toStructuredResult(
+            return success(
                 format,
                 "card-search",
                 lines.join("\n"),
@@ -6325,7 +6380,7 @@ export const card_search = tool({
             baseData.cards = detailCards.map((card) => normalizeCardSearchSummary(card, result.renderContext, outputMode === "detailed"));
         }
 
-        return toStructuredResult(
+        return success(
             format,
             "card-search",
             lines.join("\n"),
@@ -6338,8 +6393,8 @@ export const card_search = tool({
                 ? "Increase scanLimit or narrow the scope before relying on these results as exhaustive."
                 : (truncated ? "For bulk analysis, prefer outputMode='counts' or narrow the search before requesting detailed card rows." : undefined),
         );
-    },
-});
+
+}
 
 type MissingEffortCandidate = {
     card: CodecksEntity;

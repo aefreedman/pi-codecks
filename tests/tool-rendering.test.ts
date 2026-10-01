@@ -163,10 +163,10 @@ try {
     if (tool.name === "codecks_tool_search" || tool.name === "codecks_profile_select") continue;
     const name = tool.name.replace(/^codecks_/, "");
     const coreTool = (core as unknown as Record<string, Record<string, (args: unknown) => Promise<unknown>>>)[name];
-    const method = name === "card_get" ? "read" : "execute";
+    const method = name === "card_get" || name === "card_search" ? "read" : "execute";
     const original = coreTool[method];
     let received: unknown;
-    coreTool[method] = async args => { received = args; return name === "card_get" ? { text: cardRaw, payload: JSON.parse(cardRaw.match(/```json\n([\s\S]*)\n```/)![1]) } : cardRaw; };
+    coreTool[method] = async args => { received = args; return name === "card_search" ? { text: cardRaw, payload: { ok: true, action: "card-search", data: { matches: 0, rawMatches: 0, returnedCards: 0, outputMode: "compact", visibility: "token_visible_projects_only", complete: true, cards: [], criteria: {} } } } : name === "card_get" ? { text: cardRaw, payload: JSON.parse(cardRaw.match(/```json\n([\s\S]*)\n```/)![1]) } : cardRaw; };
     try {
       for (const format of ["json", "text"]) {
         const args = freeze({ cardId: "$abc", format, extraFixtureArgument: { untouched: true } });

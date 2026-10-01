@@ -49,7 +49,10 @@ function project(schema: ProjectionSchema, value: unknown, state: { complete: bo
   if (value === undefined) return undefined;
   if (schema.anyOf) {
     if (value === null && schema.anyOf.some(s => s.type === "null")) return null;
-    const selected = schema.anyOf.find(s => s.type !== "null");
+    const selected = schema.anyOf.some(s => s.type === "null")
+      ? schema.anyOf.find(s => s.type !== "null")
+      : schema.anyOf.find(s => (s.const === undefined && s.type === typeof value) || Value.Check(s, value));
+    if (!selected) throw Error("Invalid union");
     return project(selected, value, state);
   }
   if (schema.const !== undefined) {
@@ -102,3 +105,6 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
     return isCardGetOutput(output) ? output : cardGetContractError();
   } catch { return cardGetContractError(); }
 }
+
+// Shared bounded allowlist primitive; card-get schema and projection are unchanged.
+export { project as projectBoundedValue, codes as CODECKS_READ_ERROR_CODES };

@@ -7,6 +7,9 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Add a strict bounded `codecks_card_search` structured DTO and native error status while preserving legacy text, requests, modes and metrics. Distinguish source counts, emitted samples, scan/projection completeness and inferred facet buckets.
+- Align package-local Pi validation with stable 0.99.2; extend offline real-host direct/codemode search evidence.
+
 ### Added
 
 - Pilot a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.

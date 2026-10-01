@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import * as core from "./src/codecks-core";
+import { CARD_SEARCH_OUTPUT_SCHEMA, projectCardSearchOutput } from "./src/card-search-output";
 import { CARD_GET_OUTPUT_SCHEMA, projectCardGetOutput } from "./src/card-get-output";
 import { renderCodecksCall, renderCodecksResult } from "./src/codecks-renderers";
 import { CodecksProfileSession, isProfileConfigured } from "./src/codecks-profile-session";
@@ -1247,7 +1248,7 @@ export default function codecksTools(pi: ExtensionAPI) {
       promptSnippet: legacyPromptMetadata ? config.promptSnippet : undefined,
       promptGuidelines: legacyPromptMetadata ? config.promptGuidelines : undefined,
       parameters: config.parameters ?? ANY_PARAMETERS,
-      ...(exportName === "card_get" ? { outputSchema: CARD_GET_OUTPUT_SCHEMA } : {}),
+      ...(exportName === "card_get" ? { outputSchema: CARD_GET_OUTPUT_SCHEMA } : exportName === "card_search" ? { outputSchema: CARD_SEARCH_OUTPUT_SCHEMA } : {}),
       prepareArguments: config.prepareArguments,
       renderCall(args, theme, context) {
         return renderCodecksCall(exportName, args, theme, context);
@@ -1261,7 +1262,7 @@ export default function codecksTools(pi: ExtensionAPI) {
         const executionParams = cardGetTextFormat ? { ...normalizedParams, format: "json" } : normalizedParams;
         const result = await core.runWithAbortSignal(
           signal,
-          async () => exportName === "card_get" ? core.card_get.read(executionParams) : coreTool.execute(executionParams),
+          async () => exportName === "card_get" ? core.card_get.read(executionParams) : exportName === "card_search" ? core.card_search.read(executionParams) : coreTool.execute(executionParams),
           ctx.cwd ?? process.cwd(),
           onUpdate ? (progress) => {
             const prefix = exportName === "card_bulk_create" ? "Bulk create" : exportName === "card_bulk_update" ? "Bulk update" : "Codecks request";
@@ -1281,8 +1282,8 @@ export default function codecksTools(pi: ExtensionAPI) {
           } : undefined,
           profiles.profile,
         );
-        const cardRead = exportName === "card_get" ? result as Awaited<ReturnType<typeof core.readCardGet>> : undefined;
-        const structuredContent = exportName === "card_get" ? projectCardGetOutput(cardRead?.payload) : undefined;
+        const cardRead = exportName === "card_get" || exportName === "card_search" ? result as Awaited<ReturnType<typeof core.readCardGet>> : undefined;
+        const structuredContent = exportName === "card_get" ? projectCardGetOutput(cardRead?.payload) : exportName === "card_search" ? projectCardSearchOutput(cardRead?.payload) : undefined;
         if (structuredContent?.ok === false && (structuredContent.error.code === "output_contract_error" || structuredContent.error.code === "output_too_large")) {
           return { content: [{ type: "text", text: structuredContent.error.message }], details: { exportName, outputContractError: true }, structuredContent, isError: true };
         }

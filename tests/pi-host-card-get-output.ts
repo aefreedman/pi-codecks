@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { Type } from "typebox";
 import { createAgentSessionServices, createAgentSessionFromServices, createCodemodeExtension, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { isCardSearchOutput, CARD_SEARCH_OUTPUT_SCHEMA } from "../src/card-search-output.ts";
 import { isCardGetOutput, CARD_GET_OUTPUT_SCHEMA } from "../src/card-get-output.ts";
 
 // These are real file-loaded extensions and the SDK's exported codemode factory, not tool imitations.
@@ -140,16 +141,17 @@ try {
       assert.equal(loaded.indexOf(redactorPath) < loaded.indexOf(extensionPath), order === "before");
       assert.ok(loaded.indexOf(modifierPath) < loaded.indexOf(redactorPath));
     }
-    const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(fixture), model, thinkingLevel: "off", tools: ["codecks_card_get", "codemode", "pilot_throw", "pilot_abort"] });
+    const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(fixture), model, thinkingLevel: "off", tools: ["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"] });
     sessions.push(session); await session.bindExtensions({});
     session.extensionRunner.onError(error => extensionErrors.push(error));
     assert.equal(session.sessionFile, undefined);
-    assert.deepEqual(new Set(session.getActiveToolNames()), new Set(["codecks_card_get", "codemode", "pilot_throw", "pilot_abort"]));
-    assert.deepEqual(new Set(session.getCallableToolNames()), new Set(["codecks_card_get", "pilot_throw", "pilot_abort"]));
+    assert.deepEqual(new Set(session.getActiveToolNames()), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"]));
+    assert.deepEqual(new Set(session.getCallableToolNames()), new Set(["codecks_card_get", "codecks_card_search", "pilot_throw", "pilot_abort"]));
     const registry = session.getAllTools();
-    assert.deepEqual(new Set(registry.map(t => t.name)), new Set(["codecks_card_get", "codemode", "pilot_throw", "pilot_abort"]), "explicit SDK registry allowlist excludes unrelated Codecks tools and built-ins");
+    assert.deepEqual(new Set(registry.map(t => t.name)), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"]), "explicit SDK registry allowlist excludes unrelated Codecks tools and built-ins");
     assert.equal(resolve(registry.find(t => t.name === "codecks_card_get")!.sourceInfo.path), extensionPath);
     assert.deepEqual(session.getToolDefinition("codecks_card_get")!.outputSchema, CARD_GET_OUTPUT_SCHEMA);
+    assert.deepEqual(session.getToolDefinition("codecks_card_search")!.outputSchema, CARD_SEARCH_OUTPUT_SCHEMA);
     assert.ok(session.getToolDefinition("codemode")!.prepareLoadout, "actual codemode definition must be registered");
     session.subscribe(event => { if (event.type === "tool_execution_end") records.push({ scenario: state.scenario, ...event }); });
     return session;
@@ -163,11 +165,31 @@ try {
     try { await Promise.race([session.prompt(`pilot:${scenario}`), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error(`Timeout: ${scenario}`)), 20000); })]); }
     finally { clearTimeout(timer!); }
     const parent: any = session.messages.filter(m => m.role === "toolResult").at(-1); assert.ok(parent);
-    return { parent, children: records.slice(startRecord).filter(r => r.scenario === scenario && r.toolName === "codecks_card_get"), fetches: fakeFetches - before };
+    return { parent, children: records.slice(startRecord).filter(r => r.scenario === scenario && ["codecks_card_get", "codecks_card_search"].includes(r.toolName)), fetches: fakeFetches - before };
   };
   const text = (result: any) => result.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join("\n");
   const script = (args: Record<string, unknown>) => ({ code: `const value = await tools.codecks_card_get(${JSON.stringify(args)}); if (typeof value !== "object" || value === null) throw Error("unexpected text fallback"); text(value);` });
   if (!compatibility) {
+  const searchScript = (args: Record<string, unknown>) => ({ code: `const value = await tools.codecks_card_search(${JSON.stringify(args)}); if (typeof value !== "object" || value === null) throw Error("unexpected search text fallback"); text(value);` });
+  const searchDirect = await run("search-direct", "codecks_card_search", { outputMode: "detailed" });
+  assert.equal(searchDirect.parent.isError, false); assert.ok(isCardSearchOutput(searchDirect.children[0].result.structuredContent));
+  assert.equal(searchDirect.children[0].result.structuredContent.data.cards[0].effort, 0);
+  for (const [scenario, args, expectedOk, expectedRead] of [
+    ["search-counts", { outputMode: "counts", format: "text" }, true, "complete"],
+    ["search-validation", { location: "deck" }, false, "unknown"],
+    ["api-error", {}, false, "incomplete"],
+    ["partial-empty", { title: "No match", scanLimit: 500 }, true, "incomplete"],
+    ["partial-failure", { scanLimit: 1000 }, false, "incomplete"],
+  ] as const) {
+    const result = await run(scenario, "codemode", searchScript(args));
+    const child = result.children[0]; const value = child.result.structuredContent;
+    assert.ok(isCardSearchOutput(value)); assert.equal(value.ok, expectedOk); assert.equal(value.completeness.read, expectedRead);
+    assert.equal(child.isError, !expectedOk); assert.equal(result.parent.isError, false);
+    assert.equal(result.parent.details.calls[0].status, expectedOk ? "ok" : "error");
+    assert.equal(result.parent.nestedCalls.calls[0].status, expectedOk ? "ok" : "error");
+    if (scenario === "partial-empty") { assert.equal(value.data.matches, 0); assert.equal(value.data.rowsExhaustive, false); }
+    if (scenario === "search-counts") { assert.equal(value.data.returnedCards, 0); assert.equal(value.data.emittedRows, 1); assert.equal(value.data.rowsExhaustive, false); }
+  }
   const direct = await run("direct", "codecks_card_get", { cardId: "seq:0" });
   const directValue = direct.children[0].result.structuredContent;
   assert.equal(direct.parent.isError, false); assert.ok(isCardGetOutput(directValue)); assert.equal(directValue.ok, true);
@@ -253,7 +275,7 @@ try {
   }
   assert.deepEqual(extensionErrors, []); assert.equal(realTransport, 0); assert.equal(modelCalls, turns * 2);
   assert.ok(requests.length > 0); assert.ok(fakeFetches > 0);
-  console.log(`Real Pi card_get host pilot passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
+  console.log(`Real Pi card_get/search host passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
 } finally {
   for (const session of sessions) await session.dispose();
   globalThis.fetch = originalFetch; delete (globalThis as any).__piCardGetOutputTest;
