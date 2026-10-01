@@ -179,7 +179,7 @@ async function compare(name: string, args: any, mode: "normal" | "forbidden" = "
     assert.equal(result.status, 0, `${suite} against extracted tools:\n${result.stdout}\n${result.stderr}\n${result.error ?? ""}`);
     console.log(`direct extracted fixture suite passed: ${suite}`);
   }
-  console.log(`cards extraction passed: ${comparisons} side-by-side comparisons, 19 definitions, 21 direct exports, 14 extracted fixture suites`);
+  console.log(`cards extraction passed: ${comparisons} side-by-side comparisons, 19 definitions, 22 direct exports, 14 extracted fixture suites`);
 } finally {
   globalThis.fetch = originalFetch;
   resetRateGate();
