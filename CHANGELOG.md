@@ -28,6 +28,7 @@ and this project follows semantic versioning for public package releases.
 
 ### Fixed
 
+- Fetch accepted characterization history in CI and publication checkouts so frozen legacy comparisons run in clean hosted builds.
 - Do not establish title-match absence or uniqueness from incomplete card-get scans; preserve incomplete-read evidence without broadening scans, retries, or fallback.
 - Preserve explicit-null and missing observations in card-get DTOs and all error-candidate branches; infer type only from meaningful evidence and derive reusable references only from valid account sequences, without changing legacy renderer interfaces.
 - Bound and validate Codecks-produced DTOs before returning them; report producer byte overflow as `output_too_large`. Do not repair or enforce other extensions' output transformations.
