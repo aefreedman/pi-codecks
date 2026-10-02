@@ -7,6 +7,32 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.15.0] - 2026-10-02
+
+- Add closed, versioned producer-native outputs for the remaining 39 cards, entities, conversations and reports tools, including the deprecated blocker alias. Preserve legacy text/JSON interfaces, activation, input aliases, transport/pacing and credential scopes.
+- Preserve sampled/partial read observations and valid-only references; add effect-aware mutation/bulk/file receipts with bounded reconciliation evidence, fingerprints, genuine artifacts and no replay authorization. Publish the explicit 42-migrated/seven-excluded contract roster.
+- Wire all domain fixtures and standalone synthetic Pi direct/codemode/non-codemode consumers; migrate native error assertions without weakening attachment containment, snapshot drift, zero-upload/dispatch or legacy rejection identity checks.
+
+- Add a bounded v1 `codecks_card_get_batch` native DTO with ordered duplicate-preserving results, source versus projected counts, factual missing/failed/unqueried evidence, explicit per-card projection errors and independent per-card/batch UTF-8 budgets. Preserve existing direct-core presentation and deduplicated requests.
+- Add a neutral single-execution native payload seam for domain reads and writes; retain accepted read adapters and fix discriminated object-union projection before clipping. Add standalone offline Pi/codemode and non-codemode nested batch evidence.
+
+- Refactor internal runtime, shared contracts, domain operations and Pi definition ownership while preserving existing exports, activation, request safety and card-get/search contracts. Add architecture/dependency characterization and public ownership documentation.
+
+- Add a strict bounded `codecks_card_search` structured DTO and native error status while preserving legacy text, requests, modes and metrics. Distinguish source counts, emitted samples, scan/projection completeness and inferred facet buckets.
+- Align package-local Pi development dependencies, host tests and eval version checks with stable 1.0.0 and its TypeBox 1.3.27 host peer. Validate Node 22/24 in CI, matching the existing Node 22.19.0 minimum.
+
+### Added
+
+- Add a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.
+- Add deterministic producer DTO tests and an isolated real Pi/codemode host test that runs Codecks alone. Keep optional Safety Rails compatibility proof separate and test both load orders; neither package depends on the other.
+
+### Fixed
+
+- Fetch accepted characterization history in CI and publication checkouts so frozen legacy comparisons run in clean hosted builds.
+- Do not establish title-match absence or uniqueness from incomplete card-get scans; preserve incomplete-read evidence without broadening scans, retries, or fallback.
+- Preserve explicit-null and missing observations in card-get DTOs and all error-candidate branches; infer type only from meaningful evidence and derive reusable references only from valid account sequences, without changing legacy renderer interfaces.
+- Bound and validate Codecks-produced DTOs before returning them; report producer byte overflow as `output_too_large`. Do not repair or enforce other extensions' output transformations.
+
 ## [0.14.2] - 2026-09-29
 
 ### Changed

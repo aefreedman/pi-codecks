@@ -77,6 +77,11 @@ try {
     "skills/codecks-velocity-reporting/SKILL.md",
     "prompts/codecks-inbox.md",
     "references/cg-changelog/codecks-workflow.md",
+    "references/codecks/structured-output-index.md",
+    "references/codecks/cards-domain-output.md",
+    "references/codecks/entities-domain-output.md",
+    "references/codecks/conversations-domain-output.md",
+    "references/codecks/reports-domain-output.md",
     "README.md",
     "LICENSE",
   ]) {
@@ -115,6 +120,18 @@ codecksTools({
 });
 assert.ok(tools.has("codecks_card_get"), "core Codecks tools must load without workflow");
 assert.ok(tools.has("codecks_tool_search"), "dynamic Codecks tool loading must remain available without workflow");
+const migrated = ["codecks_card_get","codecks_card_search","codecks_card_get_batch","codecks_card_list_missing_effort","codecks_card_list_done_within_timeframe","codecks_card_get_vision_board","codecks_card_create","codecks_card_set_parent","codecks_card_update_run","codecks_card_add_attachment","codecks_card_update","codecks_card_update_status","codecks_card_add_to_hand","codecks_card_remove_from_hand","codecks_card_update_effort","codecks_card_update_priority","codecks_card_bulk_create","codecks_card_bulk_update","codecks_deck_get","codecks_deck_update","codecks_milestone_list","codecks_milestone_get","codecks_milestone_update","codecks_run_list","codecks_run_get","codecks_run_update","codecks_user_lookup","codecks_card_add_comment","codecks_card_add_review","codecks_card_add_blocker","codecks_card_add_block","codecks_card_reply_resolvable","codecks_card_edit_resolvable_entry","codecks_card_close_resolvable","codecks_card_reopen_resolvable","codecks_card_list_resolvables","codecks_list_open_resolvable_cards","codecks_list_logged_in_user_actionable_resolvables","codecks_velocity_observations_update","codecks_velocity_report","codecks_run_delivered_effort","codecks_run_average_effort"];
+assert.equal(migrated.length, 42);
+for (const name of migrated) assert.ok(tools.get(name)?.outputSchema, name + ": packed native schema");
+let networkCalls = 0;
+globalThis.fetch = async () => { networkCalls++; throw Error("packed fixture must stay offline"); };
+for (const name of ["codecks_deck_update", "codecks_card_update_effort", "codecks_card_add_comment"]) {
+  const failed = await tools.get(name).execute("packed-native-error", {}, undefined, undefined, { cwd: process.cwd() });
+  assert.equal(failed.isError, true);
+  assert.equal(failed.structuredContent.ok, false);
+  assert.equal(failed.structuredContent.error.code, { codecks_deck_update: "validation_error", codecks_card_update_effort: "not_found", codecks_card_add_comment: "not_found" }[name]);
+}
+assert.equal(networkCalls, 0);
 const cardTool = tools.get("codecks_card_get");
 const result = Object.freeze({ content: Object.freeze([{ type: "text", text: "exact published evidence" }]) });
 const theme = { fg: (_color, text) => text, bold: text => text };

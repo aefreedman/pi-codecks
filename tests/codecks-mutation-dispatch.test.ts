@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import registerCodecks from "../index.ts";
 import * as core from "../src/codecks-core.ts";
+import { executeLegacyCardWrite } from "../src/tools/cards/cards-write-output.ts";
+import { Value } from "typebox/value";
+import { CARD_WRITE_OUTPUT_SCHEMAS } from "../src/tools/cards/cards-write-output.ts";
 const codecksTest = core.__test;
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 import { formatLiveErrorEvidence } from "./live-error-evidence.ts";
@@ -33,6 +36,42 @@ await tools.get("codecks_profile_select")!.execute("fixture", { profile: "PERSON
 const dispatch = tools.get("codecks_dispatch")!;
 const query = tools.get("codecks_query")!;
 const attachment = tools.get("codecks_card_add_attachment")!;
+function assertAttachmentFailure(result: any, diagnostic: RegExp, signing: string) {
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.ok, false);
+  assert.equal(Value.Check(CARD_WRITE_OUTPUT_SCHEMAS.card_add_attachment, result.structuredContent), true);
+  assert.match(result.content[0].text, diagnostic);
+  assert.match(result.structuredContent.error.message, diagnostic);
+  assert.equal(result.structuredContent.effects.certainty, "definitely_unsent");
+  assert.equal(result.structuredContent.effects.dispatchInvoked, false);
+  assert.equal(result.structuredContent.effects.readback, "not_performed");
+  assert.equal(result.structuredContent.effects.replay, "not_authorized");
+  if (result.structuredContent.effects.upload) {
+    assert.equal(result.structuredContent.effects.upload.signing, signing);
+    assert.equal(result.structuredContent.effects.upload.storage, "not_attempted");
+    assert.equal(result.structuredContent.effects.upload.registration, "not_attempted");
+  } else assert.equal(signing, "not_attempted");
+}
+async function assertLegacyAttachmentFailure(args: Record<string, unknown>, cwd: string, diagnostic: RegExp) {
+  const tool = core.card_add_attachment;
+  const saved = tool.executePayload;
+  let originalError: unknown;
+  let calls = 0;
+  // The core execute uses this exact bridge and producer. Capture its original
+  // error in one invocation under matching canonical cwd/profile context.
+  const operation = (input: any, callback?: (error: unknown) => void) => {
+    calls++;
+    return (saved as any)(input, (error: unknown) => { originalError = error; callback?.(error); });
+  };
+  try {
+    await assert.rejects(() => core.runWithAbortSignal(undefined, () => executeLegacyCardWrite(operation, args), cwd, undefined, "PERSONAL"), error => {
+      assert.strictEqual(error, originalError);
+      assert.match(String(error), diagnostic);
+      return true;
+    });
+    assert.equal(calls, 1);
+  } finally { tool.executePayload = saved; }
+}
 const CARD_ID = "11111111-1111-4111-8111-111111111111";
 const DISPATCH_PATHS = [
   "cards/create", "cards/update", "cards/addFile", "decks/update", "milestones/update",
@@ -214,10 +253,9 @@ try {
     assert.notEqual(source.canonicalPath, secondSource.canonicalPath, "canonical source identity remains exact");
 
     fetchCalls = 0;
-    await assert.rejects(
-      attachment.execute("attachment-outside", { cardId: CARD_ID, filePath: outsideFile }, new AbortController().signal, undefined, directContext(temp)),
-      /attachment_outside_workspace/,
-    );
+    const outsideResult = await attachment.execute("attachment-outside", { cardId: CARD_ID, filePath: outsideFile }, new AbortController().signal, undefined, directContext(temp));
+    assertAttachmentFailure(outsideResult, /attachment_outside_workspace/, "not_attempted");
+    await assertLegacyAttachmentFailure({ cardId: CARD_ID, filePath: outsideFile }, temp, /attachment_outside_workspace/);
     assert.equal(fetchCalls, 0, "outside-workspace sources are blocked without an approval escape hatch");
 
     const escapeDir = path.join(temp, "escape-link");
@@ -230,10 +268,10 @@ try {
     }
     if (junctionCreated) {
       fetchCalls = 0;
-      await assert.rejects(
-        attachment.execute("attachment-escape", { cardId: CARD_ID, filePath: path.join(escapeDir, "proof.txt") }, new AbortController().signal, undefined, directContext(temp)),
-        /attachment_symlink_escape/,
-      );
+      const escapeArgs = { cardId: CARD_ID, filePath: path.join(escapeDir, "proof.txt") };
+      const escapeResult = await attachment.execute("attachment-escape", escapeArgs, new AbortController().signal, undefined, directContext(temp));
+      assertAttachmentFailure(escapeResult, /attachment_symlink_escape/, "not_attempted");
+      await assertLegacyAttachmentFailure(escapeArgs, temp, /attachment_symlink_escape/);
       assert.equal(fetchCalls, 0, "symlink/junction escapes fail before network access");
     }
 
@@ -249,12 +287,15 @@ try {
       if (url === "https://upload.test/object" || url.includes("/dispatch/")) uploadOrDispatchCalls += 1;
       return new Response(JSON.stringify({ data: { _root: { loggedInUser: "user-1" }, user: { "user-1": { id: "user-1", name: "Fixture" } } } }), { status: 200 });
     }) as typeof fetch;
-    await assert.rejects(
-      attachment.execute("attachment-change", { cardId: CARD_ID, filePath: inside }, new AbortController().signal, undefined, directContext(temp)),
-      /changed after inspection/,
-    );
+    const changeResult = await attachment.execute("attachment-change", { cardId: CARD_ID, filePath: inside }, new AbortController().signal, undefined, directContext(temp));
+    assertAttachmentFailure(changeResult, /changed after inspection/, "returned");
     assert.equal(fetchCalls, 2, "TOCTOU fixture reads actor and may sign once but cannot upload changed bytes");
     assert.equal(uploadOrDispatchCalls, 0, "changed files cause no upload or card mutation");
+    await writeFile(inside, "proof-a");
+    fetchCalls = 0;
+    await assertLegacyAttachmentFailure({ cardId: CARD_ID, filePath: inside }, temp, /changed after inspection/);
+    assert.equal(fetchCalls, 2, "legacy TOCTOU also reads actor/signs once");
+    assert.equal(uploadOrDispatchCalls, 0, "neither interface dispatches/uploads changed bytes");
 
     await writeFile(inside, "proof-a");
     const successfulMutationUrls: string[] = [];

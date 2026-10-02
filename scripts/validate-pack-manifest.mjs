@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { pack, packageRoot } from "./package-archive.mjs";
@@ -7,12 +7,21 @@ const requiredFiles = [
   "CHANGELOG.md",
   "LICENSE",
   "README.md",
+  "docs/architecture.md",
   "docs/external-credential-helper-protocol.md",
   "docs/resolvable-inbox-heuristics.md",
   "index.ts",
   "package.json",
   "prompts/codecks-inbox.md",
   "references/cg-changelog/codecks-workflow.md",
+  "references/codecks/structured-output-index.md",
+  "references/codecks/card-get-output.md",
+  "references/codecks/card-search-output.md",
+  "references/codecks/card-get-batch-output.md",
+  "references/codecks/cards-domain-output.md",
+  "references/codecks/entities-domain-output.md",
+  "references/codecks/conversations-domain-output.md",
+  "references/codecks/reports-domain-output.md",
   "skills/codecks-velocity-reporting/SKILL.md",
   "skills/using-codecks/SKILL.md",
   "src/codecks-core.ts",
@@ -23,6 +32,15 @@ const requiredFiles = [
   "src/pi-tool-compat.ts",
   "src/velocity-report.ts",
 ];
+// Every source owner must ship, not just the historical facade modules.
+function requireSourceTree(directory, prefix = "src") {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const relativePath = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) requireSourceTree(path.join(directory, entry.name), relativePath);
+    else requiredFiles.push(relativePath);
+  }
+}
+requireSourceTree(path.join(packageRoot, "src"));
 const repositoryOnlyFiles = ["docs/release.md", "docs/testing.md"];
 
 const allowedExact = new Set(["CHANGELOG.md", "LICENSE", "README.md", "index.ts", "package.json"]);

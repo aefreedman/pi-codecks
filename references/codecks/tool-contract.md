@@ -15,3 +15,7 @@ Velocity retrieval and reporting are separate contracts. `codecks_velocity_obser
 `calendar_delivered` is the `standard_velocity` default and includes delivered cards outside Runs. `run_attributed` uses completed-Run `finishStats` and models multi-week totals over calendar days. Missing Run statistics and card estimates remain distinct from observed zero. Configuration filters use exact stable IDs or unambiguous exact names. `excludeDecks` accepts exact deck IDs or unambiguous titles (for example `Test`) for calendar-delivered reports and is rejected for Run-attributed snapshots, which cannot safely subtract deck-level effort.
 
 Mutation titles, content, tags, and Deck descriptions reject U+FFFD and unpaired UTF-16 surrogates at the tool boundary. This prevents known-corrupt input from being written; it does not diagnose upstream encoding conversion.
+
+## Structured search output
+
+`codecks_card_search` declares a strict versioned output schema independently of card-get. See [the search DTO reference](card-search-output.md) for source counts, emitted rows, bounded planning metadata, inferred facet buckets, coverage, and native failures. Other tools remain legacy.

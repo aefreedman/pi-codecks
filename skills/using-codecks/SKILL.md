@@ -50,6 +50,7 @@ Use this skill for day-to-day Codecks card operations and related Free-plan Deck
 
 ## Reference routing
 
+- For scripts consuming native DTOs, read the [structured-output roster and contract index](../../references/codecks/structured-output-index.md). Inspect `ok` even when codemode resolves; never infer replay permission from a receipt or output error.
 - For card lookup, ordinary create/update, lifecycle, effort, search, or vision-board work, read [references/card-operations.md](references/card-operations.md).
 - Before opening or modifying a Comment, Review, Blocker, or resolvable thread, read [references/conversations-and-resolvables.md](references/conversations-and-resolvables.md).
 - For Deck descriptions, milestones, Runs, or card Run assignment, read [references/decks-milestones-and-runs.md](references/decks-milestones-and-runs.md).

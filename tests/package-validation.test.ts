@@ -30,6 +30,7 @@ for (const registration of ["index.ts", "skills", "prompts"]) {
 
 const expectedFiles = [
   "index.ts", "src/", "skills/", "prompts/",
+  "docs/architecture.md",
   "docs/external-credential-helper-protocol.md", "docs/resolvable-inbox-heuristics.md",
   "references/", "README.md", "CHANGELOG.md", "LICENSE",
 ];
@@ -60,10 +61,10 @@ assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-
 assert.equal(packageJson.dependencies?.typebox, undefined, "Pi supplies TypeBox; do not install a production copy.");
 assert.equal(packageJson.peerDependencies?.typebox, "*");
 assert.deepEqual(packageJson.peerDependenciesMeta?.typebox, { optional: true });
-assert.equal(packageJson.devDependencies?.typebox, "1.3.8");
+assert.equal(packageJson.devDependencies?.typebox, "1.3.27");
 for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
   assert.equal(packageJson.peerDependencies?.[name], "*");
-  assert.equal(packageJson.devDependencies?.[name], "0.99.1");
+  assert.equal(packageJson.devDependencies?.[name], "1.0.0");
 }
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);
@@ -90,6 +91,8 @@ assert.match(publicCi, /pack:validate/);
 assert.match(publicCi, /pack:smoke/);
 assert.doesNotMatch(publicCi, /CODECKS_|test:integration|secrets\./);
 assert.match(publicCi, /timeout-minutes:/);
+assert.match(publicCi, /fetch-depth: 0/, "CI must fetch frozen comparison history");
+assert.match(publishWorkflow, /fetch-depth: 0/, "publication tests must fetch frozen comparison history");
 for (const workflow of workflows) {
   assert.doesNotMatch(workflow, /uses:\s+[^\s#]+@v\d+\b/, "third-party Actions must use reviewed full commit SHAs");
   for (const match of workflow.matchAll(/uses:\s+[^\s#]+@([^\s#]+)/g)) {
@@ -144,6 +147,30 @@ const packageFacingDocs = [
 const mutationRuntimeSurface = [
   read("index.ts"),
   read("src/codecks-core.ts"),
+  read("src/pi/tool-metadata.ts"),
+  read("src/tools/raw.ts"),
+  read("src/tools/raw-definitions.ts"),
+  read("src/tools/cards/reads.ts"),
+  read("src/tools/cards/writes.ts"),
+  read("src/tools/cards/bulk.ts"),
+  read("src/tools/cards/helpers.ts"),
+  read("src/tools/cards/definitions.ts"),
+  read("src/tools/reports/tools.ts"),
+  read("src/tools/reports/helpers.ts"),
+  read("src/tools/reports/definitions.ts"),
+
+
+  read("src/tools/entities/reads.ts"),
+  read("src/tools/entities/writes.ts"),
+  read("src/tools/entities/helpers.ts"),
+  read("src/tools/entities/definitions.ts"),
+  read("src/tools/conversations/reads.ts"),
+  read("src/tools/conversations/writes.ts"),
+  read("src/tools/conversations/helpers.ts"),
+  read("src/tools/conversations/diagnostics.ts"),
+  read("src/tools/conversations/definitions.ts"),
+  read("src/pi/register-tools.ts"),
+  read("src/runtime/transport.ts"),
   read("src/codecks-tool-loading.ts"),
   readme,
   read("skills/using-codecks/SKILL.md"),
@@ -154,8 +181,8 @@ assert.doesNotMatch(mutationRuntimeSurface, /authorizationToken|workflow_authori
 // Bulk create is a generic Codecks import primitive, not a consumer-project coordinator.
 // Keep this scoped to its public/runtime guidance surfaces so ordinary Codecks milestone
 // metadata and Hero parent support elsewhere in the package remain valid.
-const bulkCreateCore = read("src/codecks-core.ts").match(/export const card_bulk_create[\s\S]*?(?=export const card_bulk_update)/)?.[0] ?? "";
-const bulkCreateRegistration = read("index.ts").match(/card_bulk_create:\s*\{[\s\S]*?(?=\n\s*card_bulk_update:)/)?.[0] ?? "";
+const bulkCreateCore = read("src/tools/cards/bulk.ts").match(/export const card_bulk_create[\s\S]*?(?=export const card_bulk_update)/)?.[0] ?? "";
+const bulkCreateRegistration = read("src/tools/cards/definitions.ts").match(/exportName: "card_bulk_create"[\s\S]*?(?=exportName: "card_bulk_update")/)?.[0] ?? "";
 const bulkCreateLoader = read("src/codecks-tool-loading.ts").match(/\{ name: "codecks_card_bulk_create",[\s\S]*?(?=\n\s*\{ name:)/)?.[0] ?? "";
 const bulkCreateContractSurfaces = [
   bulkCreateCore,

@@ -1,6 +1,6 @@
 # Codecks dynamic tool-loading eval
 
-This package-local behavioral eval compares `all-active`, `balanced`, and `loader-only` in **fresh Pi 0.99.1 JSON subprocesses**. It is not a skill eval: sessions, skills, prompt templates, built-in tools, discovered extensions, and context files are disabled.
+This package-local behavioral eval compares `all-active`, `balanced`, and `loader-only` in **fresh Pi 1.0.0 JSON subprocesses**. It is not a skill eval: sessions, skills, prompt templates, built-in tools, discovered extensions, and context files are disabled.
 
 ## Safety boundary
 
@@ -26,4 +26,4 @@ npx tsx evals/tool-loading/run-eval.ts --model openai-codex/gpt-5.6-terra:medium
 
 `--keep` retains raw provider payload captures in the system temporary directory; they are deleted by default. Sanitized summaries are written beneath ignored `results/`. `--include-events` adds only event type/tool-name crumbs to that summary.
 
-A live runner requires the worktree-local Pi development dependency at `0.99.1`. `--dry-run` validates the committed eval contract without contacting a model or requiring that peer dependency.
+A live runner requires the worktree-local Pi development dependency at `1.0.0`. `--dry-run` validates the committed eval contract without contacting a model or requiring that peer dependency.
