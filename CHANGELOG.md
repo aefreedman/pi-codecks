@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.15.0] - 2026-10-02
+
 - Add closed, versioned producer-native outputs for the remaining 39 cards, entities, conversations and reports tools, including the deprecated blocker alias. Preserve legacy text/JSON interfaces, activation, input aliases, transport/pacing and credential scopes.
 - Preserve sampled/partial read observations and valid-only references; add effect-aware mutation/bulk/file receipts with bounded reconciliation evidence, fingerprints, genuine artifacts and no replay authorization. Publish the explicit 42-migrated/seven-excluded contract roster.
 - Wire all domain fixtures and standalone synthetic Pi direct/codemode/non-codemode consumers; migrate native error assertions without weakening attachment containment, snapshot drift, zero-upload/dispatch or legacy rejection identity checks.
@@ -17,11 +19,11 @@ and this project follows semantic versioning for public package releases.
 - Refactor internal runtime, shared contracts, domain operations and Pi definition ownership while preserving existing exports, activation, request safety and card-get/search contracts. Add architecture/dependency characterization and public ownership documentation.
 
 - Add a strict bounded `codecks_card_search` structured DTO and native error status while preserving legacy text, requests, modes and metrics. Distinguish source counts, emitted samples, scan/projection completeness and inferred facet buckets.
-- Align package-local Pi validation with stable 0.99.2; extend offline real-host direct/codemode search evidence.
+- Align package-local Pi development dependencies, host tests and eval version checks with stable 1.0.0 and its TypeBox 1.3.27 host peer. Validate Node 22/24 in CI, matching the existing Node 22.19.0 minimum.
 
 ### Added
 
-- Pilot a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.
+- Add a strict, versioned, bounded `codecks_card_get` structured result for Pi scripts, including `format: text`, external provenance, completeness, reusable card references, and explicit success/error outcomes. Validate projection in production; domain failures also set native `isError`.
 - Add deterministic producer DTO tests and an isolated real Pi/codemode host test that runs Codecks alone. Keep optional Safety Rails compatibility proof separate and test both load orders; neither package depends on the other.
 
 ### Fixed

@@ -34,7 +34,7 @@ Producer limits: each string 2048 Unicode code points; cards 3000; samples 10; t
 
 Failure carries bounded `error: { code, message }` and optional `evidence` containing only supplied criteria, recoveryHint and observed scan metrics. Codes match the [card-get bounded code list](card-get-output.md#errors-and-native-status); unknown internal categories map to `api_error`. Failed pages preserve earlier scan/request measurements and `read: incomplete`, not absence evidence. Contract failures use `output_contract_error` and projection false.
 
-Every producer failure sets native `isError: true`. Pi 0.99.2 codemode still resolves structured data before native status, so inspect `ok`; nested receipts retain child `error` status even when the script parent succeeds. Host argument validation, policy blocking, pre-abort or thrown failures can have no DTO: catch those separately. External hooks may replace or drop data; producer validation is not post-hook policing or a universal secret-absence guarantee.
+Every producer failure sets native `isError: true`. Pi 1.0.0 codemode still resolves structured data before native status, so inspect `ok`; nested receipts retain child `error` status even when the script parent succeeds. Host argument validation, policy blocking, pre-abort or thrown failures can have no DTO: catch those separately. External hooks may replace or drop data; producer validation is not post-hook policing or a universal secret-absence guarantee.
 
 ## Offline evidence
 

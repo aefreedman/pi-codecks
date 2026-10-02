@@ -61,10 +61,10 @@ assert.doesNotMatch(packageJson.scripts?.["test:unit"] ?? "", /codecks-mutation-
 assert.equal(packageJson.dependencies?.typebox, undefined, "Pi supplies TypeBox; do not install a production copy.");
 assert.equal(packageJson.peerDependencies?.typebox, "*");
 assert.deepEqual(packageJson.peerDependenciesMeta?.typebox, { optional: true });
-assert.equal(packageJson.devDependencies?.typebox, "1.3.8");
+assert.equal(packageJson.devDependencies?.typebox, "1.3.27");
 for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-tui"]) {
   assert.equal(packageJson.peerDependencies?.[name], "*");
-  assert.equal(packageJson.devDependencies?.[name], "0.99.2");
+  assert.equal(packageJson.devDependencies?.[name], "1.0.0");
 }
 assert.equal(packageJson.peerDependencies?.["@aefree/pi-workflow"], undefined);
 assert.equal(packageJson.peerDependenciesMeta?.["@aefree/pi-workflow"], undefined);

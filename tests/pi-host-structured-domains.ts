@@ -164,7 +164,7 @@ try {
   for (const message of session.messages.filter((m: any) => m.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false);
   assert.deepEqual(extensionErrors, []);
   assert.equal(turns, 26); assert.equal(modelCalls, 52);
-  console.log(JSON.stringify({ status: "passed", pi: "0.99.2", turns, modelCalls, fakeFetches: requests.length, realTransports: 0, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireJSON: "not executed", wireRPC: "not executed" }));
+  console.log(JSON.stringify({ status: "passed", pi: "1.0.0", turns, modelCalls, fakeFetches: requests.length, realTransports: 0, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireJSON: "not executed", wireRPC: "not executed" }));
 } finally {
   session?.dispose(); globalThis.fetch = previousFetch; resetRateGate();
   for (const path of artifacts) await rm(dirname(path), { recursive: true, force: true });

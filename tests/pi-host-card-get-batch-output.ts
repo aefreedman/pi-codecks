@@ -105,5 +105,5 @@ try {
   }
   for (const message of session.messages.filter((m: any) => m.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false, "ordinary transcript does not persist DTOs");
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ status: "passed", pi: "0.99.2", turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: 10, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
+  console.log(JSON.stringify({ status: "passed", pi: "1.0.0", turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: 10, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
 } finally { session?.dispose(); globalThis.fetch = originalFetch; await rm(fixture, { recursive: true, force: true }); }

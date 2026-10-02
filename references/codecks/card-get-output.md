@@ -40,7 +40,7 @@ The byte bound is independent of character bounds: multibyte text or many popula
 
 ## Errors and native status
 
-Domain failures return native `isError: true` **and** a typed `ok: false` DTO. Pi 0.99.2 codemode resolves structured data before checking native error status, so scripts **must inspect `ok`**. A successful script parent is not evidence of successful children: codemode's call receipts and Pi nested-call records retain child error status.
+Domain failures return native `isError: true` **and** a typed `ok: false` DTO. Pi 1.0.0 codemode resolves structured data before checking native error status, so scripts **must inspect `ok`**. A successful script parent is not evidence of successful children: codemode's call receipts and Pi nested-call records retain child error status.
 
 The bounded codes are `validation_error`, `not_found`, `ambiguous_match`, `incomplete_read`, `conflict`, `out_of_scope`, `forbidden`, `disabled_by_org`, `caller_aborted`, `rate_limit_queue_aborted`, `request_timeout`, `rate_limited`, `scan_queue_full`, `credential_rate_limited`, `response_too_large`, `invalid_response_stream`, `file_error`, `unsupported_token`, `credential_profile_mismatch`, `personal_token_required`, `org_actor_unverified`, `authentication_rejected`, `account_mismatch`, `missing_scope`, `api_error`, `output_contract_error`, `output_too_large`. Unknown internal error categories map to `api_error`; messages are bounded evidence, not instructions.
 
