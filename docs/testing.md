@@ -22,6 +22,10 @@ npm run pack:dry-run
 
 Public GitHub Actions run only these safe checks. Forked pull requests never receive Codecks secrets.
 
+### Frozen conversation producer comparisons
+
+The conversation structured-output suite compares current producers with byte-exact snapshots in `tests/fixtures/conversations-baseline/`. Each snapshot is checked against its recorded Git blob hash before imports are redirected to the current canonical infrastructure in a temporary directory. The original commit is provenance only: tests do not call Git or require its history. Shallow checkouts and deleted feature branches are supported. These historical fixtures are repository-only and excluded from the npm artifact; do not regenerate them from current production code or update their hashes to make a regression pass.
+
 ### Isolated real Pi-host lifecycle smoke
 
 Run `npm run test:pi-host-smoke` to exercise the **installed Pi SDK's real** `AgentSessionRuntime` and the package's edited `index.ts` extension, not a manually emitted extension callback. The script creates in-memory Pi settings and sessions plus a temporary agent directory, loads only the checkout extension and an inline event observer, and registers a deterministic local model provider via `ModelRuntime.registerProvider`. Seven actual prompt turns call the registered `codecks_profile_select` tool through Pi, then complete on real `agent_settled` events. It confirms task-scoped PERSONAL restoration, session-scoped PERSONAL persistence, and `session_start` resets on `startup`, in-memory `newSession()` and in-memory `fork()`. It refuses all network fetches and asserts none occurred; synthetic profile strings are never resolved as Codecks credentials. Extension loader/runtime errors and 15-second per-operation timeouts fail the smoke; sessions, environment and temporary files are cleaned up. This test intentionally does **not** cover persisted-file `switchSession()`/resume, a real Pi CLI user session, or an in-flight Codecks request at profile selection. Run it separately from `npm test`; it does not require live credentials or Codecks access.

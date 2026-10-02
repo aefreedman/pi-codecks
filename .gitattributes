@@ -1,1 +1,3 @@
 references/** text eol=lf
+# Preserve frozen producer bytes and their recorded Git blob hashes on every platform.
+tests/fixtures/conversations-baseline/*.ts.txt -text
