@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,15 +15,22 @@ import { resetRateGate } from "../src/runtime/pacing.ts";
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 useInertEnvironmentCredentialProvider();
 
-// Execute actual frozen producers with the same canonical singleton infrastructure.
-// The fixture is private/temporary, never an alternate production implementation.
-const base = "764e46695b7e936616538350b414d4f40a00811e";
+// Execute byte-exact frozen producers with the same canonical singleton infrastructure.
+// Repository-only snapshots are verified before temporary import rewriting; no Git history is required.
+const frozenFiles = [
+  ["helpers", "ecee0ed37ec7962494907e2b06acda5b72428fca"],
+  ["reads", "6858229e6feb7ec6b9d8e4c9557226fa4311d98b"],
+  ["writes", "3cea0c9a25d06375d2b4229f74ceb1ed10c8a1f9"],
+] as const;
 const fixtureRoot = mkdtempSync(join(tmpdir(), "codecks-conversations-baseline-"));
 console.error("conversations fixture: setup begun");
 writeFileSync(join(fixtureRoot, "package.json"), JSON.stringify({ type: "module" }));
 const owner = resolve("src/tools/conversations");
-for (const file of ["helpers", "reads", "writes"]) {
-  const source = execFileSync("git", ["show", `${base}:src/tools/conversations/${file}.ts`], { encoding: "utf8" });
+for (const [file, expectedBlob] of frozenFiles) {
+  const bytes = readFileSync(new URL(`./fixtures/conversations-baseline/${file}.ts.txt`, import.meta.url));
+  const actualBlob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+  assert.equal(actualBlob, expectedBlob, `${file}: frozen producer bytes must match the accepted baseline`);
+  const source = bytes.toString("utf8");
   const redirected = source.replace(/from "([^"]+)"/g, (_, specifier) => {
     const destination = specifier === "./helpers" ? join(fixtureRoot, "helpers.ts") : resolve(owner, specifier + ".ts");
     return `from "${pathToFileURL(destination).href}"`;

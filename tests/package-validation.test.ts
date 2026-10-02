@@ -91,8 +91,10 @@ assert.match(publicCi, /pack:validate/);
 assert.match(publicCi, /pack:smoke/);
 assert.doesNotMatch(publicCi, /CODECKS_|test:integration|secrets\./);
 assert.match(publicCi, /timeout-minutes:/);
-assert.match(publicCi, /fetch-depth: 0/, "CI must fetch frozen comparison history");
-assert.match(publishWorkflow, /fetch-depth: 0/, "publication tests must fetch frozen comparison history");
+assert.doesNotMatch(read("tests/conversations-structured-output.test.ts"), /execFileSync\("git"/, "frozen producer tests must not depend on Git history");
+for (const file of ["helpers", "reads", "writes"]) {
+  assert.ok(existsSync(path.join(root, `tests/fixtures/conversations-baseline/${file}.ts.txt`)), `missing frozen producer fixture: ${file}`);
+}
 for (const workflow of workflows) {
   assert.doesNotMatch(workflow, /uses:\s+[^\s#]+@v\d+\b/, "third-party Actions must use reviewed full commit SHAs");
   for (const match of workflow.matchAll(/uses:\s+[^\s#]+@([^\s#]+)/g)) {
