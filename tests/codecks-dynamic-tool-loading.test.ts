@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   await withMode("all-active", async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames, CODECKS_TOOL_SEARCH_NAME]);
     assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", ...publicToolNames]), "all-active reproduces the legacy surface without the loader");
-    assert.equal(harness.registry.get("codecks_card_add_comment")?.promptGuidelines?.length, 5, "all-active retains legacy prompt metadata");
+    assert.equal(harness.registry.get("codecks_card_add_comment")?.promptGuidelines?.length, 8, "all-active retains legacy prompt metadata");
   });
 
   await withMode("balanced", async () => {

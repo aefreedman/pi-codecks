@@ -72,8 +72,21 @@ export const CARD_REFERENCE_WRITE_GUIDELINES = [
   "Markdown structure like # $123 and * $123 is okay because the $123 token itself stays plain.",
 ];
 
+export const THREAD_CONTENT_FORMAT_GUIDELINES = [
+  "Write comment, review, and blocker content for a human teammate reading the Codecks UI: lead with the point in the first sentence, use plain language, and keep it short and scannable.",
+  "Format thread content as Markdown: paragraphs of at most three sentences, - bullet lists with one idea per bullet, and **bold** labels for sections. Use backticks only for file paths, commands, and code symbols, never for $123 card references.",
+  "Do not paste raw tool output, JSON, full logs, stack traces, internal IDs, agent tool names, or reasoning transcripts into a thread; summarize them and quote only the few relevant lines in a fenced code block.",
+];
+
+export const REVIEW_CONTENT_FORMAT_GUIDELINES = [
+  "Every Review entry, whether it opens a Review or replies in one, must use this Markdown structure with each label bold and on its own line: **Summary:** one sentence stating the outcome, verdict, or question; **Changes** with - bullets for what changed or was checked; **Evidence** with - Verified: and - Not verified: bullets; **Open questions** with - bullets (omit when none); **Requested action:** the exact next step for the reviewer.",
+  "Keep a Review entry to roughly 15 bullets or fewer. Move long detail into the card body or a linked artifact instead of writing extended prose, and state uncertainty explicitly instead of implying verification.",
+  "Label a corrective Review entry with **Correction:**, **Earlier evidence**, **New evidence**, **Remaining gap**, and **Requested action:** instead of the standard sections.",
+];
+
 export const COMMENT_THREAD_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
+  ...THREAD_CONTENT_FORMAT_GUIDELINES,
   "Do not open new comment threads for follow-up work, progress updates, or completion reports unless the user explicitly asks you to add a comment.",
   "Follow-up updates belong only in an existing open review thread; otherwise, report the update in chat and do not write to Codecks unless explicitly instructed.",
 ];
@@ -83,6 +96,8 @@ export const CORRECTIVE_FOLLOWUP_GUIDELINE =
 
 export const REVIEW_FOLLOWUP_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
+  ...THREAD_CONTENT_FORMAT_GUIDELINES,
+  ...REVIEW_CONTENT_FORMAT_GUIDELINES,
   "Codecks allows only one open review thread on a card.",
   "If there is an open/unresolved review and you need to report follow-up work or another update, reply to the existing review thread with codecks_card_reply_resolvable (cardId + context: \"review\", or resolvableId) instead of calling codecks_card_add_review or opening a comment thread.",
   "If there is no open review thread, report follow-up work in chat only unless the user explicitly asks you to add a Codecks comment/reply.",
@@ -90,8 +105,22 @@ export const REVIEW_FOLLOWUP_GUIDELINES = [
   CORRECTIVE_FOLLOWUP_GUIDELINE,
 ];
 
+export const BLOCKER_THREAD_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  ...THREAD_CONTENT_FORMAT_GUIDELINES,
+  "Open a blocker with a first sentence stating what is blocked and what would unblock it, then - bullets of supporting detail.",
+];
+
+export const RESOLVABLE_EDIT_GUIDELINES = [
+  ...CARD_REFERENCE_WRITE_GUIDELINES,
+  ...THREAD_CONTENT_FORMAT_GUIDELINES,
+  "When editing a Review entry, keep or restore the required Review structure.",
+];
+
 export const RESOLVABLE_REPLY_GUIDELINES = [
   ...CARD_REFERENCE_WRITE_GUIDELINES,
+  ...THREAD_CONTENT_FORMAT_GUIDELINES,
+  ...REVIEW_CONTENT_FORMAT_GUIDELINES,
   "Use codecks_card_reply_resolvable to reply to an existing comment, review, or blocker thread; use codecks_card_add_comment only when explicitly opening a new comment thread.",
   CORRECTIVE_FOLLOWUP_GUIDELINE,
   "For a known thread, prefer resolvableId + content.",
