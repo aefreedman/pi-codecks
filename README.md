@@ -294,6 +294,8 @@ Agents should not open new Comment threads for follow-up work, progress updates,
 
 Closed resolvables cannot be replied to directly. Use `codecks_card_list_resolvables` with `includeClosed: true` if needed, then `codecks_card_reopen_resolvable` before replying.
 
+Thread content is written for human teammates reading the Codecks UI. Agents are directed to lead with the point, use concise Markdown (short paragraphs, `-` bullets, bold section labels), and summarize rather than paste raw tool output, JSON, logs, internal IDs, or tool names. Every Review entry, including replies in a Review, uses bold **Summary:**, **Changes**, **Evidence** (Verified / Not verified), optional **Open questions**, and **Requested action:** sections; corrective entries use **Correction:**, **Earlier evidence**, **New evidence**, **Remaining gap**, and **Requested action:**. See `skills/using-codecks/references/conversations-and-resolvables.md` for the full template. This is agent guidance, not content validation.
+
 ## Tool presentation
 
 Tool calls use Pi's standard tool boxes with compact action headers, card references and search scopes. Completed single-card reads combine Codecks, the short code and title on one line, with status, deck, assignee, milestone and effort beneath. Run residency is shown only when supplied by the result; ordinary card retrieval currently omits it. Rendering performs no additional lookups. Collapsed results show card metadata, returned rows, incomplete scans, bulk previews, uncertain writes and progress. Expand a result for full card bodies, parent/child links, artifact paths and the original tool output. Long lines wrap instead of being clipped.

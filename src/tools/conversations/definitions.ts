@@ -4,7 +4,7 @@ import { executeCardAddCommentPayload, executeCardAddReviewPayload, executeCardA
 import { executeCardListResolvablesPayload, executeListOpenResolvableCardsPayload, executeListLoggedInUserActionableResolvablesPayload } from "./reads";
 import { Type } from "typebox";
 import type { CodecksToolDefinition } from "../../pi/tool-definition";
-import { outputFormatEnum, cardRefSchema, resolvableContextEnum, conversationContentSchema, resolvableTargetParameters, conversationCreateParameters, CARD_REFERENCE_WRITE_GUIDELINES, COMMENT_THREAD_GUIDELINES, REVIEW_FOLLOWUP_GUIDELINES, RESOLVABLE_REPLY_GUIDELINES, RESOLVABLE_LIST_GUIDELINES, normalizeArgs, normalizeOutputFormatAlias, applyCardIdAliases, applyResolvableIdAliases, applyEntryIdAliases, applyContentAliases } from "../../pi/input-primitives";
+import { outputFormatEnum, cardRefSchema, resolvableContextEnum, conversationContentSchema, resolvableTargetParameters, conversationCreateParameters, COMMENT_THREAD_GUIDELINES, REVIEW_FOLLOWUP_GUIDELINES, BLOCKER_THREAD_GUIDELINES, RESOLVABLE_EDIT_GUIDELINES, RESOLVABLE_REPLY_GUIDELINES, RESOLVABLE_LIST_GUIDELINES, normalizeArgs, normalizeOutputFormatAlias, applyCardIdAliases, applyResolvableIdAliases, applyEntryIdAliases, applyContentAliases } from "../../pi/input-primitives";
 import { card_add_comment, card_add_review, card_add_blocker, card_add_block, card_reply_resolvable, card_edit_resolvable_entry, card_close_resolvable, card_reopen_resolvable } from "./writes";
 import { card_list_resolvables, list_open_resolvable_cards, list_logged_in_user_actionable_resolvables } from "./reads";
 import { debug_logged_in_user_resolvable_participation, debug_logged_in_user_resolvables } from "./diagnostics";
@@ -41,7 +41,7 @@ export const CONVERSATION_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       return input;
     },
     promptSnippet: "Open a new blocker thread on a Codecks card.",
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    promptGuidelines: BLOCKER_THREAD_GUIDELINES,
   } },
   { exportName: "card_add_block", tool: card_add_block, executePayload: executeCardAddBlockPayload, outputSchema: CONVERSATION_WRITE_SCHEMAS.card_add_block, projectOutput: payload => projectConversationWriteOutput("card_add_block", payload), config: {
     parameters: Type.Object(conversationCreateParameters),
@@ -53,7 +53,7 @@ export const CONVERSATION_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
     },
     promptSnippet: "Deprecated alias for codecks_card_add_blocker.",
     promptGuidelines: [
-      ...CARD_REFERENCE_WRITE_GUIDELINES,
+      ...BLOCKER_THREAD_GUIDELINES,
       "Prefer codecks_card_add_blocker for new blocker threads; codecks_card_add_block is a deprecated alias.",
     ],
   } },
@@ -90,7 +90,7 @@ export const CONVERSATION_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
       return input;
     },
     promptSnippet: "Edit an existing Codecks conversation entry authored by the current user.",
-    promptGuidelines: CARD_REFERENCE_WRITE_GUIDELINES,
+    promptGuidelines: RESOLVABLE_EDIT_GUIDELINES,
   } },
   { exportName: "card_close_resolvable", tool: card_close_resolvable, executePayload: executeCardCloseResolvablePayload, outputSchema: CONVERSATION_WRITE_SCHEMAS.card_close_resolvable, projectOutput: payload => projectConversationWriteOutput("card_close_resolvable", payload), config: {
     parameters: Type.Object(resolvableTargetParameters),

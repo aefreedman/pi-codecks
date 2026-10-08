@@ -297,6 +297,17 @@ for (const phrase of [
   assert.match(reviewGuidance, phrase, "review guidance should keep corrective claims within the available evidence");
   assert.match(replyGuidance, phrase, "reply guidance should keep corrective claims within the available evidence");
 }
+for (const phrase of [/\*\*Summary:\*\*/, /\*\*Changes\*\*/, /\*\*Evidence\*\*/, /Not verified:/, /\*\*Requested action:\*\*/, /\*\*Correction:\*\*/]) {
+  assert.match(reviewGuidance, phrase, "review guidance should require the structured Review format");
+  assert.match(replyGuidance, phrase, "reply guidance should require the structured Review format inside Review threads");
+}
+for (const name of ["codecks_card_add_comment", "codecks_card_add_review", "codecks_card_add_blocker", "codecks_card_reply_resolvable", "codecks_card_edit_resolvable_entry"]) {
+  const tool = getTool(name);
+  const guidance = [tool.promptSnippet, ...(tool.promptGuidelines ?? [])].join("\n");
+  assert.match(guidance, /human teammate/i, `${name} should target a human reader`);
+  assert.match(guidance, /Markdown/, `${name} should require Markdown formatting`);
+  assert.match(guidance, /Do not paste raw tool output/i, `${name} should forbid raw tool output`);
+}
 assert.match(reviewGuidance, /only one open review thread/i);
 assert.match(reviewGuidance, /reply to the existing review thread/i);
 assert.match(reviewGuidance, /chat only/i);
@@ -364,6 +375,9 @@ assert.match(usingCodecksReferences, /new contradictory or limiting evidence/i);
 assert.match(usingCodecksReferences, /remaining validation gap/i);
 assert.match(usingCodecksReferences, /do not call an issue .fixed. or name a .root cause. until the evidence supports/i);
 assert.match(usingCodecksReferences, /only one open Review/i);
+assert.match(usingCodecksReferences, /## Review entry structure/);
+assert.match(usingCodecksReferences, /\*\*Requested action:\*\*/);
+assert.match(usingCodecksReferences, /Do not paste raw tool output/i);
 assert.match(usingCodecksReferences, /report in chat/i);
 
 console.log("resolvable tool registration test passed");

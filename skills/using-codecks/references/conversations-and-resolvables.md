@@ -20,6 +20,43 @@ Read this reference before opening, replying to, editing, closing, or reopening 
 - For closed threads, list with `includeClosed: true`, reopen with `codecks_card_reopen_resolvable`, then reply.
 - Use `codecks_card_list_resolvables` to find or verify the target thread before replying.
 
+## Writing thread content
+
+These rules apply to every Comment, Review, and Blocker entry, including replies and edits. The reader is a human teammate in the Codecks UI, not an agent.
+
+- Lead with the point in the first sentence. Use plain language and keep the entry short and scannable.
+- Use Markdown: paragraphs of at most three sentences, `-` bullet lists with one idea per bullet, and **bold** labels for sections.
+- Use backticks only for file paths, commands, and code symbols. Never wrap `$123` card references in backticks or emphasis.
+- Do not paste raw tool output, JSON, full logs, stack traces, internal IDs, agent tool names, or reasoning transcripts. Summarize them, and quote only the few relevant lines in a fenced code block.
+- A Blocker's first sentence states what is blocked and what would unblock it.
+
+## Review entry structure
+
+Every Review entry, whether it opens a Review or replies in one, must use this structure. Put each bold label on its own line. Omit **Open questions** when there are none.
+
+```markdown
+**Summary:** Player respawn now restores the last checkpoint; ready for review.
+
+**Changes**
+- Respawn reads the checkpoint saved on level entry.
+- Removed the duplicate save on pause.
+
+**Evidence**
+- Verified: EditMode respawn tests pass locally.
+- Not verified: Console builds and multiplayer sessions.
+
+**Open questions**
+- Should checkpoints persist across a game restart?
+
+**Requested action:** Play through level 2 and confirm respawn placement.
+```
+
+- **Summary:** is one sentence stating the outcome, verdict, or question.
+- **Evidence** separates what was actually verified from what was not. State uncertainty explicitly instead of implying verification.
+- **Requested action:** names the exact next step for the reviewer.
+- Keep an entry to roughly 15 bullets or fewer. Move long detail into the card body or a linked artifact instead of writing extended prose.
+- When editing a Review entry, keep or restore this structure.
+
 ## Corrective updates
 
 When correcting an earlier Review update:
@@ -28,6 +65,23 @@ When correcting an earlier Review update:
 - State the new contradictory or limiting evidence.
 - State the remaining validation gap.
 - Scope the conclusion to the evidence. Do not call an issue “fixed” or name a “root cause” until the evidence supports it.
+
+Use these labels instead of the standard Review sections:
+
+```markdown
+**Correction:** The respawn fix does not cover multiplayer sessions.
+
+**Earlier evidence**
+- Single-player EditMode tests passed.
+
+**New evidence**
+- A host migration restores the wrong checkpoint.
+
+**Remaining gap**
+- No multiplayer test coverage yet.
+
+**Requested action:** Hold approval until multiplayer respawn is retested.
+```
 
 ## Lifecycle interaction
 
