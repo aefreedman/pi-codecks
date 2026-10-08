@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import { CODECKS_EXPORTS, DEFAULT_CODECKS_EXPORTS, ENABLE_DEBUG_TOOLS } from "./src/pi/tool-metadata";
 import { getCodecksToolDefinition } from "./src/pi/tool-catalog";
 import { registerCodecksTool } from "./src/pi/register-tools";
+import { registerNameCodecks } from "./src/pi/name-codecks";
 import { renderCodecksCall, renderCodecksResult } from "./src/codecks-renderers";
 import { CodecksProfileSession, isProfileConfigured } from "./src/codecks-profile-session";
 import {
@@ -83,6 +84,7 @@ export default function codecksTools(pi: ExtensionAPI) {
   const enabledExports = ENABLE_DEBUG_TOOLS ? CODECKS_EXPORTS : DEFAULT_CODECKS_EXPORTS;
   const enabledToolNames = new Set<string>([...enabledExports.map(toToolName), CODECKS_PROFILE_SELECT_NAME]);
   const profiles = new CodecksProfileSession();
+  registerNameCodecks(pi, () => profiles.profile);
   const mode = getCodecksToolLoadingMode();
   const coreDescriptions = new Map<string, string>();
   let publicReferenceRegistration: PackageReferenceRegistration | undefined;

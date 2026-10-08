@@ -17,6 +17,7 @@ process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 type Tool = { parameters?: { properties?: Record<string, unknown> }; execute: (...args: any[]) => Promise<any> };
 const tools = new Map<string, Tool>();
 registerCodecks({
+  registerCommand() {},
   registerTool(definition: Tool & { name: string }) { tools.set(definition.name, definition); },
   on() {},
   getActiveTools() { return []; },

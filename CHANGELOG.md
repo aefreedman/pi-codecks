@@ -7,6 +7,10 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.16.0] - 2026-10-08
+
+- Add `/name-codecks <card-code>` to name the current Pi session `[cdx:$<code>] Card title` using the selected credential profile, without Codecks writes or an LLM round trip.
+
 ## [0.15.1] - 2026-10-08
 
 - Add human-readable formatting guidance for Comment, Review, and Blocker content: lead with the point, use concise Markdown, and summarize instead of pasting raw tool output, JSON, logs, internal IDs, or tool names. Require a structured Review entry format (**Summary:**, **Changes**, **Evidence** with Verified/Not verified, optional **Open questions**, **Requested action:**) and a labeled corrective format, in tool prompt guidelines, loader guidance, active `Safety:` descriptions, and the `using-codecks` conversations reference.

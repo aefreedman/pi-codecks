@@ -60,7 +60,10 @@ export class PiToolHarness {
     for (const tool of options.foreignTools ?? []) this.registry.set(tool.name, { ...tool });
   }
 
+  readonly commands = new Map<string, unknown>();
+
   readonly api = {
+    registerCommand: (name: string, command: unknown) => { this.commands.set(name, command); },
     registerTool: (tool: RegisteredTool) => {
       // Pi keeps the first effective definition for extension-name collisions.
       if (!this.registry.has(tool.name)) this.registry.set(tool.name, this.sourceInfoAvailable ? { ...tool, sourceInfo: this.extensionSourceInfo } : { ...tool });

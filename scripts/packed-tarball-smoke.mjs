@@ -110,14 +110,17 @@ import assert from "node:assert/strict";
 import codecksTools from "./node_modules/@aefree/pi-codecks/index.ts";
 
 const tools = new Map();
+const commands = new Map();
 const sessionStartHandlers = [];
 codecksTools({
+  registerCommand(name, command) { commands.set(name, command); },
   registerTool(tool) { tools.set(tool.name, tool); },
   on(event, handler) { if (event === "session_start") sessionStartHandlers.push(handler); },
   getActiveTools() { return []; },
   getAllTools() { return [...tools.values()]; },
   setActiveTools() {},
 });
+assert.ok(commands.has("name-codecks"), "session naming command must load from the packed extension");
 assert.ok(tools.has("codecks_card_get"), "core Codecks tools must load without workflow");
 assert.ok(tools.has("codecks_tool_search"), "dynamic Codecks tool loading must remain available without workflow");
 const migrated = ["codecks_card_get","codecks_card_search","codecks_card_get_batch","codecks_card_list_missing_effort","codecks_card_list_done_within_timeframe","codecks_card_get_vision_board","codecks_card_create","codecks_card_set_parent","codecks_card_update_run","codecks_card_add_attachment","codecks_card_update","codecks_card_update_status","codecks_card_add_to_hand","codecks_card_remove_from_hand","codecks_card_update_effort","codecks_card_update_priority","codecks_card_bulk_create","codecks_card_bulk_update","codecks_deck_get","codecks_deck_update","codecks_milestone_list","codecks_milestone_get","codecks_milestone_update","codecks_run_list","codecks_run_get","codecks_run_update","codecks_user_lookup","codecks_card_add_comment","codecks_card_add_review","codecks_card_add_blocker","codecks_card_add_block","codecks_card_reply_resolvable","codecks_card_edit_resolvable_entry","codecks_card_close_resolvable","codecks_card_reopen_resolvable","codecks_card_list_resolvables","codecks_list_open_resolvable_cards","codecks_list_logged_in_user_actionable_resolvables","codecks_velocity_observations_update","codecks_velocity_report","codecks_run_delivered_effort","codecks_run_average_effort"];
