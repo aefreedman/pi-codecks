@@ -1,6 +1,6 @@
 # Card-search structured output (v1)
 
-Only `codecks_card_search` adopts this search-specific contract. Core `card_search.execute` still returns its legacy text/fenced JSON; the registered Pi adapter reads original native data through an internal seam and validates its allowlist projection. Requests, pacing, credentials, aborts and legacy output modes do not change. No hook enforcement or Safety Rails dependency is added. Card-get, batch and the other migrated domains retain their own [domain contracts](cards-domain-output.md).
+Only `codecks_card_search` adopts this search-specific contract. Core `card_search.execute` still returns its legacy text/fenced JSON; the registered Pi adapter reads original native data through an internal seam and validates its allowlist projection. Requests, pacing, credentials, aborts and legacy output modes do not change. No hook enforcement or Safety Rails dependency is added. Card-get, batch and the other migrated domains retain their own [domain contracts](structured-output-index.md).
 
 ```typescript
 const result = await tools.codecks_card_search({ text: "planning", outputMode: "counts" });

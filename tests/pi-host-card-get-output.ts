@@ -84,6 +84,8 @@ globalThis.fetch = (async (_input, init) => {
     // A full 500-row page repeated to the unchanged 3000-row scan bound: no retry/fallback.
     cards = Array.from({ length: 500 }, (_, i) => ({ cardId: `fixture-${i}`, accountSeq: i, title: ["partial-one", "partial-failure"].includes(state.scenario) && i === 0 ? "Possible match" : "Unrelated", content: "", isDoc: false, effort: 0, dueDate: null }));
   }
+  if (state.scenario === "identity-exact") cards[0].cardId = "😀".repeat(2048);
+  if (state.scenario === "identity-oversized") cards[0].cardId = "😀".repeat(2049);
   if (state.scenario === "producer-bytes") cards[0].content = "😀".repeat(20000);
   if (state.scenario === "producer-clipping") { cards[0].title = "x".repeat(2049); cards[0].content = "x".repeat(32769); }
   const data: any = { card: Object.fromEntries(cards.map(card => [card.cardId, card])) };
@@ -96,6 +98,7 @@ const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0
 let action: { name: string; arguments: Record<string, unknown> } | undefined;
 const extensionErrors: any[] = [];
 const records: any[] = [];
+const nestedOutcomes: any[] = [];
 const sessions: any[] = [];
 try {
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, refreshOnCreate: false });
@@ -125,6 +128,11 @@ try {
     const services = await createAgentSessionServices({ cwd: fixture, agentDir, modelRuntime, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }),
       resourceLoaderOptions: { additionalExtensionPaths: order === "alone" ? [modifierPath, extensionPath] : order === "before" ? [modifierPath, redactorPath, extensionPath] : [extensionPath, modifierPath, redactorPath],
         extensionFactories: [createCodemodeExtension({ mode: "on", models: false }), pi => {
+          pi.registerTool({ name: "pilot_nested", label: "Fixture nested", description: "Non-codemode read consumer", parameters: Type.Object({ tool: Type.Union([Type.Literal("codecks_card_get"), Type.Literal("codecks_card_search")]), args: Type.Record(Type.String(), Type.Unknown()) }), async execute(_id, params, _signal, _update, ctx) {
+            const outcome = await ctx.executeTool(params.tool, params.args);
+            nestedOutcomes.push(outcome);
+            return { content: [{ type: "text", text: JSON.stringify({ childIsError: outcome.isError, dto: outcome.result.structuredContent }) }], details: { childIsError: outcome.isError } };
+          } });
           pi.registerTool({ name: "pilot_throw", label: "Fixture throw", description: "Synthetic thrown failure", parameters: Type.Object({}), async execute() { throw Error("synthetic thrown execution"); } });
           pi.registerTool({ name: "pilot_abort", label: "Fixture abort", description: "Pre-aborted child call", parameters: Type.Object({}), async execute(_id, _params, _signal, _update, ctx) {
             const controller = new AbortController(); controller.abort();
@@ -143,14 +151,14 @@ try {
       assert.equal(loaded.indexOf(redactorPath) < loaded.indexOf(extensionPath), order === "before");
       assert.ok(loaded.indexOf(modifierPath) < loaded.indexOf(redactorPath));
     }
-    const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(fixture), model, thinkingLevel: "off", tools: ["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"] });
+    const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(fixture), model, thinkingLevel: "off", tools: ["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort", "pilot_nested"] });
     sessions.push(session); await session.bindExtensions({});
     session.extensionRunner.onError(error => extensionErrors.push(error));
     assert.equal(session.sessionFile, undefined);
-    assert.deepEqual(new Set(session.getActiveToolNames()), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"]));
-    assert.deepEqual(new Set(session.getCallableToolNames()), new Set(["codecks_card_get", "codecks_card_search", "pilot_throw", "pilot_abort"]));
+    assert.deepEqual(new Set(session.getActiveToolNames()), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort", "pilot_nested"]));
+    assert.deepEqual(new Set(session.getCallableToolNames()), new Set(["codecks_card_get", "codecks_card_search", "pilot_throw", "pilot_abort", "pilot_nested"]));
     const registry = session.getAllTools();
-    assert.deepEqual(new Set(registry.map(t => t.name)), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort"]), "explicit SDK registry allowlist excludes unrelated Codecks tools and built-ins");
+    assert.deepEqual(new Set(registry.map(t => t.name)), new Set(["codecks_card_get", "codecks_card_search", "codemode", "pilot_throw", "pilot_abort", "pilot_nested"]), "explicit SDK registry allowlist excludes unrelated Codecks tools and built-ins");
     assert.equal(resolve(registry.find(t => t.name === "codecks_card_get")!.sourceInfo.path), extensionPath);
     assert.deepEqual(session.getToolDefinition("codecks_card_get")!.outputSchema, CARD_GET_OUTPUT_SCHEMA);
     assert.deepEqual(session.getToolDefinition("codecks_card_search")!.outputSchema, CARD_SEARCH_OUTPUT_SCHEMA);
@@ -201,6 +209,26 @@ try {
   const nested = await run("nested-text", "codemode", script({ cardId: "seq:0", format: "text" }));
   assert.equal(nested.parent.isError, false); assert.equal(nested.children.length, 1); assert.equal(nested.parent.details.calls[0].status, "ok");
   assert.ok(isCardGetOutput(nested.children[0].result.structuredContent)); assert.doesNotMatch(text(nested.children[0].result), /```json/); assert.match(text(nested.parent), /"schemaVersion":1/);
+  // Native DTOs and ctx.executeTool outcomes are separate consumer interfaces.
+  for (const tool of ["codecks_card_get", "codecks_card_search"]) {
+    const args = tool === "codecks_card_get" ? { cardId: "seq:0", format: "text" } : { outputMode: "detailed", format: "text" };
+    const nonCodemode = await run("non-codemode", "pilot_nested", { tool, args });
+    const outcome = nestedOutcomes.at(-1);
+    assert.equal(nonCodemode.parent.isError, false); assert.equal(outcome.isError, false); assert.equal(nonCodemode.fetches, 1);
+    assert.deepEqual(outcome.result.structuredContent, nonCodemode.children[0].result.structuredContent);
+    assert.ok(nonCodemode.children[0].parentToolCallId); assert.match(text(nonCodemode.children[0].result), /Fixture title/);
+    const selective = await run("selective", "codemode", { code: `const dto = await tools.${tool}(${JSON.stringify(args)}); if (!dto.ok) throw Error(dto.error.code); text({ effort: ${tool === "codecks_card_get" ? "dto.card.effort" : "dto.data.cards[0].effort"}, read: dto.completeness.read });` });
+    assert.equal(selective.parent.isError, false); assert.equal(selective.fetches, 1);
+    assert.match(text(selective.parent), /"effort":0,"read":"complete"/); assert.doesNotMatch(text(selective.parent), /schemaVersion|Fixture body/);
+    for (const scenario of ["identity-exact", "identity-oversized"]) {
+      const result = await run(scenario, "codemode", { code: `const dto = await tools.${tool}(${JSON.stringify(args)}); text({ok:dto.ok, code:dto.error?.code});` });
+      const dto = result.children[0].result.structuredContent;
+      assert.equal(result.parent.isError, false); assert.equal(result.fetches, 1);
+      assert.equal(result.children[0].isError, scenario === "identity-oversized"); assert.equal(dto.ok, scenario === "identity-exact");
+      if (dto.ok) assert.equal(tool === "codecks_card_get" ? dto.card.cardId : dto.data.cards[0].cardId, "😀".repeat(2048));
+      else { assert.equal(dto.error.code, "output_contract_error"); assert.doesNotMatch(JSON.stringify(result.children[0].result), /😀/); }
+    }
+  }
   const directFailure = await run("direct-error", "codecks_card_get", {});
   assert.equal(directFailure.parent.isError, true); assert.equal(directFailure.children[0].result.structuredContent.ok, false); assert.equal(directFailure.children[0].result.structuredContent.error.code, "validation_error"); assert.equal(directFailure.fetches, 0);
   for (const scenario of ["domain-error", "api-error", "fetch-throws"]) {
@@ -275,6 +303,12 @@ try {
       }
     }
   }
+  const jsonEvent = await import(new URL("./modes/json-event.js", sdkUrl).href);
+  for (const event of records.filter(record => record.result?.structuredContent)) {
+    const serialized = JSON.parse(JSON.stringify(jsonEvent.toJsonEvent(event)));
+    assert.deepEqual(serialized.result.structuredContent, event.result.structuredContent); assert.equal(serialized.isError, event.isError);
+  }
+  for (const activeSession of sessions) for (const message of activeSession.messages.filter((message: any) => message.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false, "ordinary transcript does not persist DTOs");
   assert.deepEqual(extensionErrors, []); assert.equal(realTransport, 0); assert.equal(modelCalls, turns * 2);
   assert.ok(requests.length > 0); assert.ok(fakeFetches > 0);
   console.log(`Real Pi ${piVersion} card_get/search host passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
