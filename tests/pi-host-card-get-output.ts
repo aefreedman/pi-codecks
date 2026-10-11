@@ -19,6 +19,8 @@ if (compatibility) {
   catch { throw Error("Opt-in Safety Rails compatibility test requires its sibling checkout; default Codecks host test does not."); }
 }
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+const piVersion = JSON.parse(await readFile(new URL("../package.json", sdkUrl), "utf8")).version;
+assert.equal(piVersion, "1.1.0", "validate the selected current Pi runtime");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-output-"));
@@ -275,7 +277,7 @@ try {
   }
   assert.deepEqual(extensionErrors, []); assert.equal(realTransport, 0); assert.equal(modelCalls, turns * 2);
   assert.ok(requests.length > 0); assert.ok(fakeFetches > 0);
-  console.log(`Real Pi card_get/search host passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
+  console.log(`Real Pi ${piVersion} card_get/search host passed: ${turns} local scripted turns, ${modelCalls} provider calls, ${fakeFetches} fake Codecks fetches, zero real transports; ${compatibility ? "optional Safety Rails compatibility in both load orders" : "Codecks alone producer contract and isolated Pi hook behavior"} verified.`);
 } finally {
   for (const session of sessions) await session.dispose();
   globalThis.fetch = originalFetch; delete (globalThis as any).__piCardGetOutputTest;

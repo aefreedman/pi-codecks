@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
@@ -9,6 +9,8 @@ import { useInertEnvironmentCredentialProvider } from "./credential-test-environ
 useInertEnvironmentCredentialProvider();
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+const piVersion = JSON.parse(await readFile(new URL("../package.json", sdkUrl), "utf8")).version;
+assert.equal(piVersion, "1.1.0", "validate the selected current Pi runtime");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-batch-output-"));
@@ -105,5 +107,5 @@ try {
   }
   for (const message of session.messages.filter((m: any) => m.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false, "ordinary transcript does not persist DTOs");
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ status: "passed", pi: "1.0.0", turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: 10, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
+  console.log(JSON.stringify({ status: "passed", pi: piVersion, turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: 10, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
 } finally { session?.dispose(); globalThis.fetch = originalFetch; await rm(fixture, { recursive: true, force: true }); }

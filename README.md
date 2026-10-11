@@ -4,7 +4,7 @@ Pi tools, skills, and prompts for Codecks workflows.
 
 This package provides a Pi-native registration layer around Codecks card, comment, review, blocker, resolvable, priority, effort, attachment, and inbox-style workflows. It is intended for users who already have a Codecks account and want Pi agents to interact with Codecks through explicit tools rather than ad hoc shell scripts.
 
-Dynamic tool loading uses current Pi extension and active-session provenance APIs. This release targets Pi 1.0.0 and requires Node.js 22.19.0 or newer. Package-specific `codecks_tool_search` discovery remains unchanged; native discovery migration is not included.
+Dynamic tool loading uses current Pi extension and active-session provenance APIs. This release targets Pi 1.1.0 and requires Node.js 22.19.0 or newer. Package-specific `codecks_tool_search` discovery remains unchanged; native discovery migration is not included.
 
 ## Features
 
