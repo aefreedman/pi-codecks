@@ -69,3 +69,47 @@ test("real internal read seam preserves missing vs null without changing legacy 
     assert.equal(Object.hasOwn(value.card.childCards[0], "status"), false);
   } finally { globalThis.fetch = fetch; core.__test.resetRateGate(); }
 });
+
+const exactCardFields = ["cardId", "shortCode", "cardRef", "accountSeqRef", "url"];
+const exactCardLocations = [
+  ...exactCardFields.map(field => [field]),
+  ...["parentCard", "childCards"].flatMap(parent => exactCardFields.map(field => [parent, field])),
+  ...["deck", "milestone", "assignee", "creator"].map(parent => [parent, "id"]),
+  ["milestone", "url"],
+];
+function atCardPath(path: string[], value: unknown) {
+  const [parent, field] = path;
+  return field ? { [parent]: parent === "childCards" ? [{ [field]: value }] : { [field]: value } } : { [parent]: value };
+}
+test("all published get identities are exact at the Unicode boundary and fail one point over", () => {
+  for (const path of exactCardLocations) {
+    for (const value of ["😀".repeat(2048), null, ""]) {
+      const dto = projectCardGetOutput(success(atCardPath(path, value)));
+      assert.equal(dto.ok, true, path.join("."));
+      const actual = path.length === 1 ? dto.card[path[0]] : path[0] === "childCards" ? dto.card.childCards[0][path[1]] : dto.card[path[0]][path[1]];
+      assert.equal(actual, value); assert.equal(dto.completeness.projection, true);
+    }
+    for (const value of ["😀".repeat(2049), 42, {}, false]) {
+      const dto = projectCardGetOutput(success(atCardPath(path, value)));
+      assert.equal(dto.ok, false, path.join(".")); assert.equal(dto.error.code, "output_contract_error"); assert.ok(isCardGetOutput(dto));
+    }
+  }
+});
+test("get suggested reference and admitted error candidate identities cannot be clipped", () => {
+  for (const field of ["suggestedCardRef", ...exactCardFields]) {
+    const fields = (value: unknown) => field === "suggestedCardRef" ? { [field]: value } : { candidates: [{ [field]: value }] };
+    for (const value of ["😀".repeat(2048), null, ""]) {
+      const dto = projectCardGetOutput(error(fields(value))); assert.equal(dto.error.code, "not_found");
+      assert.equal(field === "suggestedCardRef" ? dto.evidence[field] : dto.evidence.candidates[0][field], value);
+    }
+    for (const value of ["😀".repeat(2049), false]) assert.equal(projectCardGetOutput(error(fields(value))).error.code, "output_contract_error");
+  }
+});
+test("get ignores unknown identity-like metadata and unadmitted children/candidates", () => {
+  const ignored = { id: "x".repeat(2049), cardId: "x".repeat(2049) };
+  const dto = projectCardGetOutput(success({ id: ignored.id, transport: ignored, deck: { transport: ignored }, childCards: [...Array(25).fill({}), ignored] }));
+  assert.equal(dto.ok, true); assert.equal(dto.card.childCards.length, 25); assert.equal(dto.completeness.projection, false);
+  const failure = projectCardGetOutput(error({ transport: ignored, candidates: [...Array(5).fill({}), ignored] }));
+  assert.equal(failure.error.code, "not_found"); assert.equal(failure.evidence.candidates.length, 5); assert.equal(failure.completeness.projection, false);
+  const absent = projectCardGetOutput(success({ parentCard: {}, deck: {} })); assert.equal(absent.ok, true); assert.deepEqual(absent.card.parentCard, {}); assert.deepEqual(absent.card.deck, {});
+});

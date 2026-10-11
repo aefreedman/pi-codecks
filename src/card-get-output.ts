@@ -22,6 +22,15 @@ const cardSchema = object({
   parentCard: optional(related), childCards: optional(Type.Array(related, { maxItems: CARD_GET_LIMITS.array })),
 });
 const candidate = object({ ...identity, ...strings(["deck", "milestone", "assignee"]) });
+// Paths are relative to cardSchema/evidence, not arbitrary transport key names.
+const cardIdentityFields = ["cardId", "shortCode", "cardRef", "accountSeqRef", "url"];
+const cardExactStrings = new Set([
+  ...cardIdentityFields,
+  ...["parentCard", "childCards[]"].flatMap(path => cardIdentityFields.map(field => `${path}.${field}`)),
+  ...["deck", "milestone", "assignee", "creator"].map(path => `${path}.id`),
+  "milestone.url",
+]);
+const evidenceExactStrings = new Set(["suggestedCardRef", ...cardIdentityFields.map(field => `candidates[].${field}`)]);
 const common = {
   schemaVersion: Type.Literal(1), action: Type.Literal("card_get"),
   provenance: object({ source: Type.Literal("codecks"), contentTrust: Type.Literal("external") }),
@@ -51,14 +60,14 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
     const state = { complete: true };
     let output: unknown;
     if (source.ok) {
-      const card = project(cardSchema, record(source.data)?.card, state);
+      const card = project(cardSchema, record(source.data)?.card, state, cardExactStrings);
       output = { ...base("complete", state.complete), ok: true, card };
     } else {
       const error = record(source.error);
       if (!error || typeof error.message !== "string" || typeof error.category !== "string") return cardGetContractError();
       const code = codes.includes(error.category as typeof codes[number]) ? error.category : "api_error";
       const evidenceSchema = (CARD_GET_OUTPUT_SCHEMA.anyOf[1] as ProjectionSchema).properties.evidence;
-      const evidence = project(evidenceSchema, error, state) as Record<string, unknown>;
+      const evidence = project(evidenceSchema, error, state, evidenceExactStrings) as Record<string, unknown>;
       const message = project(str(), error.message, state);
       output = { ...base(code === "incomplete_read" || error.complete === false ? "incomplete" : "unknown", state.complete), ok: false, error: { code, message }, ...(Object.keys(evidence).length ? { evidence } : {}) };
     }
@@ -67,5 +76,5 @@ export function projectCardGetOutput(payload: unknown): CardGetOutput {
   } catch { return cardGetContractError(); }
 }
 
-// Shared bounded allowlist primitive; card-get schema and projection are unchanged.
+// Shared bounded allowlist primitive; public schemas remain unchanged.
 export { projectBoundedValue, CODECKS_READ_ERROR_CODES } from "./contracts/common";

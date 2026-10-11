@@ -9,7 +9,11 @@ export const CODECKS_READ_ERROR_CODES = ["validation_error", "not_found", "ambig
 const record = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
 export type ProjectionSchema = TSchema & { anyOf?: ProjectionSchema[]; const?: unknown; type?: string; properties?: Record<string, ProjectionSchema>; items?: ProjectionSchema; maxItems?: number; maxLength?: number };
-export function projectBoundedValue(schema: ProjectionSchema, value: unknown, state: { complete: boolean }): unknown {
+/** Exact paths use [] for admitted array items; unknown fields and clipped rows are never visited. */
+export function projectBoundedValue(schema: ProjectionSchema, value: unknown, state: { complete: boolean }, exactStringPaths?: ReadonlySet<string>): unknown {
+  return projectValue(schema, value, state, exactStringPaths, "");
+}
+function projectValue(schema: ProjectionSchema, value: unknown, state: { complete: boolean }, exactStringPaths: ReadonlySet<string> | undefined, path: string): unknown {
   if (value === undefined) return undefined;
   if (schema.anyOf) {
     if (value === null && schema.anyOf.some(s => s.type === "null")) return null;
@@ -26,7 +30,7 @@ export function projectBoundedValue(schema: ProjectionSchema, value: unknown, st
         ? schema.anyOf.find(s => s.type !== "null")
         : schema.anyOf.find(s => (s.const === undefined && s.type === typeof value) || Value.Check(s, value));
     if (!selected) throw Error("Invalid union");
-    return projectBoundedValue(selected, value, state);
+    return projectValue(selected, value, state, exactStringPaths, path);
   }
   if (schema.const !== undefined) {
     if (value !== schema.const) throw Error("Invalid literal");
@@ -37,7 +41,7 @@ export function projectBoundedValue(schema: ProjectionSchema, value: unknown, st
     if (!source) throw Error("Invalid object");
     const output: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(schema.properties as Record<string, TSchema>)) {
-      const item = projectBoundedValue(child, source[key], state);
+      const item = projectValue(child, source[key], state, exactStringPaths, path ? `${path}.${key}` : key);
       if (item !== undefined) output[key] = item;
     }
     return output;
@@ -45,12 +49,15 @@ export function projectBoundedValue(schema: ProjectionSchema, value: unknown, st
   if (schema.type === "array") {
     if (!Array.isArray(value)) throw Error("Invalid array");
     if (value.length > schema.maxItems) state.complete = false;
-    return value.slice(0, schema.maxItems).map(item => projectBoundedValue(schema.items, item, state));
+    return value.slice(0, schema.maxItems).map(item => projectValue(schema.items, item, state, exactStringPaths, `${path}[]`));
   }
   if (schema.type === "string") {
     if (typeof value !== "string") throw Error("Invalid string");
     const points = Array.from(value);
-    if (points.length > schema.maxLength) state.complete = false;
+    if (points.length > schema.maxLength) {
+      if (exactStringPaths?.has(path)) throw Error("Oversized published identity");
+      state.complete = false;
+    }
     return points.slice(0, schema.maxLength).join("");
   }
   if (!Value.Check(schema, value)) throw Error("Invalid scalar");

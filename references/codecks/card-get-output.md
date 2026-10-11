@@ -32,9 +32,12 @@ The v1 limits are chosen for one useful card without shipping an unbounded graph
 | --- | --- | --- |
 | Compact UTF-8 JSON DTO | 65,536 bytes | Fail closed with `output_too_large` if the Codecks-produced DTO exceeds it |
 | Card content | 32,768 Unicode code points | Clip; `projection: false` |
-| Every other string (including error message) | 2,048 Unicode code points | Clip; `projection: false` |
+| Published IDs / short codes / references / URLs | 2,048 Unicode code points | Exact; oversized admitted values fail with `output_contract_error` |
+| Other descriptive strings (including error message) | 2,048 Unicode code points | Clip; `projection: false` |
 | Tags / child cards | 25 each | Clip; `projection: false` |
 | Error candidates | 5 | Clip; `projection: false` |
+
+Exact strings include top-level and parent/child/candidate card IDs, short codes, references and URLs; deck/milestone/user IDs; milestone URL; and error `suggestedCardRef`. Checks visit only schema-admitted fields and array items, not discarded transport metadata or omitted rows. Missing/null and malformed-field behavior are unchanged.
 
 The byte bound is independent of character bounds: multibyte text or many populated summaries can exceed it even after clipping. No spill file, hidden retry, scan broadening, or fallback is introduced. Ordinary compact model text/renderers retain their existing behavior, so their size/interface is not the DTO's public size contract.
 

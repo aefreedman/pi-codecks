@@ -26,7 +26,7 @@ Any projection-error item makes the batch `ok:false`/native error with code `out
 ## Bounds
 
 - At most 25 items; input/reference parsing and the existing 128 UTF-16-code-unit input limit are unchanged.
-- Each embedded card-get DTO obeys its existing scalar/array/content limits and **65,536 compact UTF-8 JSON bytes**, including its metadata. Missing, null, false and zero observations and nested absence are retained. Reusable identities must not be clipped; oversized identities produce an explicit projection error.
+- Each embedded card-get DTO obeys its existing scalar/array/content limits and **65,536 compact UTF-8 JSON bytes**, including its metadata. Missing, null, false and zero observations and nested absence are retained. Reusable identities must not be clipped; oversized admitted identities produce an explicit projection error. Batch uses the same schema/path-aware get policy, ignoring discarded metadata and children beyond the 25-child admission cap.
 - The entire batch DTO, including repeated inputs and metadata, is limited to **2,097,152 compact UTF-8 JSON bytes**. The ceiling is inclusive. Overflow returns bounded `output_too_large`; no artifact spill, splitting, retry or extra request follows.
 - The current 25-card/per-card bounds leave normal valid projections below the defensive full-batch ceiling. Tests separately exercise the independent full-byte predicate at its exact Unicode boundary; they do not claim a normal valid operation can reach that ceiling.
 

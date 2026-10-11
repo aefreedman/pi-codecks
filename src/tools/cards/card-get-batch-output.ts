@@ -1,6 +1,6 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { Value } from "typebox/value";
-import { CARD_GET_OUTPUT_SCHEMA, projectCardGetOutput, isCardGetOutput, cardGetContractError } from "../../card-get-output";
+import { CARD_GET_OUTPUT_SCHEMA, projectCardGetOutput, isCardGetOutput } from "../../card-get-output";
 import { CODECKS_READ_ERROR_CODES, CODECKS_READ_LIMITS, projectBoundedValue } from "../../contracts/common";
 
 export const CARD_GET_BATCH_LIMITS = { bytes: 2097152, items: 25, reference: 128, string: CODECKS_READ_LIMITS.string } as const;
@@ -50,13 +50,6 @@ export function isCardGetBatchOutput(value: unknown): value is CardGetBatchOutpu
     return !data || (data.items as Record<string, unknown>[]).every(item => item.status === "found" ? isCardGetOutput(item.card) : item.status === "projection_error" ? isCardGetOutput(item.error) : true);
   } catch { return false; }
 }
-// Native reusable identities fail explicitly rather than becoming clipped references.
-function hasOversizedIdentity(value: unknown): boolean {
-  const source = record(value);
-  if (!source) return Array.isArray(value) && value.some(hasOversizedIdentity);
-  return Object.entries(source).some(([key, item]) => (["id", "cardId", "shortCode", "cardRef", "accountSeqRef", "url"].includes(key) && typeof item === "string" && Array.from(item).length > CODECKS_READ_LIMITS.string) || hasOversizedIdentity(item));
-}
-
 /** Pure native-result projection. Never parses text or makes requests. */
 export function projectCardGetBatchOutput(payload: unknown): CardGetBatchOutput {
   try {
@@ -80,7 +73,7 @@ export function projectCardGetBatchOutput(payload: unknown): CardGetBatchOutput 
         if (!item || typeof item.requestedRef !== "string" || !item.requestedRef || item.requestedRef.length > CARD_GET_BATCH_LIMITS.reference) throw Error("Invalid batch identity");
         if (item.status === "found" && source.ok) {
           found++;
-          const card = hasOversizedIdentity(item.card) ? cardGetContractError() : projectCardGetOutput({ ok: true, action: "card-get", data: { card: item.card } });
+          const card = projectCardGetOutput({ ok: true, action: "card-get", data: { card: item.card } });
           if (card.ok) {
             projectedFound++;
             if (!card.completeness.projection) state.complete = false;

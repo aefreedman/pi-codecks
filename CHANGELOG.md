@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Keep published get/search identities exact, including nested summaries and get error references; reject oversized admitted identities instead of clipping them. Ignore discarded metadata and omitted rows, retain descriptive clipping and batch per-card error/count semantics.
+
 ## [0.16.0] - 2026-10-08
 
 - Add `/name-codecks <card-code>` to name the current Pi session `[cdx:$<code>] Card title` using the selected credential profile, without Codecks writes or an LLM round trip.

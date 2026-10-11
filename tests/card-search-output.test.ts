@@ -83,3 +83,31 @@ test("registered adapter advertises schema and malformed native seam never falls
     }
   } finally { core.card_search.read = original; }
 });
+
+const rowIdentityPaths = [
+  ...["cardId", "shortCode", "cardRef", "accountSeqRef", "url"].map(field => [field]),
+  ...["deck", "milestone", "assignee", "parentCard"].flatMap(parent => ["id", "cardId"].map(field => [parent, field])),
+];
+test("search cards and samples guard all published row identities at exact Unicode bounds", () => {
+  for (const key of ["cards", "sampleCards"]) for (const path of rowIdentityPaths) {
+    const native = (value: unknown) => success({ outputMode: key === "cards" ? "detailed" : "counts", cards: undefined, [key]: [path.length === 1 ? { [path[0]]: value } : { [path[0]]: { [path[1]]: value } }] });
+    for (const value of ["😀".repeat(2048), null, ""]) {
+      const dto = projectCardSearchOutput(native(value)); assert.equal(dto.ok, true, `${key}.${path.join(".")}`);
+      const row = dto.data[key][0]; assert.equal(path.length === 1 ? row[path[0]] : row[path[0]][path[1]], value);
+      assert.equal(dto.completeness.projection, true);
+    }
+    for (const value of ["😀".repeat(2049), 42, false, {}]) {
+      const dto = projectCardSearchOutput(native(value)); assert.equal(dto.ok, false); assert.equal(dto.error.code, "output_contract_error"); assert.ok(isCardSearchOutput(dto));
+    }
+  }
+});
+test("search ignores discarded metadata and oversized identities past cards/sample admission caps", () => {
+  const ignored = { cardId: "x".repeat(2049), id: "x".repeat(2049) };
+  for (const [key, cap] of [["cards", 3000], ["sampleCards", 10]] as const) {
+    const dto = projectCardSearchOutput(success({ outputMode: key === "cards" ? "detailed" : "counts", cards: undefined, [key]: [...Array(cap).fill({ transport: ignored, id: ignored.id, deck: { transport: ignored } }), ignored], transport: ignored }));
+    assert.equal(dto.ok, true); assert.equal(dto.data[key].length, cap); assert.equal(dto.completeness.projection, false);
+    assert.equal(JSON.stringify(dto).includes(ignored.cardId), false);
+  }
+  const absent = projectCardSearchOutput(success({ cards: [{ deck: {}, parentCard: {} }] }));
+  assert.equal(absent.ok, true); assert.deepEqual(absent.data.cards[0], { deck: {}, parentCard: {} });
+});
