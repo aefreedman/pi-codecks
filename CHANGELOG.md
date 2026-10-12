@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.16.1] - 2026-10-12
+
 - Extend deterministic actual-Pi get/search/batch host regressions for exact/oversized identities, selective codemode output, non-codemode outcomes and final-event/transcript boundaries.
 
 - Align package-local Pi validation dependencies and active eval pins with stable 1.1.0; report the loaded runtime version in host receipts.
