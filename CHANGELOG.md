@@ -7,6 +7,14 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.16.1] - 2026-10-12
+
+- Extend deterministic actual-Pi get/search/batch host regressions for exact/oversized identities, selective codemode output, non-codemode outcomes and final-event/transcript boundaries.
+
+- Align package-local Pi validation dependencies and active eval pins with stable 1.1.0; report the loaded runtime version in host receipts.
+
+- Keep published get/search identities exact, including nested summaries and get error references; reject oversized admitted identities instead of clipping them. Ignore discarded metadata and omitted rows, retain descriptive clipping and batch per-card error/count semantics.
+
 ## [0.16.0] - 2026-10-08
 
 - Add `/name-codecks <card-code>` to name the current Pi session `[cdx:$<code>] Card title` using the selected credential profile, without Codecks writes or an LLM round trip.

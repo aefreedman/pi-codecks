@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
@@ -9,6 +9,8 @@ import { useInertEnvironmentCredentialProvider } from "./credential-test-environ
 useInertEnvironmentCredentialProvider();
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+const piVersion = JSON.parse(await readFile(new URL("../package.json", sdkUrl), "utf8")).version;
+assert.equal(piVersion, "1.1.0", "validate the selected current Pi runtime");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-batch-output-"));
@@ -25,6 +27,9 @@ globalThis.fetch = (async (_input, init) => {
   assert.ok(relation); assert.match(relation, /accountSeq/);
   if (scenario === "api-error") return new Response(JSON.stringify({ errors: [{ message: "synthetic API failure" }] }));
   const cards: any[] = scenario === "empty" ? [] : [{ cardId: "fixture-card", accountSeq: 0, title: "Fixture", content: null, effort: 0, isDoc: false, dueDate: null, deck: { title: "Deck" } }];
+  if (scenario === "identity-exact") cards[0].cardId = "😀".repeat(2048);
+  if (scenario === "identity-oversized") cards[0].cardId = "😀".repeat(2049);
+  if (scenario === "ignored-identity") cards[0].transport = { cardId: "x".repeat(2049) };
   if (scenario === "bytes") cards[0].content = "😀".repeat(32768);
   if (scenario === "clipping") cards[0].title = "😀".repeat(2049);
   return new Response(JSON.stringify({ data: { _root: { account: "fixture" }, account: { fixture: { [relation]: cards.map(card => card.cardId) } }, card: Object.fromEntries(cards.map(card => [card.cardId, card])) } }));
@@ -86,13 +91,16 @@ try {
   assert.equal(coded.parent.isError, false); assert.equal(coded.children[0].isError, false); assert.equal(coded.fetches, 1); assert.deepEqual(coded.children[0].result.structuredContent, dto); assert.match(text(coded.parent), /"schemaVersion":1/); assert.match(text(coded.children[0].result), /Card Batch Data/); assert.doesNotMatch(text(coded.children[0].result), /```json/);
   const other = await run("non-codemode", "batch_nested", {}); assert.equal(other.fetches, 1); assert.deepEqual(nested.at(-1).result.structuredContent, dto); assert.equal(nested.at(-1).isError, false); assert.ok(other.children[0].parentToolCallId);
   const directError = await run("direct-error", "codecks_card_get_batch", { cardIds: ["123e4567-e89b-12d3-a456-426614174000"] }); assert.equal(directError.fetches, 0); assert.equal(directError.parent.isError, true); assert.equal(directError.children[0].result.structuredContent.error.code, "validation_error");
-  for (const name of ["api-error", "bytes", "clipping", "empty"]) {
+  for (const name of ["api-error", "bytes", "clipping", "empty", "identity-exact", "identity-oversized", "ignored-identity"]) {
     const result = await run(name, "codemode", script(args)); const child = result.children[0], value = child.result.structuredContent;
     assert.ok(isCardGetBatchOutput(value)); assert.equal(result.parent.isError, false); assert.equal(result.fetches, 1);
-    assert.equal(child.isError, ["api-error", "bytes"].includes(name)); assert.equal(child.isError, !value.ok);
+    assert.equal(child.isError, ["api-error", "bytes", "identity-oversized"].includes(name)); assert.equal(child.isError, !value.ok);
     if (name === "api-error") { assert.equal(value.data.items[0].status, "failed"); assert.equal(Object.hasOwn(value.data, "found"), false); }
     if (name === "bytes") { assert.equal(value.completeness.read, "complete"); assert.equal(value.data.found, 2); assert.equal(value.data.projectionErrors, 2); assert.equal(value.data.items[0].error.error.code, "output_too_large"); }
     if (name === "clipping") { assert.equal(value.completeness.projection, false); assert.equal(Array.from(value.data.items[0].card.card.title).length, 2048); }
+    if (name === "identity-exact") assert.equal(value.data.items[0].card.card.cardId, "😀".repeat(2048));
+    if (name === "identity-oversized") { assert.equal(value.completeness.read, "complete"); assert.equal(value.data.found, 2); assert.equal(value.data.projectionErrors, 2); assert.equal(value.data.items[0].error.error.code, "output_contract_error"); }
+    if (name === "ignored-identity") assert.equal(JSON.stringify(value).includes("x".repeat(2049)), false);
     if (name === "empty") { assert.equal(value.data.found, 0); assert.equal(value.data.missing, 3); assert.equal(value.completeness.read, "complete"); }
   }
   const blocked = await run("blocked", "codemode", { code: "try { await tools.codecks_card_get_batch({cardIds:['seq:0']}); throw Error('must reject'); } catch (error) { text(String(error)); }" });
@@ -105,5 +113,5 @@ try {
   }
   for (const message of session.messages.filter((m: any) => m.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false, "ordinary transcript does not persist DTOs");
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ status: "passed", pi: "1.0.0", turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: 10, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
+  console.log(JSON.stringify({ status: "passed", pi: piVersion, turns, modelCalls, fakeFetches: fetches, realTransports: 0, scenarios: turns, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireRPC: "not executed" }));
 } finally { session?.dispose(); globalThis.fetch = originalFetch; await rm(fixture, { recursive: true, force: true }); }

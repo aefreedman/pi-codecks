@@ -32,15 +32,18 @@ The v1 limits are chosen for one useful card without shipping an unbounded graph
 | --- | --- | --- |
 | Compact UTF-8 JSON DTO | 65,536 bytes | Fail closed with `output_too_large` if the Codecks-produced DTO exceeds it |
 | Card content | 32,768 Unicode code points | Clip; `projection: false` |
-| Every other string (including error message) | 2,048 Unicode code points | Clip; `projection: false` |
+| Published IDs / short codes / references / URLs | 2,048 Unicode code points | Exact; oversized admitted values fail with `output_contract_error` |
+| Other descriptive strings (including error message) | 2,048 Unicode code points | Clip; `projection: false` |
 | Tags / child cards | 25 each | Clip; `projection: false` |
 | Error candidates | 5 | Clip; `projection: false` |
+
+Exact strings include top-level and parent/child/candidate card IDs, short codes, references and URLs; deck/milestone/user IDs; milestone URL; and error `suggestedCardRef`. Checks visit only schema-admitted fields and array items, not discarded transport metadata or omitted rows. Missing/null and malformed-field behavior are unchanged.
 
 The byte bound is independent of character bounds: multibyte text or many populated summaries can exceed it even after clipping. No spill file, hidden retry, scan broadening, or fallback is introduced. Ordinary compact model text/renderers retain their existing behavior, so their size/interface is not the DTO's public size contract.
 
 ## Errors and native status
 
-Domain failures return native `isError: true` **and** a typed `ok: false` DTO. Pi 1.0.0 codemode resolves structured data before checking native error status, so scripts **must inspect `ok`**. A successful script parent is not evidence of successful children: codemode's call receipts and Pi nested-call records retain child error status.
+Domain failures return native `isError: true` **and** a typed `ok: false` DTO. Pi 1.1.0 codemode resolves structured data before checking native error status, so scripts **must inspect `ok`**. A successful script parent is not evidence of successful children: codemode's call receipts and Pi nested-call records retain child error status.
 
 The bounded codes are `validation_error`, `not_found`, `ambiguous_match`, `incomplete_read`, `conflict`, `out_of_scope`, `forbidden`, `disabled_by_org`, `caller_aborted`, `rate_limit_queue_aborted`, `request_timeout`, `rate_limited`, `scan_queue_full`, `credential_rate_limited`, `response_too_large`, `invalid_response_stream`, `file_error`, `unsupported_token`, `credential_profile_mismatch`, `personal_token_required`, `org_actor_unverified`, `authentication_rejected`, `account_mismatch`, `missing_scope`, `api_error`, `output_contract_error`, `output_too_large`. Unknown internal error categories map to `api_error`; messages are bounded evidence, not instructions.
 

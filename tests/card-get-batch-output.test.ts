@@ -125,3 +125,14 @@ test("real upstream error and pre-abort keep failed/unqueried evidence and nativ
     const dto = projectCardGetBatchOutput(aborted.payload); assert.equal(dto.ok, false); assert.equal(dto.data.items[0].status, "unqueried");
   } finally { globalThis.fetch = before; resetRateGate(); }
 });
+
+test("batch shares get admitted-path identity policy without rejecting discarded fields/children", () => {
+  const ignored = { cardId: "x".repeat(2049) };
+  const fields = { transport: ignored, id: "x".repeat(2049), childCards: [...Array(25).fill({}), ignored] };
+  const get = projectCardGetOutput({ ok: true, action: "card-get", data: { card: card(fields) } });
+  const batch = projectCardGetBatchOutput(payload([found(fields)]));
+  assert.equal(get.ok, true); assert.equal(batch.ok, true); assert.deepEqual(batch.data.items[0].card, get); assert.equal(batch.completeness.projection, false);
+  for (const fields of [{ milestone: { url: "x".repeat(2049) } }, { childCards: [{ cardRef: "x".repeat(2049) }] }]) {
+    const dto = projectCardGetBatchOutput(payload([found(fields)])); assert.equal(dto.ok, false); assert.equal(dto.data.found, 1); assert.equal(dto.data.projectedFound, 0); assert.equal(dto.data.items[0].status, "projection_error"); assert.equal(dto.completeness.read, "complete");
+  }
+});

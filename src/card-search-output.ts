@@ -10,6 +10,11 @@ const strings = (keys: string[]) => Object.fromEntries(keys.map(k => [k, opt(str
 const count = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const relation = obj({ ...strings(["id", "cardId", "title", "name", "fullName"]), accountSeq: opt(count()) });
 const row = obj({ ...strings(["cardId", "shortCode", "cardRef", "accountSeqRef", "url", "title", "status", "derivedStatus", "visibility", "priority", "lastUpdatedAt", "dueDate"]), accountSeq: opt(count()), isDoc: opt(Type.Boolean()), effort: opt(Type.Number()), childCount: opt(count()), tags: opt(Type.Array(str(), { maxItems: CARD_SEARCH_LIMITS.tags })), deck: opt(relation), milestone: opt(relation), assignee: opt(relation), parentCard: opt(relation) });
+// Only published row references are exact; criteria/facet labels remain descriptive.
+const rowExactStrings = new Set(["cards[]", "sampleCards[]"].flatMap(path => [
+  ...["cardId", "shortCode", "cardRef", "accountSeqRef", "url"].map(field => `${path}.${field}`),
+  ...["deck", "milestone", "assignee", "parentCard"].flatMap(relation => ["id", "cardId"].map(field => `${path}.${relation}.${field}`)),
+]));
 const criteria = obj({ ...strings(["title", "text", "searchIn", "cardCode", "location", "outputMode"]), ...Object.fromEntries(["deck", "milestone", "userId"].map(k => [k, opt(Type.Union([str(), Type.Number()]))])), ...Object.fromEntries(["limit", "scanLimit", "pageSize"].map(k => [k, opt(count())])), includeArchived: opt(Type.Boolean()), includeDone: opt(Type.Boolean()) });
 const metrics = { scannedCards: opt(count()), scanLimit: opt(count()), pageSize: opt(count()), requestsAttempted: opt(count()), queueWaitMs: opt(Type.Number({ minimum: 0 })), elapsedMs: opt(Type.Number({ minimum: 0 })), scanLimitReached: opt(Type.Boolean()) };
 // Facets describe legacy aggregate buckets (including inferred/unknown buckets), not field observations.
@@ -43,7 +48,7 @@ export function projectCardSearchOutput(payload: unknown): CardSearchOutput {
         if (!facetFields.includes(field as typeof facetFields[number]) || !record(buckets)) throw Error("Invalid facets");
         return Object.entries(buckets).map(([value, count]) => ({ field, value, count }));
       });
-      const data = projectBoundedValue(dataSchema, { ...native, ...(facets ? { facets, facetBucketCount: facets.length, facetSemantics: "legacy_inferred_buckets" } : {}), emittedRows: rows.length, rowsExhaustive: false }, state) as Record<string, any>;
+      const data = projectBoundedValue(dataSchema, { ...native, ...(facets ? { facets, facetBucketCount: facets.length, facetSemantics: "legacy_inferred_buckets" } : {}), emittedRows: rows.length, rowsExhaustive: false }, state, rowExactStrings) as Record<string, any>;
       data.emittedRows = (data.cards ?? data.sampleCards ?? []).length;
       data.rowsExhaustive = native.outputMode === "detailed" && native.complete && !native.truncated && native.matches === data.emittedRows && native.rawMatches === native.matches && native.returnedCards === data.emittedRows && state.complete;
       output = { ...base(native.complete ? "complete" : "incomplete", state.complete), ok: true, data };
