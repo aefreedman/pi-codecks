@@ -10,6 +10,7 @@ import { isCardSearchOutput, CARD_SEARCH_OUTPUT_SCHEMA } from "../src/card-searc
 import { isCardGetOutput, CARD_GET_OUTPUT_SCHEMA } from "../src/card-get-output.ts";
 
 // These are real file-loaded extensions and the SDK's exported codemode factory, not tool imitations.
+const declaredPi = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).devDependencies;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extensionPath = join(root, "index.ts");
 const compatibility = process.argv.includes("--safety-rails");
@@ -20,7 +21,7 @@ if (compatibility) {
 }
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piVersion = JSON.parse(await readFile(new URL("../package.json", sdkUrl), "utf8")).version;
-assert.equal(piVersion, "1.1.0", "validate the selected current Pi runtime");
+assert.equal(piVersion, declaredPi["@earendil-works/pi-coding-agent"], "validate the selected current Pi runtime");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-output-"));

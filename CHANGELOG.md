@@ -7,6 +7,12 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+## [0.16.2] - 2026-10-13
+
+- Cover representative Codecks input constraint declarations through real Pi codemode `describeTool`, without executing Codecks operations or inventing absent schema defaults.
+
+- Refresh exact Pi development dependencies to stable 1.2.0; derive validation expectations from package.json and retain strict installed-version checks.
+
 ## [0.16.1] - 2026-10-12
 
 - Extend deterministic actual-Pi get/search/batch host regressions for exact/oversized identities, selective codemode output, non-codemode outcomes and final-event/transcript boundaries.

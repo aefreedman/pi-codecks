@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "piVersionPrefix": "1.1.0",
   "timeoutMs": 90000,
   "maxOutputChars": 2097152,
   "conditions": ["all-active", "balanced", "loader-only"],

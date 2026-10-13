@@ -8,9 +8,10 @@ import { CARD_GET_BATCH_OUTPUT_SCHEMA, isCardGetBatchOutput } from "../src/tools
 import { useInertEnvironmentCredentialProvider } from "./credential-test-environment.ts";
 useInertEnvironmentCredentialProvider();
 process.env.PI_CODECKS_TOOL_LOADING_MODE = "all-active";
+const declaredPi = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).devDependencies;
 const sdkUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 const piVersion = JSON.parse(await readFile(new URL("../package.json", sdkUrl), "utf8")).version;
-assert.equal(piVersion, "1.1.0", "validate the selected current Pi runtime");
+assert.equal(piVersion, declaredPi["@earendil-works/pi-coding-agent"], "validate the selected current Pi runtime");
 const piAiUrl = (() => { try { return import.meta.resolve("@earendil-works/pi-ai"); } catch { return new URL("../node_modules/@earendil-works/pi-ai/dist/index.js", sdkUrl).href; } })();
 const piAi = await import(piAiUrl);
 const fixture = await mkdtemp(join(tmpdir(), "pi-card-get-batch-output-"));
