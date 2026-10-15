@@ -86,7 +86,17 @@ const publicCi = read(".github/workflows/ci.yml");
 const integrationWorkflow = read(".github/workflows/integration.yml");
 const publishWorkflow = read(".github/workflows/publish.yml");
 const workflows = [publicCi, integrationWorkflow, publishWorkflow];
-assert.match(publicCi, /pull_request:/);
+const eventBlock = (workflow: string): string => workflow.match(/^on:\r?\n([\s\S]*?)(?=^\S)/m)?.[1] ?? "";
+const assertCandidatePushCi = (workflow: string): void => {
+  const events = eventBlock(workflow);
+  assert.doesNotMatch(events, /^\s+(?:branches-ignore|tags|tags-ignore|paths|paths-ignore):/m, "filters must not skip required candidate checks or enable tag CI");
+  assert.match(events, /^  push:\r?\n    branches:\r?\n      - ['"]\*\*['"]\r?$/m, "all branch pushes must produce eligible candidate checks");
+  assert.match(events, /^  pull_request:/m);
+  assert.match(events, /^  workflow_dispatch:/m, "manual diagnostics remain available, not a delivery gate");
+};
+assertCandidatePushCi(publicCi);
+assert.throws(() => assertCandidatePushCi(publicCi.replace("- '**'", "- main")), /all branch pushes/);
+assert.throws(() => assertCandidatePushCi(publicCi.replace(/(  push:\r?\n)/, "$1    paths:\n      - 'docs/**'\n")), /filters must not skip/);
 assert.match(publicCi, /npm test/);
 assert.match(publicCi, /pack:validate/);
 assert.match(publicCi, /pack:smoke/);
@@ -102,7 +112,7 @@ for (const workflow of workflows) {
     assert.match(match[1], /^[a-f0-9]{40}$/, `Action pin must be a full commit SHA: ${match[0]}`);
   }
 }
-assert.match(integrationWorkflow, /push:\s+branches:\s+- main/);
+assert.match(eventBlock(integrationWorkflow), /  push:\r?\n    branches:\r?\n      - main\r?\n  workflow_dispatch:/, "live integration stays main-only while public branch CI expands");
 assert.match(integrationWorkflow, /workflow_dispatch:/);
 assert.match(integrationWorkflow, /environment: codecks-integration/);
 assert.match(integrationWorkflow, /concurrency:/);
@@ -131,6 +141,9 @@ const readme = read("README.md");
 const contributing = read("CONTRIBUTING.md");
 const testing = read("docs/testing.md");
 const release = read("docs/release.md");
+assert.match(release, /push-triggered/);
+assert.match(release, /workflow_dispatch[\s\S]*do not satisfy/);
+assert.doesNotMatch(release, /gh workflow run ci\.yml --ref/, "manual dispatch must not be documented as the direct-delivery gate");
 const usingCodecksReferences = [
   "card-operations.md",
   "conversations-and-resolvables.md",
