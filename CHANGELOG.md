@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Make maintainer PRs optional while retaining all three required Public CI checks, up-to-date linear history, and force-push/deletion protections; document branch-dispatched CI before direct fast-forward delivery.
+
 ## [0.16.2] - 2026-10-13
 
 - Cover representative Codecks input constraint declarations through real Pi codemode `describeTool`, without executing Codecks operations or inventing absent schema defaults.

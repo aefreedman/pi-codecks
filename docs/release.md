@@ -6,7 +6,7 @@
 
 Before relying on the workflows for release or live validation, verify the GitHub-hosted settings that cannot be enforced by repository files alone:
 
-- `main` changes go through pull requests and required Public CI checks; force-pushes and deletion remain blocked.
+- `main` requires all three Public CI checks, an up-to-date branch, and linear history. Pull requests are optional for maintainer changes; force-pushes and deletion remain blocked.
 - Actions use read-only default permissions and reviewed commit-SHA pins; Dependabot proposes dependency and action-pin updates.
 - The `codecks-integration` environment uses a dedicated limited CI identity and disposable fixture deck, runs without a reviewer gate, and allows deployments only from `main`.
 - The `npm` environment runs without a reviewer gate and allows only the intended `v*` release-tag policy; manual GitHub Release creation remains the human publication-intent gate.
@@ -14,6 +14,12 @@ Before relying on the workflows for release or live validation, verify the GitHu
 - Dependency alerts/security updates, private vulnerability reporting, secret scanning, and push protection are enabled when available.
 
 Review these controls periodically and before granting access to additional collaborators.
+
+## Direct maintainer changes (no PR required)
+
+Push the candidate commit to a topic/release branch, then dispatch `ci.yml` on that branch using `gh workflow run ci.yml --ref <branch>`. Inspect the resulting run and confirm all three checks succeeded for that exact commit: Credential-free tests (Node 22), Credential-free tests (Node 24), and Public package validation. Then fast-forward `main` to that validated commit with a normal push, never a force-push or admin bypass. If `main` advanced, integrate its changes and validate the new commit before pushing. Create the release tag only after the final commit identity is settled.
+
+PRs remain available for review and automatically run the same Public CI. A successful local suite alone does not satisfy GitHub's required checks. Pushing `main` still triggers the existing integration workflow; this policy change neither dispatches nor authorizes live tests.
 
 ## Prepare
 
