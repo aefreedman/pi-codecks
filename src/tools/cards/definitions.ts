@@ -286,7 +286,8 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
     parameters: Type.Object({ cardId: cardRefSchema, effort: Type.Number({ description: "Effort value." }), format: Type.Optional(outputFormatEnum) }),
     prepareArguments(args) {
       const input = normalizeOutputFormatAlias(normalizeArgs(args));
-      // Do not let host numeric coercion turn null/booleans into an effort write.
+      // Check strings before host coercion can turn blanks/boolean words into numbers.
+      if (typeof input.effort === "string" && (input.effort.trim().length === 0 || !Number.isFinite(Number(input.effort)))) throw new Error("Effort must be a finite number.");
       if (input.effort !== undefined && typeof input.effort !== "number" && typeof input.effort !== "string") throw new Error("Effort must be a finite number.");
       return input;
     },

@@ -182,15 +182,25 @@ try {
     assert.ok(view.render(100).length, "validation errors render without execution details");
   }
   assert.ok(schemaRejected > 0, "actual host must reject invalid schemas before tool_call");
-  for (const args of [{ cardId, effort: "not-a-number" }, { cardId, effort: null }]) {
+  const invalidEfforts = ["not-a-number", null, "true", "false", "", "   ", "\t\n", "NaN", "Infinity", "1x"];
+  for (const effort of invalidEfforts) {
     const before = validatedCalls.length;
-    const invalid = await run("invalid:effort", "codecks_card_update_effort", args);
-    assert.equal(invalid.requests.length, 0); assert.equal(invalid.parent.isError, true);
+    const invalid = await run(`invalid:effort:${JSON.stringify(effort)}`, "codecks_card_update_effort", { cardId, effort });
+    assert.equal(invalid.requests.filter(r => r.path === "query").length, 0, "invalid effort never queries");
+    assert.equal(invalid.requests.filter(r => r.path !== "query").length, 0, "invalid effort never dispatches");
+    assert.equal(invalid.parent.isError, true);
     assert.equal(validatedCalls.length, before, "invalid effort rejected before execute");
   }
-  const effortNumber = await run("coerced:effort", "codecks_card_update_effort", { cardId, effort: "0" });
-  assert.equal(effortNumber.parent.isError, false); assert.equal(validatedCalls.find(c => c.scenario === "coerced:effort").input.effort, 0);
-  assert.equal(effortNumber.requests.filter(r => r.path !== "query").length, 1);
+  const numericEfforts = [0, 1, "0", "1", " 2.5 ", "-1", "1e2"];
+  for (const [index, effort] of numericEfforts.entries()) {
+    const name = `coerced:effort:${index}`;
+    const effortNumber = await run(name, "codecks_card_update_effort", { cardId, effort });
+    assert.equal(effortNumber.parent.isError, false, text(effortNumber.parent));
+    assert.equal(validatedCalls.find(c => c.scenario === name).input.effort, Number(effort));
+    const dispatches = effortNumber.requests.filter(r => r.path !== "query");
+    assert.equal(dispatches.length, 1);
+    assert.equal(dispatches[0].body.effort, Number(effort), "synthetic dispatch preserves the numeric effort");
+  }
   const badRange = await run("invalid:range", "codecks_card_search", { limit: "0" });
   assert.equal(badRange.requests.length, 0); assert.equal(badRange.parent.isError, true);
   assert.equal(validatedCalls.some(c => c.scenario === "invalid:range"), false);
@@ -203,7 +213,7 @@ try {
   const singleton = await run("coerced:array", "codecks_card_bulk_update", { updates: { cardId: "seq:0", effort: 0 }, dryRun: "true" });
   assert.equal(singleton.parent.isError, false, text(singleton.parent)); assert.deepEqual(validatedCalls.find(c => c.scenario === "coerced:array").input.updates, [{ cardId: "seq:0", effort: 0 }]);
   assert.equal(singleton.requests.filter(r => r.path !== "query").length, 0, "coerced preview must not dispatch");
-  console.log(JSON.stringify({ schemaBoundary: "passed", invalidMutations, schemaRejected, invalidMutationTransports: 0, coercions: ["number", "boolean", "singleton-array", "optional-null"], rendering: "validation errors without execution details" }));
+  console.log(JSON.stringify({ schemaBoundary: "passed", invalidMutations, schemaRejected, invalidMutationTransports: 0, invalidEfforts: invalidEfforts.length, numericEffortControls: numericEfforts.length, coercions: ["number", "boolean", "singleton-array", "optional-null"], rendering: "validation errors without execution details" }));
   const jsonEvent = await import(new URL("./modes/json-event.js", sdkUrl).href);
   for (const event of events.filter(e => e.result.structuredContent)) {
     const converted = JSON.parse(JSON.stringify(jsonEvent.toJsonEvent(event)));
@@ -211,7 +221,7 @@ try {
   }
   for (const message of session.messages.filter((m: any) => m.role === "toolResult")) assert.equal(Object.hasOwn(message, "structuredContent"), false);
   assert.deepEqual(extensionErrors, []);
-  assert.equal(turns, 26 + CODECKS_MUTATION_TOOL_NAMES.size + 7); assert.equal(modelCalls, turns * 2);
+  assert.equal(turns, 26 + CODECKS_MUTATION_TOOL_NAMES.size + invalidEfforts.length + numericEfforts.length + 4); assert.equal(modelCalls, turns * 2);
   console.log(JSON.stringify({ status: "passed", pi: piVersion, turns, modelCalls, fakeFetches: requests.length, realTransports: 0, consumers: ["direct", "codemode", "non-codemode nested", "SDK final events", "JSON event conversion"], wireJSON: "not executed", wireRPC: "not executed" }));
 } finally {
   session?.dispose(); globalThis.fetch = previousFetch; resetRateGate();
