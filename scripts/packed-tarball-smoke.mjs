@@ -1,19 +1,35 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { packageRoot, pack, parsePackResult, runNpm } from "./package-archive.mjs";
+import { packageRoot, parsePackResult, runNpm } from "./package-archive.mjs";
 
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "pi-codecks-pack-smoke-"));
 const archiveDir = path.join(tempRoot, "archive");
 const consumerDir = path.join(tempRoot, "consumer");
+const cacheDir = path.join(tempRoot, "empty-consumer-cache");
+const userConfig = path.join(tempRoot, "empty-user.npmrc");
+const globalConfig = path.join(tempRoot, "empty-global.npmrc");
+const cleanEnv = { ...process.env };
+for (const key of Object.keys(cleanEnv)) {
+  if (/^(?:CODECKS_|PI_CODECKS_|OP_|npm_config_)/i.test(key)) delete cleanEnv[key];
+}
+Object.assign(cleanEnv, {
+  npm_config_offline: "true",
+  npm_config_cache: path.join(tempRoot, "pack-cache"),
+  npm_config_userconfig: userConfig,
+  npm_config_globalconfig: globalConfig,
+});
 
 try {
   mkdirSync(archiveDir, { recursive: true });
   mkdirSync(consumerDir, { recursive: true });
+  writeFileSync(userConfig, "");
+  writeFileSync(globalConfig, "");
   writeFileSync(
     path.join(consumerDir, "package.json"),
     `${JSON.stringify({
@@ -23,33 +39,56 @@ try {
     }, null, 2)}\n`,
   );
 
-  const packed = pack({ destination: archiveDir });
+  const packed = parsePackResult(runNpm(["pack", "--json", "--ignore-scripts", "--offline", "--pack-destination", archiveDir], { env: cleanEnv }).stdout);
   const archivePath = path.join(archiveDir, packed.filename);
   assert.ok(existsSync(archivePath), "expected npm pack to create a tarball in the temporary directory");
 
-  // Supply host-provided TypeBox and Pi's TUI peer (plus its two dependencies)
-  // explicitly as local tarballs so the consumer test stays offline even on a cold npm cache.
-  const dependencyArchives = ["typebox", "@earendil-works/pi-tui", "get-east-asian-width", "marked"].map(name => {
+  // Supply the actual required dependency/peer closure of the two host peers.
+  // Read installed manifests rather than assuming the TUI's dependencies stay fixed.
+  const dependencies = new Map();
+  const visitDependency = (name, from = packageRoot) => {
+    const searchPaths = createRequire(path.join(from, "package.json")).resolve.paths(name) ?? [];
+    const manifestPath = searchPaths.map(directory => path.join(directory, name, "package.json")).find(existsSync);
+    assert.ok(manifestPath, `missing installed dependency: ${name}`);
+    assert.ok(!path.relative(packageRoot, manifestPath).startsWith(".."), `dependency must be package-local: ${name}`);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.equal(manifest.name, name);
+    if (dependencies.has(name)) {
+      assert.equal(dependencies.get(name).version, manifest.version, `conflicting local dependency versions: ${name}`);
+      return;
+    }
+    const directory = path.dirname(manifestPath);
+    dependencies.set(name, { directory, version: manifest.version });
+    const required = [
+      ...Object.keys(manifest.dependencies ?? {}).filter(dependency => !Object.hasOwn(manifest.optionalDependencies ?? {}, dependency)),
+      ...Object.keys(manifest.peerDependencies ?? {}).filter(peer => !manifest.peerDependenciesMeta?.[peer]?.optional),
+    ];
+    for (const dependency of required) visitDependency(dependency, directory);
+  };
+  for (const name of ["typebox", "@earendil-works/pi-tui"]) visitDependency(name);
+  const dependencyArchives = [...dependencies].map(([name, { directory }]) => {
     const packed = parsePackResult(runNpm([
-      "pack", "--json", "--ignore-scripts", "--pack-destination", archiveDir,
-      path.join(packageRoot, "node_modules", name),
-    ]).stdout);
+      "pack", "--json", "--ignore-scripts", "--offline", "--pack-destination", archiveDir, directory,
+    ], { env: cleanEnv }).stdout);
     const archive = path.join(archiveDir, packed.filename);
     assert.ok(existsSync(archive), `expected locked dependency tarball: ${name}`);
     return archive;
   });
 
-  const cleanEnv = { ...process.env, npm_config_offline: "true" };
-  for (const key of Object.keys(cleanEnv)) {
-    if (key.startsWith("CODECKS_") || key.startsWith("PI_CODECKS_") || key.startsWith("OP_")) {
-      delete cleanEnv[key];
-    }
-  }
-
+  // Packing has its own cache. The consumer install gets a different, empty cache
+  // and empty config files, never the workstation's registry metadata or settings.
+  mkdirSync(cacheDir);
+  assert.deepEqual(readdirSync(cacheDir), [], "consumer npm cache must start truly empty");
   runNpm(
-    ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", ...dependencyArchives, archivePath],
-    { cwd: consumerDir, env: cleanEnv },
+    ["install", "--offline", "--cache", cacheDir, "--userconfig", userConfig, "--globalconfig", globalConfig,
+      "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock", "--omit=optional", ...dependencyArchives, archivePath],
+    { cwd: consumerDir, env: { ...cleanEnv, npm_config_cache: cacheDir } },
   );
+  for (const [name, { version }] of dependencies) {
+    const installed = JSON.parse(readFileSync(path.join(consumerDir, "node_modules", name, "package.json"), "utf8"));
+    assert.equal(installed.version, version, `offline consumer installed the supplied ${name}`);
+  }
+  console.log(JSON.stringify({ offlineConsumerInstall: "passed", initialCacheEntries: 0, isolatedConfig: true, localDependencyClosure: [...dependencies].map(([name, { version }]) => `${name}@${version}`) }));
 
   const installedRoot = path.join(consumerDir, "node_modules", "@aefree", "pi-codecks");
   const packageJson = JSON.parse(readFileSync(path.join(installedRoot, "package.json"), "utf8"));
@@ -254,7 +293,7 @@ console.log("installed built-in onepassword provider succeeds with --no-masking 
   assert.equal(onepasswordResult.status, 0, `installed onepassword smoke failed:\n${onepasswordResult.stdout}\n${onepasswordResult.stderr}`);
   assert.match(onepasswordResult.stdout, /installed built-in onepassword provider succeeds with --no-masking and fails closed/);
 
-  console.log("Packed tarball smoke test passed in a credential-free temporary project with inert external-helper and built-in onepassword coverage.");
+  console.log("Packed tarball smoke test passed with an initially empty isolated npm cache, offline installation, and credential-free inert helper coverage.");
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

@@ -8,6 +8,7 @@ and this project follows semantic versioning for public package releases.
 ## Unreleased
 
 - Validate against exact Pi 1.5.0 development dependencies; cover host schema coercion, invalid mutations, and validation-error rendering with synthetic transports.
+- Provision the packed consumer smoke test from the host peers' required local dependency closure, including marked-cjk-friendly; verify offline installation with an empty isolated npm cache and isolated configuration.
 - Use native registration defaults and Pi active-tool restoration so explicit tool selection/removal survives resume, reload, and tree navigation without replaying stale loader history.
 - Reject invalid effort values before any card lookup or dispatch, retaining numeric-string host coercion and finite-number execution guards. Reject blank and nonnumeric strings before host coercion can turn them into numeric writes.
 
