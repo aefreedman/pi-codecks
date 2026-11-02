@@ -282,7 +282,15 @@ export const CARD_TOOL_DEFINITIONS: readonly CodecksToolDefinition[] = [
     promptSnippet: "Remove one exact card entry from a named human Hand, without touching other entries.",
     promptGuidelines: ["ORG requires an explicit verified human userId; PERSONAL defaults to its own Hand.", "Remove only an exact confirmed membership; if dispatch or readback is uncertain, stop and reconcile without replay."],
   }, executePayload: args => card_remove_from_hand.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_remove_from_hand, projectOutput: payload => projectCardsWriteOutput(payload, "card_remove_from_hand") },
-  { exportName: "card_update_effort", tool: card_update_effort, config: {}, executePayload: args => card_update_effort.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_effort, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_effort") },
+  { exportName: "card_update_effort", tool: card_update_effort, config: {
+    parameters: Type.Object({ cardId: cardRefSchema, effort: Type.Number({ description: "Effort value." }), format: Type.Optional(outputFormatEnum) }),
+    prepareArguments(args) {
+      const input = normalizeOutputFormatAlias(normalizeArgs(args));
+      // Do not let host numeric coercion turn null/booleans into an effort write.
+      if (input.effort !== undefined && typeof input.effort !== "number" && typeof input.effort !== "string") throw new Error("Effort must be a finite number.");
+      return input;
+    },
+  }, executePayload: args => card_update_effort.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_effort, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_effort") },
   { exportName: "card_update_priority", tool: card_update_priority, config: {}, executePayload: args => card_update_priority.executePayload(args), outputSchema: CARD_WRITE_OUTPUT_SCHEMAS.card_update_priority, projectOutput: payload => projectCardsWriteOutput(payload, "card_update_priority") },
   { exportName: "card_bulk_create", tool: card_bulk_create, config: {
     parameters: Type.Object({

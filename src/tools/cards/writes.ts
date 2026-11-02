@@ -1064,6 +1064,11 @@ export async function executeCardUpdateEffort(args: Record<string, any>, onLegac
  try {
 
         const format = args.format ?? "text";
+        // Native execution bypasses the legacy tool wrapper's number schema.
+        // Reject invalid JSON-number values before resolving or mutating a card.
+        if (typeof args.effort !== "number" || !Number.isFinite(args.effort)) {
+            return failure(format, "card-update-effort", "validation_error", "Effort must be a finite number.");
+        }
         const resolved = await resolveCardForUpdate(args.cardId);
         if (!resolved)
         {

@@ -26,11 +26,11 @@ import { PiToolHarness } from "./pi-tool-harness.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 // Captured independently from 3e59ea8, not generated from the refactored catalog.
-// Intentionally re-pinned after adding human-readable thread and Review formatting guidance.
+// Intentionally re-pinned for the explicit finite-number effort input schema.
 assert.equal(hash(CODECKS_EXPORTS.map(name => {
   const config = getCodecksToolDefinition(name).config;
   return [name, config.parameters, config.promptSnippet, config.promptGuidelines];
-})),  "ba28932de4cd3d86cdc98c04ab81ceae3fd206eed9ae4d700d2123eae838130b");
+})),  "a9398cb222d405569af95323c206b7fd3b8ec03ac915c3de9aaf77a6861f17f7");
 assert.equal(hash(getOutput.CARD_GET_OUTPUT_SCHEMA), "cba7b98f84efc597635e17da6c7ed0e7942360131543cb197a361db5ef2bbf37");
 assert.equal(hash(CARD_SEARCH_OUTPUT_SCHEMA), "c53a26fbba4ac9dcd8e718301ed4547c8d4ac398376c36ed7d2d62a7cf92fe71");
 assert.strictEqual(core.runWithAbortSignal, context.runWithAbortSignal);
