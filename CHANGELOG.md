@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows semantic versioning for public package releases.
 
-## Unreleased
+## [0.16.3] - 2026-11-02
 
 - Validate against exact Pi 1.5.0 development dependencies; cover host schema coercion, invalid mutations, and validation-error rendering with synthetic transports.
 - Provision the packed consumer smoke test from the host peers' required local dependency closure, including marked-cjk-friendly; verify offline installation with an empty isolated npm cache and isolated configuration.
