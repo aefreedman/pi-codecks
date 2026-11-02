@@ -11,6 +11,7 @@ export type ToolSourceInfo = {
 export type RegisteredTool = {
   name: string;
   label?: string;
+  defaultActive?: boolean;
   description?: string;
   promptSnippet?: string;
   promptGuidelines?: string[];

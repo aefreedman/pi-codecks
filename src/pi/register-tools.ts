@@ -61,13 +61,14 @@ function formatCardGetText(payload: Record<string, unknown>): string | undefined
   return undefined;
 }
 
-export function registerCodecksTool(pi: ExtensionAPI, definition: CodecksToolDefinition, description: string, legacyPromptMetadata: boolean, getProfile: () => string) {
+export function registerCodecksTool(pi: ExtensionAPI, definition: CodecksToolDefinition, description: string, legacyPromptMetadata: boolean, getProfile: () => string, defaultActive = true) {
     if (definition.read && definition.executePayload) throw new Error(`Ambiguous native execution seams for '${definition.exportName}'.`);
     const { exportName, tool: coreTool, config } = definition;
     const executeNative = definition.executePayload ?? definition.read;
     const toolName = `codecks_${exportName}`;
     pi.registerTool({
       name: toolName,
+      defaultActive,
       label: toolName,
       description,
       promptSnippet: legacyPromptMetadata ? config.promptSnippet : undefined,

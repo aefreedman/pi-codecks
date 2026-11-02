@@ -20,7 +20,6 @@ import {
   getCodecksToolLoadingMode,
   getEffectiveCodecksToolOwnership,
   getInitiallyInactiveCodecksTools,
-  getRestoredCodecksToolNames,
   getUnknownExactCodecksToolNames,
   isCodecksToolBrowseRequest,
   searchCodecksTools,
@@ -86,6 +85,7 @@ export default function codecksTools(pi: ExtensionAPI) {
   const profiles = new CodecksProfileSession();
   registerNameCodecks(pi, () => profiles.profile);
   const mode = getCodecksToolLoadingMode();
+  const initiallyInactive = getInitiallyInactiveCodecksTools(mode, enabledToolNames);
   const coreDescriptions = new Map<string, string>();
   let publicReferenceRegistration: PackageReferenceRegistration | undefined;
   let publicReferenceScope: object | undefined;
@@ -98,11 +98,12 @@ export default function codecksTools(pi: ExtensionAPI) {
     const activeSafety = getActiveSafetyDescription(toolName);
     const description = activeSafety ? `${coreDescription} Safety: ${activeSafety}` : coreDescription;
     coreDescriptions.set(toolName, coreDescription);
-    registerCodecksTool(pi, definition, description, legacyPromptMetadata, () => profiles.profile);
+    registerCodecksTool(pi, definition, description, legacyPromptMetadata, () => profiles.profile, !initiallyInactive.has(toolName));
   }
 
   pi.registerTool({
     name: CODECKS_PROFILE_SELECT_NAME,
+    defaultActive: !initiallyInactive.has(CODECKS_PROFILE_SELECT_NAME),
     label: "Codecks Profile Select",
     description: "Select an already configured ORG or PERSONAL Codecks credential for this task or session. Safety: PERSONAL requires explicit user intent; this never authorizes tracker writes or edits environment configuration.",
     renderCall(args, theme, context) { return renderCodecksCall("profile_select", args, theme, context); },
@@ -121,6 +122,7 @@ export default function codecksTools(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: CODECKS_TOOL_SEARCH_NAME,
+    defaultActive: mode !== "all-active",
     label: "Codecks Tool Search",
     description: "Search and enable the smallest sufficient Codecks capability, including profile selection when the user explicitly requests PERSONAL, card retrieval and updates, bulk/effort workflows, milestones, Runs and velocity, conversation threads, or explicit raw fallbacks.",
     promptSnippet: "Use codecks_tool_search to find and enable Codecks capabilities that are not active.",
@@ -195,20 +197,8 @@ export default function codecksTools(pi: ExtensionAPI) {
     publicReferenceRegistration?.unregister();
     publicReferenceRegistration = await registerCodecksPublicReference(scope);
     publicReferenceScope = ctx.sessionManager;
-    const ownership = getEffectiveCodecksToolOwnership(pi.getAllTools(), EXTENSION_SOURCE_PATH);
-    const active = pi.getActiveTools();
-    if (!ownership.usesSourceInfo) return;
-
-    if (mode === "all-active") {
-      pi.setActiveTools(active.filter((name) => name !== CODECKS_TOOL_SEARCH_NAME));
-      return;
-    }
-
-    const initiallyInactive = getInitiallyInactiveCodecksTools(mode, enabledToolNames);
-    const ownedInitiallyInactive = new Set([...initiallyInactive].filter((name) => ownership.ownedToolNames.has(name)));
-    const restored = getRestoredCodecksToolNames(ctx.sessionManager.getBranch(), ownership.ownedToolNames);
-    const preserved = active.filter((name) => !ownedInitiallyInactive.has(name));
-    pi.setActiveTools([...new Set([...preserved, CODECKS_TOOL_SEARCH_NAME, ...restored])]);
+    // Pi owns explicit selections and branch-local tool restoration. Registration
+    // defaults apply only to tools the user/session has not selected or removed.
   });
 
   pi.on("session_shutdown", (_event, ctx) => {

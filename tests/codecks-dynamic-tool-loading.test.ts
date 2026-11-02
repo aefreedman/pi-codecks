@@ -65,30 +65,30 @@ async function main(): Promise<void> {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
     assert.equal(harness.registry.size, 47, "46 default Codecks tools plus the loader should be registered");
     assert.deepEqual(new Set(harness.registry.keys()), new Set([...publicToolNames, CODECKS_TOOL_SEARCH_NAME]), "the registration and loading catalogs must stay in exact set equality");
-    assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
+    assert.deepEqual(harness.getActiveTools(), ["read", "foreign_tool", ...publicToolNames], "explicit tools override balanced defaults");
   });
 
   await withMode("invalid", async () => {
     const harness = await loadHarness(["read", ...publicToolNames]);
-    assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]), "invalid modes fall back to balanced");
+    assert.deepEqual(harness.getActiveTools(), ["read", ...publicToolNames], "invalid modes do not overwrite explicit selection");
   });
 
   await withMode("loader-only", async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames]);
-    assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", CODECKS_TOOL_SEARCH_NAME]));
+    assert.deepEqual(harness.getActiveTools(), ["read", "foreign_tool", ...publicToolNames], "explicit tools override loader-only defaults");
   });
 
   await withMode("all-active", async () => {
     const harness = await loadHarness(["read", "foreign_tool", ...publicToolNames, CODECKS_TOOL_SEARCH_NAME]);
-    assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", "foreign_tool", ...publicToolNames]), "all-active reproduces the legacy surface without the loader");
+    assert.deepEqual(harness.getActiveTools(), ["read", "foreign_tool", ...publicToolNames, CODECKS_TOOL_SEARCH_NAME], "explicit loader selection overrides all-active defaults");
     assert.equal(harness.registry.get("codecks_card_add_comment")?.promptGuidelines?.length, 8, "all-active retains legacy prompt metadata");
   });
 
   await withMode("balanced", async () => {
     const extensionPath = fileURLToPath(new URL("../index.ts", import.meta.url));
     const relativeSource: ToolSourceInfo = { path: "./index.ts", source: "local", scope: "project", origin: "cli", baseDir: dirname(extensionPath) };
-    const harness = await loadHarness(["read", ...publicToolNames], [], { extensionSourceInfo: relativeSource });
-    assert.deepEqual(new Set(harness.getActiveTools()), new Set(["read", CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]));
+    const harness = await loadHarness(["read"], [], { extensionSourceInfo: relativeSource });
+    assert.deepEqual(harness.getActiveTools(), ["read"]);
     const result = await harness.registry.get(CODECKS_TOOL_SEARCH_NAME)!.execute("loader", { toolNames: ["codecks_milestone_get"] });
     assert.deepEqual(result.details.added, ["codecks_milestone_get"]);
   });
@@ -149,8 +149,8 @@ async function main(): Promise<void> {
   for (const reason of ["startup", "reload", "resume", "fork"]) await withMode("loader-only", async () => {
     const branch = [toolResultEntry(["codecks_card_update_status", "codecks_card_list_resolvables", "codecks_debug_logged_in_user_resolvables", "removed_tool"] )];
     const harness = await loadHarness(["read", ...publicToolNames], branch, {}, reason);
-    assert(harness.getActiveTools().includes("codecks_card_update_status") && harness.getActiveTools().includes("codecks_card_list_resolvables"), `${reason} restores valid active-branch additions`);
-    assert(!harness.getActiveTools().includes("codecks_debug_logged_in_user_resolvables") && !harness.getActiveTools().includes("removed_tool"));
+    assert.deepEqual(harness.getActiveTools(), ["read", ...publicToolNames], `${reason} preserves native host selection rather than replaying loader history`);
+    assert.equal(harness.setActiveToolsCalls.length, 0);
     const status = harness.registry.get("codecks_card_update_status")!;
     assert.equal(status.promptSnippet, undefined, "restored mutation tools do not depend on historical prompt metadata");
     assert.match(status.description ?? "", /Local implementation completion is not permission to mark done/, "restored mutation description retains direct-use safety context");
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
 
   await withMode("loader-only", async () => {
     const unauthenticatedHistory = [{ type: "message", message: { role: "toolResult", toolName: "foreign_loader", addedToolNames: ["codecks_card_update_status"] } }];
-    const harness = await loadHarness(["read", ...publicToolNames], unauthenticatedHistory);
+    const harness = await loadHarness(["read"], unauthenticatedHistory);
     assert(!harness.getActiveTools().includes("codecks_card_update_status"), "bare or foreign tool results cannot restore package capabilities");
   });
 
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
 
     const restored = await loadHarness(["read"], [toolResultEntry(["codecks_card_update_status", "codecks_milestone_get"])], { foreignTools: [foreignStatus] });
     assert(!restored.getActiveTools().includes("codecks_card_update_status"));
-    assert(restored.getActiveTools().includes("codecks_milestone_get"));
+    assert(!restored.getActiveTools().includes("codecks_milestone_get"), "stale loader history cannot override native removals");
   });
 
   await withMode("loader-only", async () => {
@@ -209,6 +209,7 @@ async function main(): Promise<void> {
       if (entry.activeSafety) assert.match(tool.description ?? "", /Safety:/, `${entry.name} carries direct-use safety in its active definition`);
     }
     assert(harness.registry.get(CODECKS_TOOL_SEARCH_NAME)?.promptGuidelines?.length, "loader retains universal safety policy");
+    harness.api.setActiveTools([CODECKS_TOOL_SEARCH_NAME, ...BALANCED_ACTIVE_CODECKS_TOOL_NAMES]);
     const balancedCharacters = serializedActiveMetadataCharacters(harness);
     assert.equal(balancedCharacters, 7400, "balanced metadata measurement should remain reproducible");
     assert(balancedCharacters <= 38478 * 0.25, "balanced initial metadata must be at least 75% smaller than the untouched baseline");

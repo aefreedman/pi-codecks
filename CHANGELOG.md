@@ -7,6 +7,8 @@ and this project follows semantic versioning for public package releases.
 
 ## Unreleased
 
+- Validate against exact Pi 1.5.0 development dependencies; cover host schema coercion, invalid mutations, and validation-error rendering with synthetic transports.
+- Use native registration defaults and Pi active-tool restoration so explicit tool selection/removal survives resume, reload, and tree navigation without replaying stale loader history.
 - Reject invalid effort values before any card lookup or dispatch, retaining numeric-string host coercion and finite-number execution guards.
 
 - Make maintainer PRs optional while retaining all three required Public CI checks, up-to-date linear history, and force-push/deletion protections; run credential-free Public CI on all branch pushes and require exact-commit push-triggered checks before direct fast-forward delivery.

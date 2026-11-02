@@ -7,16 +7,16 @@ const { PiToolHarness } = await import("./pi-tool-harness.ts");
 const {
   CODECKS_TOOL_SEARCH_NAME,
   DEBUG_CODECKS_TOOL_NAMES,
-  DEFAULT_CODECKS_TOOL_NAMES,
 } = await import("../src/codecks-tool-loading.ts");
 
 const debugNames = [...DEBUG_CODECKS_TOOL_NAMES];
-const harness = new PiToolHarness({ activeTools: [...DEFAULT_CODECKS_TOOL_NAMES, ...debugNames] });
+const harness = new PiToolHarness({ activeTools: [CODECKS_TOOL_SEARCH_NAME] });
 await harness.load();
 await harness.startSession();
 
 assert.equal(harness.registry.size, 49, "debug opt-in registers 46 default tools, two debug tools, and loader");
 assert(debugNames.every((name) => harness.registry.has(name)), "both opt-in debug definitions should be registered");
+assert(debugNames.every((name) => harness.registry.get(name)?.defaultActive === false), "debug registrations use native inactive defaults");
 assert.deepEqual(new Set(harness.getActiveTools()), new Set([CODECKS_TOOL_SEARCH_NAME]), "loader-only defers opt-in debug tools like ordinary deferred tools");
 
 const loader = harness.registry.get(CODECKS_TOOL_SEARCH_NAME)!;

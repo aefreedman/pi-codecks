@@ -69,7 +69,7 @@ By default, the package initially exposes only:
 - `codecks_card_get`
 - `codecks_card_search`
 
-Use `codecks_tool_search` when another registered Codecks capability is needed. Search is deterministic, enables at most four tools, defaults to the smallest sufficient capability, and may return only reviewed discovery/action pairs for effort application or existing-thread follow-up. Activation is additive, so built-in and foreign-extension tools remain active. Successfully enabled tools remain available on the following request and are restored from authenticated loader results on the active session branch after startup, reload, resume, and fork flows. A normal new session intentionally resets to the configured initial mode.
+Use `codecks_tool_search` when another registered Codecks capability is needed. Search is deterministic, enables at most four tools, defaults to the smallest sufficient capability, and may return only reviewed discovery/action pairs for effort application or existing-thread follow-up. Activation is additive, so built-in and foreign-extension tools remain active. Successfully enabled tools remain available on the following request. Pi owns active-tool persistence across startup, reload, resume, fork, and tree navigation, including explicit removals. Mode-specific registration defaults apply only when the user/session has not selected tools; explicit `--tools` and `--no-tools` selections are preserved. A normal new session uses the configured defaults.
 
 Deferred tools carry operation-critical safety in their descriptions while detailed sequencing is returned by the loader. The loader keeps universal mutation-scope, dry-run, thread-routing, untrusted-content, card-reference, and out-of-scope deletion guidance visible. Raw `codecks_query` / `codecks_dispatch`, the deprecated `codecks_card_add_block`, and opt-in debug tools require exact or explicit fallback/diagnostic intent rather than broad ordinary searches.
 
@@ -79,7 +79,7 @@ Set `PI_CODECKS_TOOL_LOADING_MODE` to one of:
 - `loader-only` — only the package loader initially
 - `all-active` — 40-tool initial composition without the loader, with the same safety-hardened active descriptions used after deferred activation
 
-Invalid values fall back to `balanced`. If Pi cannot prove that the effective loader is owned by this package, or a foreign extension owns the loader name, the package preserves the active tool set exactly rather than activating or removing a colliding definition.
+Invalid values fall back to `balanced`. The loader activates only definitions whose ownership Pi can prove belongs to this package. Foreign definitions, including a colliding loader, are not changed by package startup; without provenance, the loader does not activate inactive tools.
 
 ## Safety and mutation behavior
 
